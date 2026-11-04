@@ -13,3 +13,6 @@ __pycache__/
 # Music references (game audio, never committed)
 vgm/
 mp3/
+
+# Third-party SDKs (fetched, see README)
+third_party/

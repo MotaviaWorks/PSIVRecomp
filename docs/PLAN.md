@@ -95,7 +95,7 @@ or cycle counting are needed.
 | M0 | Project setup | ROM prep, byte-identical rebuild and jump analysis run on Desk — **done 2026-11-03** |
 | M1 | Decoder + function map | Decoder matches the listing 100%; function list + CFG; cross-branch tracing closes the remaining indirect sites — **done 2026-11-03** (see below) |
 | M2 | Emitter | All code recompiles to C and compiles cleanly — **done 2026-11-03** (see below) |
-| M3 | First boot | SDL3 window shows the SEGA logo and the title screen (no sound) |
+| M3 | First boot | SDL3 window shows the SEGA logo and the title screen (no sound) — **done 2026-11-03**: SEGA logo, intro, title, and a new game through to the first field scene |
 | M4 | Reference harness | BizHawk recordings replay in the port with matching state through the intro |
 | M5 | Sound | Z80 + YM2612 + PSG; music and effects match |
 | M6 | Playable | Saves, controller support, scaling/fullscreen; full playthrough matches the reference |
@@ -142,6 +142,34 @@ or cycle counting are needed.
   mismatch. MSVC and gcc builds finish with the identical RAM checksum.
 - Not yet proven: that every instruction's semantics match a real 68000. That
   is what the BizHawk comparison (M4) checks.
+
+### M3 results
+
+- **VDP** (`runtime/vdp.c`): registers, VRAM/CRAM/VSRAM, all three DMA modes
+  (instant), status, HV counter. Scanline renderer with plane A/B, window and
+  sprites in separate line buffers, mixed by priority at the end; per-line and
+  per-cell horizontal scroll, per-column vertical scroll, sprite line limits and
+  masking.
+- **Frame loop** (`runtime/frame.c`): a generator hook (`HOOKS` in
+  `tools/emit.py`, checked against the expected instruction) replaces the
+  `WaitForVInt` spin with: render each line, firing HInt when the line counter
+  runs out (`HInt2` rewrites vertical scroll mid-frame), present + read input,
+  then run the game's VInt handler.
+- **Bus**: battery SRAM at the odd bytes of `$200001-$203FFF` while `$A130F1`
+  bit 0 is set (the inline ROM fast path stops at `$200000` then), 3-button pads.
+- **Front ends**: `psiv` (SDL3: integer scaling, keyboard/gamepad, 59.92 Hz
+  pacing, saves, screenshots, fast-forward) and `psiv_headless` (scripted
+  input, PNG screenshots).
+- **Verified by screenshots**: SEGA logo, intro story with the Motavia panel,
+  title with START, and a new game through Alys's first dialogue in the
+  opening scene.
+- **Approximations to revisit with the BizHawk reference (M4)**:
+  - VInt only fires when the game waits for it, so frames where the original
+    would lag (and still run the sound driver from `VInt_Skip`) don't lag here.
+  - The status register's vblank bit alternates for code that polls it
+    outside VInt; the HV counter is coarse.
+  - Shadow/highlight mode and interlace are not implemented.
+  - Colours use a linear 3-bit to 8-bit ramp.
 
 ## Open risks
 

@@ -11,8 +11,6 @@ if(NOT GEN_SOURCES)
   message(FATAL_ERROR "No generated code in build/gen: run tools/emit.py first")
 endif()
 
-set(CPU_SOURCES runtime/m68k.c)
-
 if(MSVC)
   # /bigobj: some generated files hold thousands of labels
   set(WARN /W3 /WX /bigobj /wd4102)
@@ -20,17 +18,42 @@ else()
   set(WARN -Wall -Werror -Wno-unused-label -Wno-unused-but-set-variable)
 endif()
 
-# Generated code + CPU semantics as one library the runtime and tests link against
-add_library(psiv_code STATIC ${GEN_SOURCES} ${GEN_DIR}/psiv_table.c ${CPU_SOURCES})
+# Recompiled game code + CPU semantics
+add_library(psiv_code STATIC ${GEN_SOURCES} ${GEN_DIR}/psiv_table.c runtime/m68k.c)
 target_include_directories(psiv_code PUBLIC runtime ${GEN_DIR})
 target_compile_options(psiv_code PRIVATE ${WARN})
 
-# Same code with block tracing, for the smoke test and debugging
-add_library(psiv_code_trace STATIC ${GEN_SOURCES} ${GEN_DIR}/psiv_table.c ${CPU_SOURCES})
+# The same with block tracing and return-address checks, for debugging
+add_library(psiv_code_trace STATIC ${GEN_SOURCES} ${GEN_DIR}/psiv_table.c runtime/m68k.c)
 target_include_directories(psiv_code_trace PUBLIC runtime ${GEN_DIR})
 target_compile_definitions(psiv_code_trace PUBLIC PSIV_TRACE PSIV_CHECK_RETURNS)
 target_compile_options(psiv_code_trace PRIVATE ${WARN})
 
-add_executable(psiv_smoke runtime/smoke.c runtime/bus.c)
-target_link_libraries(psiv_smoke PRIVATE psiv_code_trace)
-target_compile_options(psiv_smoke PRIVATE ${WARN})
+# Hardware: bus, VDP, frame loop (object files, so the code<->hardware calls link either way)
+set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/frame.c)
+
+# Headless front end: scripted input, PNG screenshots
+add_executable(psiv_headless runtime/headless.c ${HW_SOURCES})
+target_link_libraries(psiv_headless PRIVATE psiv_code)
+target_compile_options(psiv_headless PRIVATE ${WARN})
+
+add_executable(psiv_headless_trace runtime/headless.c ${HW_SOURCES})
+target_link_libraries(psiv_headless_trace PRIVATE psiv_code_trace)
+target_compile_options(psiv_headless_trace PRIVATE ${WARN})
+
+# The game: SDL3 window, input, pacing, saves
+if(WIN32 AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/SDL3-3.4.20/cmake)
+  set(SDL3_DIR ${CMAKE_SOURCE_DIR}/third_party/SDL3-3.4.20/cmake)
+endif()
+find_package(SDL3 CONFIG)
+if(SDL3_FOUND)
+  add_executable(psiv WIN32 runtime/main_sdl.c ${HW_SOURCES})
+  target_link_libraries(psiv PRIVATE psiv_code SDL3::SDL3)
+  target_compile_options(psiv PRIVATE ${WARN})
+  if(WIN32)
+    add_custom_command(TARGET psiv POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:psiv>)
+  endif()
+else()
+  message(WARNING "SDL3 not found: building only the headless front end")
+endif()

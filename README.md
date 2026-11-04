@@ -20,12 +20,34 @@ python tools/validate_decoder.py                       # decoder vs every instru
 python tools/resolve.py                                # function map + indirect-jump targets -> analysis/
 python tools/emit.py                                   # recompile to C -> build/gen/
 build.bat                                              # Windows (VS Build Tools); elsewhere: cmake -S . -B build/native && cmake --build build/native
-build\native-Release\psiv_smoke.exe rom\psiv.bin 4000000000 36000
+build\native-Release\psiv.exe                          # play (run from the project folder)
 ```
 
-`psiv_smoke` boots the recompiled game with stub hardware, delivers the
-vertical-blank interrupt whenever the game waits for it, presses Start/C now
-and then, and prints the game modes it reaches plus a RAM checksum.
+On Windows the build uses the SDL3 development package in
+`third_party/SDL3-3.4.20` (from the official `SDL3-devel-3.4.20-VC.zip`
+release); on Linux it uses the system SDL3.
+
+### Controls
+
+| Mega Drive | Keyboard | Gamepad |
+|---|---|---|
+| D-pad | arrows | D-pad / left stick |
+| A / B / C | Z / X / C | West / South / East |
+| Start | Enter | Start |
+
+Hold Tab to fast-forward, F11 fullscreen, F12 screenshot (`screenshots/`),
+Esc quits. Battery saves go to `saves/psiv.srm`. No sound yet (milestone M5).
+
+### Headless runs
+
+`psiv_headless` runs without a window, as fast as possible, with scripted
+input and PNG screenshots, e.g. start a new game and capture frame 1500:
+
+```
+build\native-Release\psiv_headless.exe --frames 1600 --press 250:S:4 --press 420:S:4 --press 560:C:4 --shot 1500:shot.png
+```
+
+`psiv_headless_trace` is the same with block tracing and return-address checks.
 
 `prepare_rom.py` accepts raw and interleaved SMD dumps and refuses anything
 that isn't the USA ROM (SHA1 `bc7ff6d6a8408f38562bc610f24645cad6c42629`).
@@ -38,7 +60,8 @@ Windows (`asl` on Linux) and fails unless the result is byte-identical.
 |---|---|
 | `disasm/ps4disasm` | Phantasy Star IV disassembly (submodule, [squidfeatures/ps4disasm](https://github.com/squidfeatures/ps4disasm), originally by lory90) |
 | `tools/` | ROM prep, rebuild, listing parser, 68000 decoder, program model, resolver, C generator |
-| `runtime/` | CPU state and semantics (`m68k.h`/`m68k.c`), stub bus, smoke test |
+| `runtime/` | CPU (`m68k.*`), bus, VDP + renderer (`vdp.*`), frame loop, SDL3 and headless front ends |
+| `third_party/` | SDL3 for Windows builds (fetched, never committed) |
 | `analysis/` | Generated analysis: `functions.json` (every function entry and why), `indirect_targets.{json,md}` (addresses and labels only) |
 | `docs/` | Plan and ideas |
 | `rom/`, `build/` | Your ROM and build output (never committed) |

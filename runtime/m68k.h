@@ -34,6 +34,7 @@ extern uint32_t m68k_last_ret;   /* return address popped by the last rts/rte/rt
 extern uint8_t  m68k_ram[0x10000];
 extern const uint8_t *m68k_rom;
 extern uint32_t m68k_rom_size;
+extern uint32_t m68k_rom_fast;   /* ROM served inline below this; drops to $200000 while SRAM is mapped */
 
 uint8_t  bus_rd8(uint32_t a);
 uint16_t bus_rd16(uint32_t a);
@@ -43,13 +44,13 @@ void     bus_wr16(uint32_t a, uint16_t v);
 static inline uint8_t rd8(uint32_t a) {
     a &= 0xFFFFFF;
     if (a >= 0xFF0000) return m68k_ram[a & 0xFFFF];
-    if (a < m68k_rom_size) return m68k_rom[a];
+    if (a < m68k_rom_fast) return m68k_rom[a];
     return bus_rd8(a);
 }
 static inline uint16_t rd16(uint32_t a) {
     a &= 0xFFFFFF;
     if (a >= 0xFF0000) { a &= 0xFFFF; return (uint16_t)(m68k_ram[a] << 8 | m68k_ram[a + 1]); }
-    if (a + 1 < m68k_rom_size) return (uint16_t)(m68k_rom[a] << 8 | m68k_rom[a + 1]);
+    if (a + 1 < m68k_rom_fast) return (uint16_t)(m68k_rom[a] << 8 | m68k_rom[a + 1]);
     return bus_rd16(a);
 }
 static inline uint32_t rd32(uint32_t a) {
