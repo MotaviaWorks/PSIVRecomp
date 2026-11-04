@@ -1,0 +1,11 @@
+# Game data never goes in the repo
+rom/
+*.smd
+*.bin
+*.gen
+*.srm
+
+# Build output and generated code
+build/
+__pycache__/
+*.pyc

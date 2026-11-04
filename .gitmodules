@@ -1,0 +1,4 @@
+[submodule "disasm/ps4disasm"]
+	path = disasm/ps4disasm
+	url = https://github.com/squidfeatures/ps4disasm.git
+	ignore = untracked
