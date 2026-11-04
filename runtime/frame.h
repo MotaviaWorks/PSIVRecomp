@@ -7,6 +7,9 @@
 /* The finished frame, 0xAARRGGBB, VDP_MAX_W pixels per row. */
 extern uint32_t frame_pixels[VDP_MAX_W * VDP_MAX_H];
 extern uint64_t frame_count;
+/* The same frame as separate layers, line by line (for enhancements that
+ * recompose it, and for layer dumps). Valid inside platform_frame. */
+extern VdpLine frame_lines[VDP_MAX_H];
 
 /* Called once per frame after rendering, before the game's VInt runs: show
  * the frame, read input into bus_pad[], pace to 60 Hz. Implemented by the

@@ -15,7 +15,12 @@
  *                          L KEYS [N]    hold KEYS from logical frame L for N frames (default 1)
  *                          +D KEYS [N]   the same, D frames after the previous line's start
  *                        KEYS from U D L R A B C S, or - for none; # starts a comment
- *     --shot-every N:DIR with --movie: a PNG every N logical frames into DIR
+ *     --shot-every N:DIR with --movie or --replay: a PNG every N logical frames into DIR
+ *     --shot-range F1-F2 limit --shot-every to these logical frames
+ *     --depth L[:S]      battle depth at level L (0 off, 1 subtle, 2 strong); shots
+ *                        of battle frames show it, composed at S x (default 2)
+ *     --layers F:PREFIX  frame F's layers as PNGs, plane A's tiles and the sprite
+ *                        table as text (for working out what the game draws where)
  *     --sram FILE        battery save to load before power-on (8 KB, the odd
  *                        bytes of $200001-$203FFF, as saves/psiv.srm)
  *     --sram-out FILE    write the battery save when the run ends
@@ -37,6 +42,7 @@
  */
 #include "bus.h"
 #include "diag.h"
+#include "depth.h"
 #include "frame.h"
 #include "m68k.h"
 #include "sha256.h"
@@ -91,14 +97,14 @@ static void chunk(FILE *f, const char *type, const uint8_t *data, uint32_t n) {
     be32(hdr, c);
     fwrite(hdr, 1, 4, f);
 }
-static void save_png(const char *path, const uint32_t *px, int w, int h) {
+static void save_png_stride(const char *path, const uint32_t *px, int w, int h, int stride) {
     size_t raw_n = (size_t)h * (1 + (size_t)w * 3);
     uint8_t *raw = malloc(raw_n), *z = malloc(raw_n + raw_n / 65535 * 5 + 64);
     size_t o = 0;
     for (int y = 0; y < h; y++) {
         raw[o++] = 0;                                   /* filter: none */
         for (int x = 0; x < w; x++) {
-            uint32_t c = px[y * VDP_MAX_W + x];
+            uint32_t c = px[(size_t)y * (size_t)stride + (size_t)x];
             raw[o++] = (uint8_t)(c >> 16); raw[o++] = (uint8_t)(c >> 8); raw[o++] = (uint8_t)c;
         }
     }
@@ -128,6 +134,15 @@ static void save_png(const char *path, const uint32_t *px, int w, int h) {
     fclose(f);
     free(raw); free(z);
 }
+static void save_png(const char *path, const uint32_t *px, int w, int h) {
+    save_png_stride(path, px, w, h, VDP_MAX_W);
+}
+
+/* --depth L[:S]: battle depth at level L; screenshots of battle frames show
+ * it, composed at S times the game's resolution (default 2) */
+static int depth_scale, depth_active;
+static uint64_t shot_from, shot_to;              /* --shot-range F1-F2 */
+static uint32_t depth_buf[VDP_MAX_W * 4 * VDP_MAX_H * 4];
 
 /* ------------------------------------------------------------------ audio */
 static FILE *wav;
@@ -460,6 +475,94 @@ static int replay_step(void) {
     return 1;
 }
 
+/* --layers F:PREFIX: frame F's layers as separate PNGs (magenta = transparent;
+ * dark grey = outside the window), a map of which layer each pixel shows, and
+ * the sprite table as text. F is a logical frame with --movie or --replay. */
+typedef struct { uint64_t frame; const char *prefix; } LayerDump;
+static LayerDump layer_dumps[16];
+static int nlayer_dumps;
+
+static void dump_layers(const char *prefix, uint64_t when, int w, int h) {
+    static uint32_t img[VDP_MAX_W * VDP_MAX_H];
+    static const char *names[5] = {"b", "a", "w", "s", "top"};
+    char path[600];
+    for (int layer = 0; layer < 5; layer++) {
+        for (int y = 0; y < h; y++) {
+            const VdpLine *l = &frame_lines[y];
+            for (int x = 0; x < w; x++) {
+                uint8_t b = l->plane_b[x], a = l->win_in[x] ? l->window[x] : l->plane_a[x], s = l->sprite[x];
+                uint32_t c;
+                switch (layer) {
+                case 0: c = vdp_color((b ? b : l->backdrop) & 0x3F); break;
+                case 1: c = l->plane_a[x] ? vdp_color(l->plane_a[x] & 0x3F) : 0xFFFF00FFu; break;
+                case 2: c = !l->win_in[x] ? 0xFF202020u : l->window[x] ? vdp_color(l->window[x] & 0x3F) : 0xFFFF00FFu; break;
+                case 3: c = s ? vdp_color(s & 0x3F) : 0xFFFF00FFu; break;
+                default: {
+                    /* which layer shows: blue B, green A, yellow window, red sprite; bright = high priority */
+                    c = 0xFF000000u;
+                    int win = l->win_in[x];
+                    if (b && !(b & 0x80)) c = 0xFF000080u;
+                    if (a && !(a & 0x80)) c = win ? 0xFF808000u : 0xFF008000u;
+                    if (s && !(s & 0x80)) c = 0xFF800000u;
+                    if (b & 0x80) c = 0xFF4040FFu;
+                    if (a & 0x80) c = win ? 0xFFFFFF40u : 0xFF40FF40u;
+                    if (s & 0x80) c = 0xFFFF4040u;
+                }
+                }
+                img[y * VDP_MAX_W + x] = c;
+            }
+        }
+        snprintf(path, sizeof path, "%s.%s.png", prefix, names[layer]);
+        save_png(path, img, w, h);
+    }
+    snprintf(path, sizeof path, "%s.c.png", prefix);
+    save_png(path, frame_pixels, w, h);
+    /* plane A's tiles per screen cell (sampled mid-cell): tile number, * = high priority */
+    snprintf(path, sizeof path, "%s.plane_a.txt", prefix);
+    FILE *t = fopen(path, "w");
+    if (!t) return;
+    for (int cy = 0; cy < h / 8; cy++) {
+        for (int cx = 0; cx < w / 8; cx++) {
+            uint16_t e = frame_lines[cy * 8 + 4].plane_a_tile[cx * 8 + 4];
+            if (e & 0x7FF) fprintf(t, "%03X%c", e & 0x7FF, e & 0x8000 ? '*' : ' ');
+            else fprintf(t, "  . ");
+        }
+        fprintf(t, "\n");
+    }
+    fclose(t);
+    /* the sprite table, in link order, with the pixels each one put on screen */
+    snprintf(path, sizeof path, "%s.sprites.txt", prefix);
+    t = fopen(path, "w");
+    if (!t) return;
+    int h40 = w == 320;
+    uint32_t base = (uint32_t)(vdp.reg[5] & (h40 ? 0x7E : 0x7F)) << 9;
+    fprintf(t, "# idx  x    y   size  tile  pal pri hf vf  pixels   (sprite table at VRAM $%04X)\n", base);
+    int link = 0, count = 0;
+    do {
+        const uint8_t *s = &vdp.vram[(base + (uint32_t)link * 8) & 0xFFFF];
+        const uint8_t *c = &vdp.sat_cache[((uint32_t)link * 8) & (h40 ? 0x3FF : 0x1FF)];
+        int sy = ((c[0] << 8 | c[1]) & 0x3FF) - 128, sx = ((s[6] << 8 | s[7]) & 0x1FF) - 128;
+        int vs = (c[2] & 3) + 1, hs = (c[2] >> 2 & 3) + 1;
+        uint16_t attr = (uint16_t)(s[4] << 8 | s[5]);
+        long px = 0;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                if (frame_lines[y].sprite[x] && frame_lines[y].sprite_no[x] == link) px++;
+        fprintf(t, "%4d %4d %4d  %dx%d  $%03X  %d   %d   %d  %d  %6ld\n", link, sx, sy, hs, vs,
+                attr & 0x7FF, attr >> 13 & 3, attr >> 15, attr >> 11 & 1, attr >> 12 & 1, px);
+        link = c[3] & 0x7F;
+    } while (link && ++count < 80);
+    fprintf(t, "# planes: A at $%04X, B at $%04X, window at $%04X; size %dx%d cells; "
+               "scroll mode H%d V%d; window reg17 %02X reg18 %02X\n",
+            (vdp.reg[2] & 0x38) << 10, (vdp.reg[4] & 7) << 13, (vdp.reg[3] & 0x3C) << 10,
+            (vdp.reg[16] & 3) == 1 ? 64 : (vdp.reg[16] & 3) == 3 ? 128 : 32,
+            (vdp.reg[16] >> 4 & 3) == 1 ? 64 : (vdp.reg[16] >> 4 & 3) == 3 ? 128 : 32,
+            vdp.reg[11] & 3, vdp.reg[11] >> 2 & 1, vdp.reg[17], vdp.reg[18]);
+    fclose(t);
+    printf("layers of %llu: %s.{b,a,w,s,top,c}.png, %s.{plane_a,sprites}.txt\n",
+           (unsigned long long)when, prefix, prefix);
+}
+
 void platform_frame(const uint32_t *pixels, int width, int height) {
     uint64_t f = frame_count;
     if (frame_vint_will_fire()) {
@@ -496,19 +599,29 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         printf("frame %llu: game mode %u\n", (unsigned long long)f, mode / 4);
         last_mode = mode;
     }
-    /* with a movie, screenshots and input are by logical frame */
-    uint64_t when = movie ? logical : f;
+    /* with a movie or a replay, screenshots and input are by logical frame */
+    uint64_t when = (movie || replay) ? logical : f;
     int fresh = !movie || frame_vint_will_fire();      /* a logical frame only counts once */
+    if (depth_scale && fresh)                          /* battle depth: shots show what the player sees */
+        depth_active = depth_compose(frame_lines, width, height, depth_buf, width * depth_scale, depth_scale);
+    int sw = depth_active ? width * depth_scale : width, sh = depth_active ? height * depth_scale : height;
     for (int i = 0; i < nshot && fresh; i++)
         if (shots[i].frame == when) {
-            save_png(shots[i].path, pixels, width, height);
-            printf("%s %llu: saved %s (%dx%d)\n", movie ? "logical" : "frame", (unsigned long long)when,
-                   shots[i].path, width, height);
+            if (depth_active) save_png_stride(shots[i].path, depth_buf, sw, sh, sw);
+            else save_png(shots[i].path, pixels, width, height);
+            printf("%s %llu: saved %s (%dx%d)\n", (movie || replay) ? "logical" : "frame",
+                   (unsigned long long)when, shots[i].path, sw, sh);
         }
-    if (movie && shot_every && fresh && logical % shot_every == 0) {
+    for (int i = 0; i < nlayer_dumps; i++) {
+        if (layer_dumps[i].frame == when && frame_vint_will_fire())
+            dump_layers(layer_dumps[i].prefix, when, width, height);
+    }
+    if ((movie || replay) && shot_every && fresh && logical % shot_every == 0
+        && logical >= shot_from && (!shot_to || logical <= shot_to)) {
         char p[512];
         snprintf(p, sizeof p, "%s/%06llu.png", shot_dir, (unsigned long long)logical);
-        save_png(p, pixels, width, height);
+        if (depth_active) save_png_stride(p, depth_buf, sw, sh, sw);
+        else save_png(p, pixels, width, height);
     }
     if (movie && fresh) {
         uint8_t keys = 0;
@@ -630,6 +743,21 @@ int main(int argc, char **argv) {
                 where_at[nwhere++] = strtoull(s, &s, 10);
                 if (*s == ',') s++;
             }
+        } else if (!strcmp(argv[i], "--depth") && i + 1 < argc) {
+            char *e;
+            depth_set_level((int)strtol(argv[++i], &e, 10));
+            depth_scale = *e == ':' ? atoi(e + 1) : 2;
+            if (depth_scale < 1) depth_scale = 1;
+            if (depth_scale > 4) depth_scale = 4;
+        } else if (!strcmp(argv[i], "--shot-range") && i + 1 < argc) {
+            char *e;                                       /* F1-F2: limit --shot-every */
+            shot_from = strtoull(argv[++i], &e, 10);
+            shot_to = *e == '-' ? strtoull(e + 1, NULL, 10) : 0;
+        } else if (!strcmp(argv[i], "--layers") && i + 1 < argc && nlayer_dumps < 16) {
+            char *e;
+            layer_dumps[nlayer_dumps].frame = strtoull(argv[++i], &e, 10);
+            layer_dumps[nlayer_dumps].prefix = *e == ':' ? e + 1 : "layers";
+            nlayer_dumps++;
         } else if (!strcmp(argv[i], "--watch") && i + 1 < argc) {
             char *s = argv[++i];                               /* N:PC,PC,... (hex PCs) */
             watch_frame = strtoull(s, &s, 10);

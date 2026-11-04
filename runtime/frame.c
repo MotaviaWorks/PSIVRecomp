@@ -25,17 +25,17 @@
 uint32_t frame_pixels[VDP_MAX_W * VDP_MAX_H];
 uint64_t frame_count;
 int frame_pending_lag;
+VdpLine frame_lines[VDP_MAX_H];
 
 void frame_run(void) {
-    static VdpLine line;
     int w = vdp_width(), h = vdp_height();
     int counter = vdp.reg[10];
 
     vdp.in_vblank = 0;
     for (int y = 0; y < h; y++) {
         vdp.line = y;
-        vdp_render_line(y, &line);
-        vdp_compose_line(&line, &frame_pixels[y * VDP_MAX_W], w);
+        vdp_render_line(y, &frame_lines[y]);
+        vdp_compose_line(&frame_lines[y], &frame_pixels[y * VDP_MAX_W], w);
         if (counter-- == 0) {
             counter = vdp.reg[10];
             if (vdp_hint_enabled()) m68k_interrupt(4, SPIN_PC);

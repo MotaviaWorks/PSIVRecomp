@@ -211,7 +211,7 @@ static uint16_t nt_entry(uint32_t base, int cx, int cy, int wcells) {
     return (uint16_t)(vdp.vram[a] << 8 | vdp.vram[a + 1]);
 }
 
-static void render_plane(int y, int plane, uint8_t *out, int width) {
+static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, int width) {
     int wcells = plane_cells(vdp.reg[16] & 3), hcells = plane_cells(vdp.reg[16] >> 4 & 3);
     uint32_t base = plane == 0 ? (uint32_t)(vdp.reg[2] & 0x38) << 10 : (uint32_t)(vdp.reg[4] & 7) << 13;
     /* horizontal scroll: full screen, per 8-line cell, or per line */
@@ -229,10 +229,11 @@ static void render_plane(int y, int plane, uint8_t *out, int width) {
         int py = (y + vscroll) & (ph - 1);
         uint16_t e = nt_entry(base, px >> 3, py >> 3, wcells);
         out[x] = tile_pixel(e, px & 7, py & 7);
+        if (entries) entries[x] = e;
     }
 }
 
-static void render_window(int y, uint8_t *out, int width) {
+static void render_window(int y, uint8_t *out, uint8_t *in_out, int width) {
     int h40 = width == 320;
     uint32_t base = (uint32_t)(vdp.reg[3] & (h40 ? 0x3C : 0x3E)) << 10;
     int wcells = h40 ? 64 : 32;
@@ -241,7 +242,8 @@ static void render_window(int y, uint8_t *out, int width) {
     int line_in = down ? y >= vpos : y < vpos;
     for (int x = 0; x < width; x++) {
         int in = line_in || (right ? x >= hpos : x < hpos);
-        if (!in) continue;
+        in_out[x] = (uint8_t)in;
+        if (!in) { out[x] = 0; continue; }
         uint16_t e = nt_entry(base, x >> 3, y >> 3, wcells);
         out[x] = tile_pixel(e, x & 7, y & 7);
     }
@@ -252,7 +254,7 @@ static void render_window(int y, uint8_t *out, int width) {
  * set the collision flag, and the game stores that flag (VDP_Status_Reg). */
 #define SPRITE_MARGIN 32
 
-static void render_sprites(int y, uint8_t *out, int width) {
+static void render_sprites(int y, uint8_t *out, uint8_t *who, int width) {
     int h40 = width == 320;
     uint32_t base = (uint32_t)(vdp.reg[5] & (h40 ? 0x7E : 0x7F)) << 9;
     int max_sprites = h40 ? 80 : 64, per_line = h40 ? 20 : 16, max_px = h40 ? 320 : 256;
@@ -261,6 +263,7 @@ static void render_sprites(int y, uint8_t *out, int width) {
     memset(seen, 0, sizeof seen);
     memset(out, 0, (size_t)width);
     do {
+        int me = link;
         uint32_t a = (base + (uint32_t)link * 8) & 0xFFFF;
         const uint8_t *s = &vdp.vram[a];
         const uint8_t *c = &vdp.sat_cache[((uint32_t)link * 8) & sat_addr_mask()];   /* Y, size, link */
@@ -290,7 +293,7 @@ static void render_sprites(int y, uint8_t *out, int width) {
                     continue;
                 }
                 seen[x + SPRITE_MARGIN] = 1;
-                if (x >= 0 && x < width) out[x] = p;
+                if (x >= 0 && x < width) { out[x] = p; who[x] = (uint8_t)me; }
             }
         }
     } while (link && ++count < max_sprites);
@@ -302,18 +305,20 @@ void vdp_render_line(int y, VdpLine *l) {
     if (!(vdp.reg[1] & 0x40)) {                              /* display disabled */
         memset(l->plane_b, 0, (size_t)w);
         memset(l->plane_a, 0, (size_t)w);
+        memset(l->window, 0, (size_t)w);
+        memset(l->win_in, 0, (size_t)w);
         memset(l->sprite, 0, (size_t)w);
         return;
     }
-    render_plane(y, 1, l->plane_b, w);
-    render_plane(y, 0, l->plane_a, w);
-    render_window(y, l->plane_a, w);
-    render_sprites(y, l->sprite, w);
+    render_plane(y, 1, l->plane_b, NULL, w);
+    render_plane(y, 0, l->plane_a, l->plane_a_tile, w);
+    render_window(y, l->window, l->win_in, w);
+    render_sprites(y, l->sprite, l->sprite_no, w);
 }
 
 void vdp_compose_line(const VdpLine *l, uint32_t *dst, int width) {
     for (int x = 0; x < width; x++) {
-        uint8_t b = l->plane_b[x], a = l->plane_a[x], s = l->sprite[x];
+        uint8_t b = l->plane_b[x], a = l->win_in[x] ? l->window[x] : l->plane_a[x], s = l->sprite[x];
         uint8_t c = l->backdrop;
         /* back to front: B low, A low, sprite low, B high, A high, sprite high */
         if (b && !(b & 0x80)) c = b;

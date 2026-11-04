@@ -1,16 +1,47 @@
 # Enhancement ideas
 
-Parked until the faithful port is playable (milestone M6). Each one is noted
-with the part of the architecture it depends on, so the base port is built in
-a way that keeps it possible.
+Milestone M7. Each one is noted with the part of the architecture it depends
+on. Rule for all of them: presentation only unless stated, so the game's own
+state (and the BizHawk comparisons) never change; Classic mode turns them all
+off.
 
-## Depth in battles
-Give battles a sense of space: parallax between the background layers, the
-enemy layer and the party, possibly a gentle camera move or 3D-style layering.
-- **Needs:** the layer-separated renderer (backgrounds, enemy tiles and sprites
-  kept apart before compositing), plus knowing which battle routines draw what.
-- **Hooks:** battle background setup and the enemy sprite routines
-  (`Battle_EnemySpritesJmpTbl`, `Battle_AnimateSprite`) to tag what each layer is.
+## Depth in battles -- v1 done (`runtime/depth.c`, F9: off / subtle / strong)
+Battles redrawn as layers at different depths under a slowly moving camera:
+background, enemies (+ damage numbers), action sprites, party, windows. Idle
+drift, a lean-in and zoom while someone acts, a shake when damage appears;
+composited at the window's resolution so motion is sub-pixel smooth.
+- **How PSIV draws a battle** (found with `psiv_headless --layers`): background
+  on plane B; everything else as plane A tiles -- enemies at low priority,
+  party and windows at high priority, told apart by tile number (party
+  $180-$27F, windows $680-$7FF and icons below $180, damage numbers $5E0-$5EF);
+  sprites only for cursors and a character mid-attack (low priority).
+- Next: battle **fog**, hit **flashes / flares / particles** (below), vehicle
+  battles (different layout, not checked yet).
+
+## Battle atmosphere and effects (PsiLok, 2026-11-03)
+- **Fog between the party and the enemies**: an animated, semi-transparent
+  layer in the depth stack, tinted from the battle background.
+- **Attack effects**: hit flashes, optical/lens flares, glow on spells.
+- **Particles**: sparks on hits, dust, embers for fire techniques.
+- **Needs:** events -- an attack starting (action sprites appear), a hit
+  landing (damage numbers appear), techniques (the command data in
+  `Battle_Command_Data`), all readable without touching game state.
+
+## System menu (Esc) (PsiLok, 2026-11-03)
+An overlay menu on Esc (quitting moves into it): resume, settings, quit.
+- **Classic / Enhanced** master switch (Classic = the faithful port).
+- Per feature: battle depth level, fog, effects, original or modern text,
+  4:3 or 16:9, filters, volume, controls.
+- **Needs:** an overlay renderer with its own font (SDL3's built-in debug
+  font to start, a proper font later) and saving to `psiv.ini`.
+
+## Ideas from Gen1Recomp
+Its options and modules map onto this port: `Tilt` (an HD-2D diorama
+perspective for the field, eased between 0/15/35/50 degrees), survey `Zoom`,
+`WideBattle` + fill past the map edges (widescreen), `Font`/`TextBox` (modern
+text), `PaletteFX`/`Pipelines` (colour modes, filters), a mod system with
+profiles (hooks, asset swaps -- music replacement fits there), rulesets
+(faithful vs. quality-of-life), a save converter and save editor.
 
 ## Widescreen
 Show more of the world to the left and right instead of a 320-pixel window.

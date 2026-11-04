@@ -66,8 +66,12 @@ int vdp_vint_enabled(void);
 /* Per-line layer output: palette index 0-63 with bit 7 = priority; 0 = transparent */
 typedef struct {
     uint8_t plane_b[VDP_MAX_W];
-    uint8_t plane_a[VDP_MAX_W];  /* window replaces plane A where it is shown */
+    uint8_t plane_a[VDP_MAX_W];  /* plane A as drawn, also where the window covers it */
+    uint16_t plane_a_tile[VDP_MAX_W]; /* plane A's name-table entry under each pixel */
+    uint8_t window[VDP_MAX_W];   /* window plane, where it is shown */
+    uint8_t win_in[VDP_MAX_W];   /* 1 where the window replaces plane A */
     uint8_t sprite[VDP_MAX_W];
+    uint8_t sprite_no[VDP_MAX_W];/* which sprite-table entry drew each sprite pixel */
     uint8_t backdrop;            /* palette index */
 } VdpLine;
 

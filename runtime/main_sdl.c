@@ -18,6 +18,7 @@
  * Gamepads: D-pad or left stick; x/a/b (west/south/east) = A/B/C; start.
  */
 #include "bus.h"
+#include "depth.h"
 #include "diag.h"
 #include "frame.h"
 #include "m68k.h"
@@ -99,6 +100,7 @@ static Setting settings[] = {
     {"video.aspect", "square", "square = square pixels; 4:3 = the console's TV shape (pixels a bit narrower)"},
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed"},
     {"audio.volume", "100", "0-200 percent"},
+    {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
     {"keys.down", "Down", ""},
     {"keys.left", "Left", ""},
@@ -369,12 +371,12 @@ static int pick_rom(uint8_t *rom, uint32_t *size) {
 }
 
 /* ------------------------------------------------------------------ video */
-static void screenshot(const uint32_t *pixels, int w, int h) {
+static void screenshot_any(const uint32_t *pixels, int w, int h, int stride) {
     char dir[1100], path[1200];
     path_in_home(dir, sizeof dir, "screenshots");
     SDL_CreateDirectory(dir);
     snprintf(path, sizeof path, "%s/psiv_%06llu.bmp", dir, (unsigned long long)frame_count);
-    SDL_Surface *s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_ARGB8888, (void *)pixels, VDP_MAX_W * 4);
+    SDL_Surface *s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_ARGB8888, (void *)pixels, stride * 4);
     if (s) {
         SDL_SaveBMP(s, path);
         SDL_DestroySurface(s);
@@ -382,16 +384,18 @@ static void screenshot(const uint32_t *pixels, int w, int h) {
     }
 }
 
-static void present(const uint32_t *pixels, int w, int h) {
-    if (w != tex_w || h != tex_h) {
-        if (texture) SDL_DestroyTexture(texture);
-        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
-        SDL_SetTextureScaleMode(texture, strcmp(setting("video.filter"), "linear") ? SDL_SCALEMODE_NEAREST
-                                                                                    : SDL_SCALEMODE_LINEAR);
-        tex_w = w;
-        tex_h = h;
-    }
-    SDL_UpdateTexture(texture, NULL, pixels, VDP_MAX_W * 4);
+/* battle depth: the frame recomposed at a multiple of the game's resolution */
+static SDL_Texture *depth_texture;
+static int depth_tex_w, depth_tex_h, depth_shown;
+static uint32_t depth_pixels[VDP_MAX_W * 4 * VDP_MAX_H * 4];
+
+static SDL_ScaleMode scale_mode(void) {
+    return strcmp(setting("video.filter"), "linear") ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR;
+}
+
+/* compose = 0 when re-showing the same frame (paused): the depth camera
+ * doesn't advance and the last image is shown again */
+static void present(const uint32_t *pixels, int w, int h, int compose) {
     int ow, oh;
     SDL_GetRenderOutputSize(renderer, &ow, &oh);
     /* pixel aspect: square, or the 4:3 TV shape (320x224 pixels are ~0.93 wide) */
@@ -400,10 +404,51 @@ static void present(const uint32_t *pixels, int w, int h) {
     float s = fminf((float)ow / sw, (float)oh / sh);
     if (setting_int("video.integer_scaling") && s >= 1.0f) s = floorf(s);
     SDL_FRect dst = {((float)ow - sw * s) / 2, ((float)oh - sh * s) / 2, sw * s, sh * s};
+
+    if (compose) {
+        int ds = (int)ceilf(s);                          /* compose at about the display scale */
+        if (ds < 1) ds = 1;
+        if (ds > 4) ds = 4;
+        depth_shown = depth_compose(frame_lines, w, h, depth_pixels, w * ds, ds);
+        if (depth_shown) {
+            if (w * ds != depth_tex_w || h * ds != depth_tex_h) {
+                if (depth_texture) SDL_DestroyTexture(depth_texture);
+                depth_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
+                                                  w * ds, h * ds);
+                SDL_SetTextureScaleMode(depth_texture, scale_mode());
+                depth_tex_w = w * ds;
+                depth_tex_h = h * ds;
+            }
+            SDL_UpdateTexture(depth_texture, NULL, depth_pixels, w * ds * 4);
+        }
+    }
+    if (!depth_shown) {
+        if (w != tex_w || h != tex_h) {
+            if (texture) SDL_DestroyTexture(texture);
+            texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+            SDL_SetTextureScaleMode(texture, scale_mode());
+            tex_w = w;
+            tex_h = h;
+        }
+        SDL_UpdateTexture(texture, NULL, pixels, VDP_MAX_W * 4);
+    }
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
-    SDL_RenderTexture(renderer, texture, NULL, &dst);
+    SDL_RenderTexture(renderer, depth_shown ? depth_texture : texture, NULL, &dst);
     SDL_RenderPresent(renderer);
+}
+
+static void cycle_battle_depth(void) {
+    int l = (depth_get_level() + 1) % DEPTH_LEVELS;
+    depth_set_level(l);
+    for (int i = 0; i < NSETTINGS; i++)
+        if (!strcmp(settings[i].key, "enhance.battle_depth")) snprintf(settings[i].value, sizeof settings[i].value, "%d", l);
+    char path[1100], title[96];
+    path_in_home(path, sizeof path, "psiv.ini");
+    write_settings(path);
+    snprintf(title, sizeof title, "Phantasy Star IV - battle depth: %s", depth_level_name(l));
+    SDL_SetWindowTitle(window, title);
+    SDL_Log("battle depth: %s", depth_level_name(l));
 }
 
 /* ------------------------------------------------------------------ frame and audio */
@@ -425,8 +470,12 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
         case SDL_EVENT_KEY_DOWN:
             if (e.key.repeat) break;
             if (e.key.key == SDLK_ESCAPE) quit(0);
-            if (e.key.key == SDLK_F12) screenshot(pixels, w, h);
+            if (e.key.key == SDLK_F12) {
+                if (depth_shown) screenshot_any(depth_pixels, depth_tex_w, depth_tex_h, depth_tex_w);
+                else screenshot_any(pixels, w, h, VDP_MAX_W);
+            }
             if (e.key.key == SDLK_F10) paused = !paused;
+            if (e.key.key == SDLK_F9) cycle_battle_depth();
             if (e.key.key == SDLK_F11)
                 SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
             break;
@@ -443,13 +492,13 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
 void platform_frame(const uint32_t *pixels, int w, int h) {
     handle_events(pixels, w, h);
     while (paused) {                                     /* F10: hold here, keep the window alive */
-        present(pixels, w, h);
+        present(pixels, w, h, 0);
         SDL_Delay(16);
         handle_events(pixels, w, h);
         next_deadline = SDL_GetTicksNS();
     }
     bus_pad[0] = read_input();
-    present(pixels, w, h);
+    present(pixels, w, h, 1);
 
     uint64_t now = SDL_GetTicksNS();
     if (now - last_sram_flush > 1000000000ull) {
@@ -478,6 +527,7 @@ int main(int argc, char **argv) {
     find_home();
     open_log();
     load_settings();
+    depth_set_level(setting_int("enhance.battle_depth"));
     resolve_bindings();
 
     int scale = setting_int("video.scale");

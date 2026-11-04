@@ -46,7 +46,7 @@ add_library(psiv_sound_chips STATIC
 target_include_directories(psiv_sound_chips PUBLIC runtime ${YMFM_DIR} ${CHIPS_DIR})
 
 # Hardware: bus, VDP, sound, frame loop (object files, so the code<->hardware calls link either way)
-set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/sound.c runtime/frame.c)
+set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/sound.c runtime/frame.c runtime/depth.c)
 set(TEST_SOURCES runtime/headless.c runtime/sha256.c)
 
 # Headless front end: scripted input, PNG screenshots
