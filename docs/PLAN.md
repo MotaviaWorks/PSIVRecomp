@@ -94,7 +94,7 @@ or cycle counting are needed.
 |---|---|---|
 | M0 | Project setup | ROM prep, byte-identical rebuild and jump analysis run on Desk — **done 2026-11-03** |
 | M1 | Decoder + function map | Decoder matches the listing 100%; function list + CFG; cross-branch tracing closes the remaining indirect sites — **done 2026-11-03** (see below) |
-| M2 | Emitter | All code recompiles to C and compiles cleanly |
+| M2 | Emitter | All code recompiles to C and compiles cleanly — **done 2026-11-03** (see below) |
 | M3 | First boot | SDL3 window shows the SEGA logo and the title screen (no sound) |
 | M4 | Reference harness | BizHawk recordings replay in the port with matching state through the intro |
 | M5 | Sound | Z80 + YM2612 + PSG; music and effects match |
@@ -122,6 +122,26 @@ or cycle counting are needed.
 - **Quirks found**: two branches into the middle of an instruction
   (`bcc.w loc_586C2-2`, and one at `$58514`) that would end in a line-F
   exception on hardware; the model reproduces that.
+
+### M2 results
+
+- **Generator** (`tools/emit.py`, 3.6 s): 3,925 functions, 113,047 instructions,
+  ~491k lines of C in 32 files. Condition codes are computed only where they can
+  be read; each function's flags-read-at-entry is solved for the whole program
+  (5 rounds), because routines return results in Z for their callers.
+- **Calls**: `jsr`/`bsr` push the real return address and make a C call; every
+  call site checks the stack came back balanced (the sound driver's
+  `addq.w #4,sp` "return from my caller too" makes the caller return as well).
+  Debug builds also check each popped return address matches the one pushed.
+- **Builds clean** with MSVC `/W3 /WX` (15 s for both variants) and gcc `-O3
+  -Wall -Werror`.
+- **Smoke test** (`psiv_smoke`): with stub hardware and the vertical-blank
+  interrupt delivered at `WaitForVInt`, the game boots, uploads the Z80 driver,
+  reaches the title at frame 195 and field mode at frame 612, and runs 36,000
+  frames (85.6M blocks, 0.3 s) with no unknown indirect target and no return
+  mismatch. MSVC and gcc builds finish with the identical RAM checksum.
+- Not yet proven: that every instruction's semantics match a real 68000. That
+  is what the BizHawk comparison (M4) checks.
 
 ## Open risks
 
