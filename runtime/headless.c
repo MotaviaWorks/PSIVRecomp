@@ -16,6 +16,10 @@
  *                          +D KEYS [N]   the same, D frames after the previous line's start
  *                        KEYS from U D L R A B C S, or - for none; # starts a comment
  *     --shot-every N:DIR with --movie: a PNG every N logical frames into DIR
+ *     --sram FILE        battery save to load before power-on (8 KB, the odd
+ *                        bytes of $200001-$203FFF, as saves/psiv.srm)
+ *     --sram-out FILE    write the battery save when the run ends
+ *     --where L,L,...    print the 68000 call chain at these logical frames
  *     --replay TRACE     replay a BizHawk reference trace (tools/bizhawk/record.lua):
  *                        its input and lag per logical frame, checking memory
  *                        hashes; stops at the first difference and dumps the
@@ -170,7 +174,13 @@ void platform_fatal(const char *text) {
     exit(1);
 }
 
+static const char *sram_out;           /* --sram-out */
+
 static void report(void) {
+    if (sram_out) {
+        FILE *sf = fopen(sram_out, "wb");
+        if (sf) { fwrite(bus_sram, 1, sizeof bus_sram, sf); fclose(sf); printf("wrote %s\n", sram_out); }
+    }
     uint32_t hash = 2166136261u;                       /* FNV-1a over work RAM */
     for (int i = 0; i < 0x10000; i++) hash = (hash ^ m68k_ram[i]) * 16777619u;
     printf("frames %llu, RAM FNV-1a %08X, audio peak %d\n", (unsigned long long)frame_count, hash, audio_peak);
@@ -181,26 +191,53 @@ static void report(void) {
     }
 }
 
+static uint64_t hot_from;              /* --hot-from: count hot blocks from this logical frame */
+static uint64_t where_at[16];          /* --where: print the 68000 call chain at these logical frames */
+static int nwhere;
+
+static void print_where(uint64_t at) {
+    uint32_t calls[24];
+    int n = diag_callstack(calls, 24);
+    printf("logical %llu: waiting in", (unsigned long long)at);
+    for (int i = 0; i < n; i++) {
+        uint32_t off;
+        const char *fn = diag_function_name(calls[i] - 2, &off);
+        printf("%s $%06X %s+$%X", i ? " <-" : "", calls[i], fn, off + 2);
+    }
+    printf("\n");
+}
+/* --watch N:PC,PC,...: during the work leading up to logical frame N, print
+ * the registers each time one of these instructions is about to run (trace
+ * build only; tools/bizhawk/record.lua does the same with PSIV_WATCH) */
+static uint32_t watch_pc[64];
+static int watch_n;
+static uint64_t watch_frame;
+
 #ifdef PSIV_TRACE
+static void watch_check(uint32_t pc);
 #define HOT 4096
 uint32_t m68k_trace_pc;
 static uint32_t hot_pc[HOT];
 static uint64_t hot_n[HOT], blocks;
+static void reset_hot(void) { memset(hot_n, 0, sizeof hot_n); blocks = 0; }
 void m68k_trace(uint32_t pc) {
     uint32_t slot = (pc >> 1) % HOT;
     m68k_trace_pc = pc;
     if (hot_pc[slot] != pc) { hot_pc[slot] = pc; hot_n[slot] = 0; }
     hot_n[slot]++;
     blocks++;
+    if (watch_n) watch_check(pc);
 }
 static void report_hot(void) {
-    printf("%llu blocks; hottest:\n", (unsigned long long)blocks);
-    for (int k = 0; k < 6; k++) {
+    printf("%llu blocks; hottest outside the sound driver ($D0000+):\n", (unsigned long long)blocks);
+    for (int k = 0; k < 16; k++) {
         int best = -1;
         for (int i = 0; i < HOT; i++)
-            if (hot_n[i] && (best < 0 || hot_n[i] > hot_n[best])) best = i;
+            if (hot_n[i] && hot_pc[i] < 0xD0000 && (best < 0 || hot_n[i] > hot_n[best])) best = i;
         if (best < 0) break;
-        printf("  $%06X  %llu\n", hot_pc[best], (unsigned long long)hot_n[best]);
+        uint32_t off;
+        const char *fn = diag_function_name(hot_pc[best], &off);
+        printf("  $%06X  %-10llu %s+$%X\n", hot_pc[best], (unsigned long long)hot_n[best], fn, off);
         hot_n[best] = 0;
     }
 }
@@ -210,6 +247,20 @@ static void report_hot(void) {
 static FILE *replay;
 static const char *replay_path;
 static uint64_t logical, dump_at, mismatched_frames;
+
+#ifdef PSIV_TRACE
+static void watch_check(uint32_t pc) {
+    if (logical != watch_frame) return;
+    for (int i = 0; i < watch_n; i++) {
+        if (watch_pc[i] != pc) continue;
+        printf("watch %llu $%06X", (unsigned long long)logical, pc);
+        for (int r = 0; r < 8; r++) printf(" d%d=%08X", r, D(r));
+        for (int r = 0; r < 7; r++) printf(" a%d=%08X", r, A(r));
+        printf(" sp=%08X\n", A(7));
+        return;
+    }
+}
+#endif
 static int keep_going;
 
 /* memory regions serialized the way BizHawk's domains present them */
@@ -262,28 +313,58 @@ static void dump_prefix(char *out, size_t n, const char *tag) {
  * sprite pixels, so both sides leave the word out of the hash */
 #define STATUS_LO 0xEF22u
 #define STATUS_HI 0xEF24u
-static char cur_line[2048];
-static int have_cur, cur_lag_delivered;
-static uint64_t sound_mismatches, first_sound_mismatch;
+/* the stack's 4 KB block also holds game variables up to Vehicle_Stats
+ * ($4700-$47FF); from here up to sp is dead stack. Trace v5 hashes the
+ * variables and the live stack ("a+b"); v4 hashed only from sp up */
+#define STACK_DEAD_LO 0x4800u
+#define TRACE_LINE 16384
+static char cur_line[TRACE_LINE];
+static int have_cur, cur_lag_delivered, trace_version = 4;
+static uint64_t sound_mismatches, first_sound_mismatch, hv_mismatches;
 
 static int read_line(void) {
     do {
         if (!fgets(cur_line, sizeof cur_line, replay)) return 0;
+        const char *v = strstr(cur_line, "# psiv reference trace v");
+        if (v) trace_version = atoi(v + 24);
     } while (cur_line[0] == '#');
     return 1;
 }
 
+/* trace v5: "hv:1A2B,3C4D" (or "hv:-") lists the beam-counter values the game
+ * read during the work leading up to that frame; give them to the VDP before
+ * that work starts */
+static void feed_hv(const char *line) {
+    const char *p = strstr(line, "hv:");
+    uint16_t v[1024];
+    int n = 0;
+    if (!p) { vdp_hv_feed(v, 0); return; }
+    for (p += 3; *p && *p != '-' && n < 1024; ) {
+        char *end;
+        unsigned long x = strtoul(p, &end, 16);
+        if (end == p) break;
+        v[n++] = (uint16_t)x;
+        p = *end == ',' ? end + 1 : end;
+    }
+    int off = vdp_hv_feed(v, n);
+    if (off && hv_mismatches++ < 3)
+        printf("logical frame %llu: the port read %d %s beam-counter value%s than the reference\n",
+               (unsigned long long)logical, off < 0 ? -off : off, off < 0 ? "more" : "fewer",
+               (off == 1 || off == -1) ? "" : "s");
+}
+
 /* returns 0 when the trace has ended */
 static int replay_step(void) {
-    char line[2048], *tok[40];
+    char line[TRACE_LINE], *tok[48];
     int nt = 0;
     if (!have_cur) {
         if (!read_line()) return 0;
         have_cur = 1;
         cur_lag_delivered = 0;
+        feed_hv(cur_line);
     }
     memcpy(line, cur_line, sizeof line);
-    for (char *t = strtok(line, " |\r\n"); t && nt < 40; t = strtok(NULL, " |\r\n")) tok[nt++] = t;
+    for (char *t = strtok(line, " |\r\n"); t && nt < 48; t = strtok(NULL, " |\r\n")) tok[nt++] = t;
     if (nt < 39) { fprintf(stderr, "bad trace line at logical frame %llu (need trace v4)\n", (unsigned long long)logical); exit(2); }
     uint64_t n = strtoull(tok[0], NULL, 10);
     int lag = atoi(tok[1]);
@@ -304,8 +385,9 @@ static int replay_step(void) {
     sound_want[16] = 0;
     have_cur = read_line();
     if (have_cur) {
-        char peek[2048], *t1, *t2;
+        char peek[TRACE_LINE], *t1, *t2;
         memcpy(peek, cur_line, sizeof peek);
+        feed_hv(cur_line);
         t1 = strtok(peek, " |\r\n");
         t2 = t1 ? strtok(NULL, " |\r\n") : NULL;
         frame_pending_lag = t2 ? atoi(t2) : 0;
@@ -329,9 +411,15 @@ static int replay_step(void) {
             const char *want = hashes_copy[r == 0 ? b : r == 1 ? 16 + b : r == 2 ? 32 : 33];
             size_t bl = blocks == 16 ? 0x1000 : len;
             size_t lo = (size_t)b * bl, hi = lo + bl;
-            if (r == 0 && sp > lo && sp < hi) lo = sp;          /* live stack only */
             if (r == 0 && lo == SOUND_LO) lo = SOUND_HI;         /* sound driver: soft check below */
-            if (r == 0 && lo <= STATUS_LO && hi >= STATUS_HI) {  /* skip VDP_Status_Reg */
+            if (r == 0 && sp > lo && sp < hi && trace_version < 5) lo = sp;   /* v4: live stack only */
+            if (r == 0 && sp > lo && sp < hi) {                  /* variables + live stack */
+                size_t var_hi = sp < STACK_DEAD_LO ? sp : STACK_DEAD_LO;
+                char vars[17], live[17];
+                sha256_hex16(buf + lo, var_hi - lo, vars);
+                sha256_hex16(buf + sp, hi - sp, live);
+                snprintf(got, sizeof got, "%s+%s", vars, live);
+            } else if (r == 0 && lo <= STATUS_LO && hi >= STATUS_HI) {  /* skip VDP_Status_Reg */
                 char a[17], b[17];
                 sha256_hex16(buf + lo, STATUS_LO - lo, a);
                 sha256_hex16(buf + STATUS_HI, hi - STATUS_HI, b);
@@ -376,6 +464,11 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
     uint64_t f = frame_count;
     if (frame_vint_will_fire()) {
         logical++;
+#ifdef PSIV_TRACE
+        if (hot_from && logical == hot_from) reset_hot();
+#endif
+        for (int i = 0; i < nwhere; i++)
+            if (where_at[i] == logical) print_where(logical);
         if (dump_at && logical == dump_at) {
             char prefix[512];
             dump_prefix(prefix, sizeof prefix, "port");
@@ -386,6 +479,9 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
                 printf("sound driver RAM differed on %llu logical frames (first: %llu); "
                        "lag timing; the driver itself is checked by tools/soundcheck.py --bizhawk\n",
                        (unsigned long long)sound_mismatches, (unsigned long long)first_sound_mismatch);
+            if (hv_mismatches)
+                printf("beam-counter reads differed in number on %llu frames\n",
+                       (unsigned long long)hv_mismatches);
             if (mismatched_frames)
                 printf("trace ended: %llu of %llu logical frames differ\n",
                        (unsigned long long)mismatched_frames, (unsigned long long)(logical - 1));
@@ -489,6 +585,7 @@ static int load_movie(const char *path) {
 
 int main(int argc, char **argv) {
     const char *rom_path = "rom/psiv.bin";
+    const char *sram_in = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--rom") && i + 1 < argc) rom_path = argv[++i];
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frame_limit = strtoull(argv[++i], NULL, 10);
@@ -522,6 +619,28 @@ int main(int argc, char **argv) {
             shot_dir = *e == ':' ? e + 1 : ".";
         } else if (!strcmp(argv[i], "--trace-pad")) {
             trace_pad = 1;
+        } else if (!strcmp(argv[i], "--sram") && i + 1 < argc) {
+            sram_in = argv[++i];
+        } else if (!strcmp(argv[i], "--sram-out") && i + 1 < argc) {
+            sram_out = argv[++i];
+        } else if (!strcmp(argv[i], "--hot-from") && i + 1 < argc) {
+            hot_from = strtoull(argv[++i], NULL, 10);
+        } else if (!strcmp(argv[i], "--where") && i + 1 < argc) {
+            for (char *s = argv[++i]; *s && nwhere < 16; ) {   /* comma-separated logical frames */
+                where_at[nwhere++] = strtoull(s, &s, 10);
+                if (*s == ',') s++;
+            }
+        } else if (!strcmp(argv[i], "--watch") && i + 1 < argc) {
+            char *s = argv[++i];                               /* N:PC,PC,... (hex PCs) */
+            watch_frame = strtoull(s, &s, 10);
+            if (*s == ':') s++;
+            while (*s && watch_n < 64) {
+                watch_pc[watch_n++] = (uint32_t)strtoul(s, &s, 16);
+                if (*s == ',') s++; else break;
+            }
+#ifndef PSIV_TRACE
+            fprintf(stderr, "--watch needs psiv_headless_trace\n");
+#endif
         } else if (!strcmp(argv[i], "--test-fatal") && i + 1 < argc) {
             test_fatal_frame = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--wav") && i + 1 < argc) {
@@ -545,6 +664,13 @@ int main(int argc, char **argv) {
     uint32_t n = (uint32_t)fread(rom, 1, sizeof rom, f);
     fclose(f);
     bus_init(rom, n);
+    if (sram_in) {
+        FILE *sf = fopen(sram_in, "rb");
+        if (!sf) { fprintf(stderr, "cannot open %s\n", sram_in); return 1; }
+        size_t got = fread(bus_sram, 1, sizeof bus_sram, sf);
+        fclose(sf);
+        printf("loaded save %s (%u bytes)\n", sram_in, (unsigned)got);
+    }
 
     m68k.s = 1;
     m68k.imask = 7;

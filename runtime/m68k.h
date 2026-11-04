@@ -191,11 +191,10 @@ void m68k_stop(uint32_t sr);                          /* `stop`: wait for an int
 void m68k_reset_insn(void);                           /* `reset` instruction */
 m68k_fn m68k_lookup(uint32_t addr);                   /* NULL if addr is not a function */
 
-#ifdef PSIV_CHECK_RETURNS
-#define CHECK_RET(ret) do { if (m68k_last_ret != (ret)) m68k_fatal("return address", (ret), m68k_last_ret); } while (0)
-#else
-#define CHECK_RET(ret) ((void)0)
-#endif
+/* after a call: if the callee rewrote its return address, carry on where the
+ * 68000 would (see m68k_resume); the caller returns right after */
+int m68k_resume(uint32_t addr, uint32_t expected);
+#define CHECK_RET(ret) do { if (m68k_last_ret != (ret) && m68k_resume(m68k_last_ret, (ret))) return; } while (0)
 
 #define CALL(fn, ret) do { uint32_t sp0_ = A(7); PUSH32(ret); fn(); \
     if (A(7) != sp0_) { return; } CHECK_RET(ret); } while (0)

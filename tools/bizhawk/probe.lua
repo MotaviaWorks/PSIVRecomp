@@ -41,4 +41,5 @@ local okall, errall = pcall(function()
 end)
 if not okall then log("ERROR: " .. tostring(errall)) end
 if out then out:close() end
+emu.limitframerate(true)          -- BizHawk saves its settings on exit
 client.exit()

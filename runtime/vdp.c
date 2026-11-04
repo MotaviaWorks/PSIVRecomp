@@ -164,7 +164,21 @@ uint16_t vdp_read_status(void) {
     return s;
 }
 
+static uint16_t hv_queue[1024];
+static int hv_count, hv_pos, hv_extra;
+
+int vdp_hv_feed(const uint16_t *values, int n) {
+    int off = hv_extra ? -hv_extra : hv_count - hv_pos;
+    if (n > (int)(sizeof hv_queue / sizeof hv_queue[0])) n = (int)(sizeof hv_queue / sizeof hv_queue[0]);
+    for (int i = 0; i < n; i++) hv_queue[i] = values[i];
+    hv_count = n;
+    hv_pos = hv_extra = 0;
+    return off;
+}
+
 uint16_t vdp_read_hv(void) {
+    if (hv_pos < hv_count) return hv_queue[hv_pos++];
+    if (hv_count) hv_extra++;
     int v = vdp.in_vblank ? 0xE0 : vdp.line;
     return (uint16_t)((v & 0xFF) << 8);
 }

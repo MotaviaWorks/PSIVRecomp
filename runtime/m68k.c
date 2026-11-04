@@ -245,6 +245,28 @@ void m68k_call(uint32_t target) {
     fn();
 }
 
+/* A call came back to a different address than the one pushed: the callee
+ * rewrote its return address. The game does this in Battle_CreateWindow and
+ * Battle_DestroyWindow (`addq.l #2,(sp)`: skip the `rts` after the call once
+ * the window is fully open/closed). The 68000 simply continues there, so
+ * continue at the function that starts at that address; it ends by returning
+ * from the caller, which then returns too. */
+int m68k_resume(uint32_t addr, uint32_t expected) {
+    m68k_fn fn = m68k_lookup(addr);
+    if (fn) {
+        fn();
+        return 1;
+    }
+#ifdef PSIV_CHECK_RETURNS
+    m68k_fatal("return address", expected, addr);
+#else
+    static int warned;
+    if (!warned++) fprintf(stderr, "returned to $%06X instead of $%06X, which is not a recompiled "
+                                   "function; continuing after the call\n", (unsigned)addr, (unsigned)expected);
+#endif
+    return 0;
+}
+
 void m68k_exception(int vector, uint32_t pc) {
     uint32_t sr = GET_SR();
     m68k_set_sr((sr | 0x2000) & 0x7FFF);    /* supervisor on, trace off */

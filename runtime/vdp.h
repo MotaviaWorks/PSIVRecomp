@@ -51,6 +51,13 @@ uint16_t vdp_read_data(void);
 uint16_t vdp_read_status(void);
 uint16_t vdp_read_hv(void);
 
+/* Replay: the beam-counter values the reference read during the next frame's
+ * work, in order. The game mixes the counter into its battle random numbers
+ * (UpdateRNGSeed2), and its exact value depends on cycle timing, so replays
+ * take it from the recording like the pad. Returns how many values of the
+ * previous feed went unread (negative: reads beyond them). */
+int vdp_hv_feed(const uint16_t *values, int n);
+
 int vdp_width(void);             /* 320 (H40) or 256 (H32) */
 int vdp_height(void);            /* 224 (V28) or 240 (V30) */
 int vdp_hint_enabled(void);

@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from saves import save_for
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 HEADLESS = ROOT / "build" / "native-Release" / "psiv_headless.exe"
 OUT = ROOT / "build" / "shots" / "try"
@@ -34,6 +36,7 @@ def main():
     ap.add_argument("base")
     ap.add_argument("moves", nargs="*")
     ap.add_argument("--shots", default="")
+    ap.add_argument("--where", action="store_true", help="also print the 68000 call chain at each shot")
     args = ap.parse_args()
     lines = Path(args.base).read_text().splitlines() + args.moves
     OUT.mkdir(parents=True, exist_ok=True)
@@ -42,10 +45,15 @@ def main():
     end = last_frame(lines)
     shots = [int(x) for x in args.shots.split(",") if x] or [end]
     cmd = [str(HEADLESS), "--movie", str(movie), "--frames", str(end + 60)]
+    sram = save_for(movie)
+    if sram:
+        cmd += ["--sram", str(sram)]
     for s in shots:
         cmd += ["--shot", f"{s}:{OUT / f'{s:06d}.png'}"]
+    if args.where:
+        cmd += ["--where", ",".join(str(s) for s in shots)]
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-    out = [l for l in r.stdout.splitlines() if "saved" in l or "FATAL" in l or "mode" in l]
+    out = [l for l in r.stdout.splitlines() if "saved" in l or "FATAL" in l or "mode" in l or "waiting" in l]
     print("\n".join(out[-12:]))
     if r.returncode not in (0,):
         print(r.stdout[-2000:])

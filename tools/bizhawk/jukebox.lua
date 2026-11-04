@@ -37,12 +37,14 @@ local function run()
   -- here would drop the write callbacks registered above.)
   emu.limitframerate(false)
   while emu.framecount() < 29 do emu.frameadvance() end
-  savestate.saveslot(9)                       -- every ID starts from the same frame-29 state
+  -- every ID starts from the same frame-29 state (kept in memory, not in
+  -- BizHawk's savestate slots)
+  local start = memorysavestate.savecorestate()
 
   local first, last = 0x81, 0xB4
   if ONLY then first = tonumber(ONLY, 16); last = first end
   for id = first, last do
-    savestate.loadslot(9)
+    memorysavestate.loadcorestate(start)
     out = assert(io.open(string.format("%s/build/bizhawk/juke_%02X.log", PSIV_ROOT, id), "w"))
     while emu.framecount() < 30 do emu.frameadvance() end
     mainmemory.write_u8(0x500A, 0xFE)
@@ -60,4 +62,5 @@ if not ok then
   if f then f:write(tostring(err), "\n") f:close() end
   console.log("PSIV script error: " .. tostring(err))
 end
+emu.limitframerate(true)          -- BizHawk saves its settings on exit
 client.exit()

@@ -60,19 +60,48 @@ build\native-Release\psiv_headless.exe --frames 1600 --press 250:S:4 --press 420
 The port is verified frame by frame against BizHawk (Genesis Plus GX core).
 `tools/bizhawk/record.lua` logs, at every frame where the game waits for
 vertical blank, the pad state, lag, stack pointer and SHA-256s of RAM, VRAM,
-CRAM and VSRAM; `psiv_headless --replay` plays the same input and stops at the
-first difference.
+CRAM and VSRAM, plus the VDP beam-counter values the game read (its battle
+random numbers mix them in, and they depend on cycle timing);
+`psiv_headless --replay` plays the same input with the same counter values and
+stops at the first difference.
 
 ```
 python tools/bizhawk/check.py                  # record the scripted new-game run, then replay it
+python tools/bizhawk/check.py --movie tools/movies/save_academy.movie   # an input movie (see below)
 python tools/bizhawk/check.py --dump-at 858    # also dump both sides at that frame and diff the bytes
+python tools/bizhawk/check.py --play           # play it yourself; close EmuHawk and the port replays it
 ```
 
-To use your own play as a test: in EmuHawk load the ROM, reboot the core,
-open Tools > Lua Console, open `tools/bizhawk/record_play.lua` and play. Then
-`python tools/bizhawk/check.py --trace build/bizhawk/play_<date>_<time>.trace`.
-EmuHawk's location defaults to `H:\Emulation\08 - Tools\BizHawk\EmuHawk.exe`
-(override with the `PSIV_BIZHAWK` environment variable).
+`--play` opens EmuHawk with `tools/bizhawk/record_play.lua`, which restarts
+the game from power-on (the port can only replay from reset) and records
+every frame at normal speed. Continue works: the battery save BizHawk starts
+with is kept next to the trace (`.start.sram`) and given to the port, and the
+save it ends with is compared byte for byte. Keep the Lua Console window open
+while you play; closing it stops the recording. A recorded session can be
+replayed again with `check.py --trace FILE`, or turned into an input movie:
+`python tools/movies/trace2movie.py FILE tools/movies/NAME.movie`.
+
+Automated runs start from an empty or given save and put BizHawk's own save
+file back before they exit. EmuHawk's location defaults to
+`H:\Emulation\08 - Tools\BizHawk\EmuHawk.exe` (override with the
+`PSIV_BIZHAWK` environment variable).
+
+### Input movies
+
+Scenarios are input movies by logical frame (`tools/movies/*.movie`), played
+identically by the port and BizHawk: `L KEYS [N]` or `+D KEYS [N]`, KEYS from
+`UDLRABCS` or `-`. A movie that starts from a battery save says
+`# from-save: NAME`; the save is made by playing `NAME.movie` and cached in
+`build/saves/`. `tools/movies/try.py BASE.movie "MOVES" --shots F,F` branches
+new moves off a movie and takes screenshots, for authoring.
+
+- `opening.movie`: power-on through the intro to free movement (6,830 frames)
+- `save_academy.movie`: the opening, then save in slot 1 (7,091 frames)
+- `academy.movie`: Continue from that save; Chaz is free in the Academy at 700
+- `session1.movie`: a recorded 7-minute session with 7 battles (24,604
+  frames); `battle1.movie` is its first 4,900 frames, up to the first battle.
+  Both start from the save that session began with (`tools/movies/saves/battle1-start.srm`,
+  kept locally, not in git)
 
 ### Checking the sound
 

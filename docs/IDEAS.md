@@ -56,6 +56,12 @@ original chip sound.
 
 ## Smaller ones worth keeping in mind
 - Fast-forward, and turbo for battles and text.
-- Save anywhere (snapshots of the whole machine state are easy in a port).
+- Save anywhere. Harder than in an emulator: the recompiled game's position
+  lives in the C call stack, not in a PC register, so a snapshot has to be
+  taken where that stack is known. The game waiting for vertical blank in the
+  field is such a point (the 68000 stack names every caller, as the crash
+  reports already show); resuming means re-entering each function at its call
+  site, which the generator could emit. Snapshots at that point only, not
+  mid-frame.
 - Integer scaling, CRT-style filters, fullscreen.
 - Remappable controls and modern gamepad support.

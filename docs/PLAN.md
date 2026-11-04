@@ -227,6 +227,51 @@ or cycle counting are needed.
   writes), ymfm's and the PSG's synthesis, and the mix. Check by ear against
   `mp3/`.
 
+### M6 progress
+
+- **Player** (`psiv.exe`): `psiv.ini` settings (scale, fullscreen, integer
+  scaling, 4:3 aspect, filter, volume, keyboard and gamepad bindings), ROM
+  picker that accepts SMD dumps, battery saves in `saves/psiv.srm`, crash and
+  hang reports (`psiv-crash.txt`, with the 68000 call chain by function name).
+- **Input movies** by logical frame drive the port and BizHawk identically;
+  `tools/movies/try.py` branches new moves off a movie with screenshots.
+- **Battery saves verified**: the port's save is the cartridge's odd bytes
+  (8 KB); BizHawk's "SRAM" domain holds them at odd offsets. Saving in slot 1
+  after the opening: 7,091 frames identical and the save identical byte for
+  byte. Movies can start from a save (`# from-save:`); Continue loads the
+  field at frame 685.
+- **Live play as a test**: `check.py --play` records your own session in
+  BizHawk (from BizHawk's own save, so Continue works) and the port replays
+  it; `trace2movie.py` turns a session into a committable input movie.
+- **Battles and the beam counter**: the first recorded battle diverged 19
+  frames in (the port rolled an ambush, BizHawk a normal start). The battle
+  random numbers (`UpdateRNGSeed2`, the game's only read of it) mix in the
+  VDP's HV counter through `move.w $8(a5),d0` with a5 = the VDP data port, and
+  its value depends on cycle timing the port doesn't model. Traces (v5) now
+  log every value read (`hv:` column, from an exec hook right after the read)
+  and the port's replay feeds them back, like pad input. Normal play still
+  approximates the counter (beam line, H = 0), which is less random than
+  hardware; deriving it from executed work is a polish item.
+- **Return-address trick in battle windows**: `Battle_CreateWindow` and
+  `Battle_DestroyWindow` do `addq.l #2,(sp)` once the window is fully
+  open/closed, so the caller skips the `rts` after the call and runs the next
+  instruction (61 call sites, e.g. `move.w #2,(Battle_Routine_2)` to hand over
+  to the menu). Calls now check the address the callee returned to and, if it
+  changed, continue at the recompiled function there (`m68k_resume`); every
+  one of the 61 continuations is one. The trace build still stops on a changed
+  return address with no function behind it.
+- **Comparison blind spot fixed**: the stack's 4 KB block was hashed only from
+  sp up, which skipped $4000-$47FF, i.e. all battle state (`Battle_Routine`,
+  enemy stats, fighter objects, vehicle stats). Trace v5 hashes those
+  variables and the live stack separately, leaving out only the dead stack
+  ($4800 to sp).
+- **Verified so far**: 2,348 frames (scripted new game), 6,830 (the whole
+  opening), 7,091 (opening + save), and **PsiLok's first live session: 24,635
+  frames, 7 battles, all identical, and his in-game save identical byte for
+  byte** (`session1.movie`, from his own save).
+- **To do**: further into the game (more recorded sessions: towns, dungeons,
+  vehicles, techniques), packaging; normal-play beam-counter realism.
+
 ## Open risks
 
 - **BizHawk execute hooks on the Genesis core**: the reference harness assumes

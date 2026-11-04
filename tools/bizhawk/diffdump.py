@@ -42,7 +42,8 @@ def main():
     for region, size in (("ram", 0x10000), ("vram", 0x10000), ("cram", 128), ("vsram", 80)):
         a = Path(f"{ref}.{region}.bin").read_bytes()[:size]
         b = Path(f"{port}.{region}.bin").read_bytes()[:size]
-        diff = [i for i in range(size) if a[i] != b[i] and not (region == "ram" and sp and 0x4000 <= i < sp)]
+        # dead stack: $4800 up to sp ($4000-$47FF are game variables)
+        diff = [i for i in range(size) if a[i] != b[i] and not (region == "ram" and sp and 0x4800 <= i < sp)]
         print(f"{region}: {len(diff)} differing bytes")
         runs = []
         for i in diff:

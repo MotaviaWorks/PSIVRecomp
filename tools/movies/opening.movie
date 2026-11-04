@@ -1,5 +1,6 @@
 # psiv movie v1
 # Opening: skip intro, START, new game, advance the opening scenes with C.
+# skip the intro, START, new game, then C through the opening scenes
 290 S 4
 460 S 4
 600 C 4
@@ -203,14 +204,6 @@
 +30 C 4
 +30 C 4
 +30 C 4
-+30 C 4
-+30 C 4
-+30 C 4
-+30 C 4
-+30 C 4
-+30 C 4
-+30 C 4
-+30 C 4
-+30 C 4
-+30 C 4
-# from about logical frame 7000 Chaz is free to move in the Academy
+# the last C (6600) has Chaz examine the floor; its message finishes printing
+# around 6710, then B closes it: from 6740 Chaz is free to move in the Academy
+6730 B 2
