@@ -6,10 +6,12 @@
  * Keys: arrows = D-pad, Z/X/C = A/B/C, Enter = Start, Tab (hold) = fast
  * forward, F11 = fullscreen, F12 = screenshot (screenshots/), Esc = quit.
  * Gamepads: D-pad or left stick; West/South/East = A/B/C; Start = Start.
+ * Audio: 53,267 Hz stereo from sound.c, resampled by SDL.
  */
 #include "bus.h"
 #include "frame.h"
 #include "m68k.h"
+#include "sound.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -28,6 +30,15 @@ static int tex_w, tex_h;
 static SDL_Gamepad *pad;
 static uint64_t next_deadline;
 static uint64_t last_sram_flush;
+static SDL_AudioStream *audio;
+
+void platform_audio(const int16_t *samples, int count) {
+    if (!audio || count <= 0) return;
+    /* keep latency bounded: if more than ~1/6 s is queued (fast-forward, a
+     * stall), drop this frame's audio instead of letting the delay grow */
+    if (SDL_GetAudioStreamQueued(audio) > SOUND_RATE * 4 / 6) return;
+    SDL_PutAudioStreamData(audio, samples, count * 4);
+}
 
 static void sram_load(void) {
     FILE *f = fopen(SRAM_PATH, "rb");
@@ -159,10 +170,15 @@ int main(int argc, char **argv) {
     uint32_t n = (uint32_t)fread(rom, 1, sizeof rom, f);
     fclose(f);
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
+    /* the game's native rate; SDL resamples to the output device */
+    SDL_AudioSpec spec = {SDL_AUDIO_S16, 2, SOUND_RATE};
+    audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+    if (audio) SDL_ResumeAudioStreamDevice(audio);
+    else SDL_Log("no audio: %s", SDL_GetError());
     if (!SDL_CreateWindowAndRenderer("Phantasy Star IV", 320 * scale, 224 * scale,
                                      SDL_WINDOW_RESIZABLE, &window, &renderer)) {
         fprintf(stderr, "window: %s\n", SDL_GetError());

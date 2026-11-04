@@ -35,6 +35,9 @@ HOOKS = [
     # The hook ends the frame: render, present, input, then the VInt handler
     # clears the flag and the spin exits.
     ("WaitForVInt", 4, "tst.b\t($FFFFEF12).w", "psiv_wait_vblank"),
+    # Each run of the 68000 sound driver: numbers sound ticks so the chip-write
+    # log can be compared with BizHawk tick by tick, independent of lag.
+    ("UpdateSound", 0, "lea\t($FF5000).l, a6", "psiv_sound_tick"),
 ]
 
 X, N, Z, V, C = 16, 8, 4, 2, 1

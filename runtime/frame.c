@@ -17,6 +17,7 @@
 #include "frame.h"
 #include "bus.h"
 #include "m68k.h"
+#include "sound.h"
 
 #define VINT_FLAG 0xEF12u          /* VInt_Flag = $FFFFEF12 */
 #define SPIN_PC   0x42076u         /* where the interrupted code resumes */
@@ -55,6 +56,11 @@ void frame_run(void) {
         frame_pending_lag--;
         frame_lag_vint();
     }
+
+    /* the Z80, YM2612 and PSG play out the rest of the frame */
+    const int16_t *samples;
+    int n = sound_end_frame(&samples);
+    platform_audio(samples, n);
 }
 
 int frame_vint_will_fire(void) {

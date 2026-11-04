@@ -13,6 +13,10 @@
  *                        hashes; stops at the first difference and dumps the
  *                        port's memory next to the trace
  *     --keep-going       with --replay: count differing frames instead of stopping
+ *     --wav PATH         write the audio (stereo 16-bit, 53,267 Hz) to a WAV file
+ *     --ymlog PATH       log every YM2612/PSG write ("sample chip reg value")
+ *     --music ID:F       jukebox: at frame F stop all sound, then request sound ID
+ *                        (hex, e.g. 84) the way the game does, via Sound_Index ($FF500A)
  *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
  *                        (next to the trace, or build/bizhawk/port.*)
  *
@@ -23,6 +27,7 @@
 #include "frame.h"
 #include "m68k.h"
 #include "sha256.h"
+#include "sound.h"
 #include "vdp.h"
 
 #include <stdio.h>
@@ -37,6 +42,8 @@ static Press presses[256];
 static Shot shots[64];
 static int npress, nshot;
 static uint64_t frame_limit = 600;
+static int music_id = -1;
+static uint64_t music_frame;
 static uint16_t last_mode = 0xFFFF;
 
 /* ------------------------------------------------------------------ PNG (stored deflate, no zlib) */
@@ -102,11 +109,53 @@ static void save_png(const char *path, const uint32_t *px, int w, int h) {
     free(raw); free(z);
 }
 
+/* ------------------------------------------------------------------ audio */
+static FILE *wav;
+static uint32_t wav_samples;
+static int32_t audio_peak;
+
+static void le32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
+
+static void wav_header(FILE *f, uint32_t samples) {
+    uint8_t hdr[44] = {0};
+    memcpy(hdr, "RIFF", 4);
+    le32(hdr + 4, samples * 4 + 36);
+    memcpy(hdr + 8, "WAVEfmt ", 8);
+    le32(hdr + 16, 16);
+    hdr[20] = 1;                       /* PCM */
+    hdr[22] = 2;                       /* stereo */
+    le32(hdr + 24, SOUND_RATE);
+    le32(hdr + 28, SOUND_RATE * 4);
+    hdr[32] = 4;
+    hdr[34] = 16;
+    memcpy(hdr + 36, "data", 4);
+    le32(hdr + 40, samples * 4);
+    fseek(f, 0, SEEK_SET);
+    fwrite(hdr, 1, 44, f);
+    fseek(f, 0, SEEK_END);
+}
+
+void platform_audio(const int16_t *samples, int count) {
+    for (int i = 0; i < count * 2; i++) {
+        int32_t a = samples[i] < 0 ? -samples[i] : samples[i];
+        if (a > audio_peak) audio_peak = a;
+    }
+    if (wav) {
+        fwrite(samples, 4, (size_t)count, wav);           /* little-endian hosts */
+        wav_samples += (uint32_t)count;
+    }
+}
+
 /* ------------------------------------------------------------------ report */
 static void report(void) {
     uint32_t hash = 2166136261u;                       /* FNV-1a over work RAM */
     for (int i = 0; i < 0x10000; i++) hash = (hash ^ m68k_ram[i]) * 16777619u;
-    printf("frames %llu, RAM FNV-1a %08X\n", (unsigned long long)frame_count, hash);
+    printf("frames %llu, RAM FNV-1a %08X, audio peak %d\n", (unsigned long long)frame_count, hash, audio_peak);
+    if (wav) {
+        wav_header(wav, wav_samples);
+        fclose(wav);
+        wav = NULL;
+    }
 }
 
 #ifdef PSIV_TRACE
@@ -297,7 +346,7 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         if (replay && !replay_step()) {
             if (sound_mismatches)
                 printf("sound driver RAM differed on %llu logical frames (first: %llu); "
-                       "checked properly against VGM rips in M5\n",
+                       "lag timing; the driver itself is checked by tools/soundcheck.py --bizhawk\n",
                        (unsigned long long)sound_mismatches, (unsigned long long)first_sound_mismatch);
             if (mismatched_frames)
                 printf("trace ended: %llu of %llu logical frames differ\n",
@@ -318,6 +367,10 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
             save_png(shots[i].path, pixels, width, height);
             printf("frame %llu: saved %s (%dx%d)\n", (unsigned long long)f, shots[i].path, width, height);
         }
+    /* Sound_Index: a request only beats what is playing if its priority is at
+     * least as high, so stop everything ($FE) first, then ask for the song */
+    if (music_id >= 0 && f == music_frame) m68k_ram[0x500A] = 0xFE;
+    if (music_id >= 0 && f == music_frame + 2) m68k_ram[0x500A] = (uint8_t)music_id;
     if (!replay) {
         uint8_t keys = 0;
         for (int i = 0; i < npress; i++)
@@ -373,6 +426,16 @@ int main(int argc, char **argv) {
             dump_at = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--keep-going")) {
             keep_going = 1;
+        } else if (!strcmp(argv[i], "--wav") && i + 1 < argc) {
+            wav = fopen(argv[++i], "wb");
+            if (wav) wav_header(wav, 0);
+        } else if (!strcmp(argv[i], "--music") && i + 1 < argc) {
+            char *e;
+            music_id = (int)strtol(argv[++i], &e, 16);
+            music_frame = *e == ':' ? strtoull(e + 1, NULL, 10) : 30;
+        } else if (!strcmp(argv[i], "--ymlog") && i + 1 < argc) {
+            FILE *lf = fopen(argv[++i], "w");
+            if (lf) sound_set_log(lf);
         } else {
             fprintf(stderr, "unknown option %s\n", argv[i]);
             return 2;

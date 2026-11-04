@@ -13,6 +13,9 @@ extern uint64_t frame_count;
  * front end (main_sdl.c, headless.c). */
 void platform_frame(const uint32_t *pixels, int width, int height);
 
+/* One frame of audio: interleaved stereo int16 at SOUND_RATE (sound.h). */
+void platform_audio(const int16_t *samples, int count);
+
 /* Render a frame and deliver HInt/VInt. Called from the WaitForVInt hook. */
 void frame_run(void);
 

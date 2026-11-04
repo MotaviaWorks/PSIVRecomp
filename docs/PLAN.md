@@ -97,7 +97,7 @@ or cycle counting are needed.
 | M2 | Emitter | All code recompiles to C and compiles cleanly — **done 2026-11-03** (see below) |
 | M3 | First boot | SDL3 window shows the SEGA logo and the title screen (no sound) — **done 2026-11-03**: SEGA logo, intro, title, and a new game through to the first field scene |
 | M4 | Reference harness | BizHawk recordings replay in the port with matching state through the intro — **done 2026-11-03**: 2,348/2,348 frames identical through the first field scene |
-| M5 | Sound | Z80 + YM2612 + PSG; music and effects match |
+| M5 | Sound | Z80 + YM2612 + PSG; music and effects match — **done 2026-11-03**: all 52 music IDs identical to BizHawk on every 68000 sound write |
 | M6 | Playable | Saves, controller support, scaling/fullscreen; full playthrough matches the reference |
 | M7 | Enhancements | Features from [IDEAS.md](IDEAS.md) |
 
@@ -199,6 +199,33 @@ or cycle counting are needed.
   request can be consumed one interrupt earlier or later. It does not feed
   back into game state here; the sound driver is verified against the VGM
   rips in M5 instead.
+
+### M5 results
+
+- **Sound** (`runtime/sound.c`): the game's own Z80 DAC driver runs on floooh's
+  `z80.h` with the Mega Drive Z80 map (RAM, YM2612, bank register, 32 KB window
+  into cartridge ROM for the drum samples, PSG). YM2612 by ymfm
+  (`runtime/ym2612.cpp`); PSG written here. Everything advances in Z80 cycles:
+  after each VInt the rest of the frame (~59,737 cycles) is played out, with
+  YM samples at 53,267 Hz interleaved so DAC writes land at the right moments.
+  SDL resamples to the output device. Master gain ×2.25 (loudest song peaks
+  around −2 dBFS).
+- **Z80 handshake**: the 68000 driver's `StopZ80` retries while the Z80 flags
+  it is busy (`$A01FFD`); every bus release lets the Z80 run 32 cycles (taken
+  from the frame's budget), as it would during those retries on hardware.
+- **Verified against BizHawk**: `tools/bizhawk/jukebox.lua` plays every music
+  ID from the same boot state and logs the 68000's YM2612/PSG writes per
+  sound-driver tick (`UpdateSound`, counted by a generator hook on the port's
+  side, so lag doesn't misalign anything). **52/52 IDs identical: 788,683
+  writes**, 30 seconds of each song.
+- **Against the VGM rips**: chip state compared frame by frame
+  (`tools/vgmstate.py`). "The End of the Millennium" and "Motavia Town" are
+  100% identical, but rips carry artifacts (register dumps at the start and at
+  loop points, leftover values on silent channels, a 60.00 Hz tick instead of
+  59.92), so they are for listening rather than proof.
+- **Not machine-checked**: the Z80's DAC stream (BizHawk can't see Z80
+  writes), ymfm's and the PSG's synthesis, and the mix. Check by ear against
+  `mp3/`.
 
 ## Open risks
 

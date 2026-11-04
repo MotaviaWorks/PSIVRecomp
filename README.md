@@ -23,9 +23,15 @@ build.bat                                              # Windows (VS Build Tools
 build\native-Release\psiv.exe                          # play (run from the project folder)
 ```
 
-On Windows the build uses the SDL3 development package in
-`third_party/SDL3-3.4.20` (from the official `SDL3-devel-3.4.20-VC.zip`
-release); on Linux it uses the system SDL3.
+### Third-party code (fetched into `third_party/`, not committed)
+
+| Folder | What | Source |
+|---|---|---|
+| `SDL3-3.4.20/` | Window, input, audio (Windows only; Linux uses the system SDL3) | `SDL3-devel-3.4.20-VC.zip` from github.com/libsdl-org/SDL releases |
+| `ymfm/src/` | YM2612 FM chip (BSD-3) | github.com/aaronsgiles/ymfm, commit in `ymfm/COMMIT`: `src/ymfm.h`, `ymfm_fm.h/.ipp`, `ymfm_opn.h/.cpp`, `ymfm_adpcm.h/.cpp`, `ymfm_ssg.h/.cpp`, `ymfm_misc.h/.cpp` |
+| `chips/` | Z80 CPU (zlib) | `chips/z80.h` from github.com/floooh/chips, commit in `chips/COMMIT` |
+
+The PSG is implemented in `runtime/sound.c`.
 
 ### Controls
 
@@ -36,7 +42,7 @@ release); on Linux it uses the system SDL3.
 | Start | Enter | Start |
 
 Hold Tab to fast-forward, F11 fullscreen, F12 screenshot (`screenshots/`),
-Esc quits. Battery saves go to `saves/psiv.srm`. No sound yet (milestone M5).
+Esc quits. Battery saves go to `saves/psiv.srm`.
 
 ### Headless runs
 
@@ -67,6 +73,18 @@ open Tools > Lua Console, open `tools/bizhawk/record_play.lua` and play. Then
 `python tools/bizhawk/check.py --trace build/bizhawk/play_<date>_<time>.trace`.
 EmuHawk's location defaults to `H:\Emulation\08 - Tools\BizHawk\EmuHawk.exe`
 (override with the `PSIV_BIZHAWK` environment variable).
+
+### Checking the sound
+
+```
+python tools/soundcheck.py --render --bizhawk   # every song: all 68000 sound writes vs BizHawk, tick by tick
+python tools/soundcheck.py                      # chip state vs the VGM rips in vgm/ (rips have artifacts)
+build\native-Release\psiv_headless.exe --frames 1500 --music 8F:30 --wav song.wav   # jukebox: render one song
+```
+
+`--music ID:F` plays any sound ID (`MusicID_*` in `ps4.constants.asm`) the
+way the game requests it; `--ymlog` logs every chip write with the source CPU
+and the sound-driver tick.
 
 `prepare_rom.py` accepts raw and interleaved SMD dumps and refuses anything
 that isn't the USA ROM (SHA1 `bc7ff6d6a8408f38562bc610f24645cad6c42629`).

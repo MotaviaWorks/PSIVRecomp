@@ -9,12 +9,11 @@
  *   $C00000-$C00003  VDP data         $C00004-$C00007  VDP control/status
  *   $C00008-$C0000F  HV counter       $C00011          PSG
  *
- * Z80, YM2612 and PSG are stubs until the sound milestone: Z80 RAM is real
- * memory, the bus is always granted, the YM2612 is never busy, writes to the
- * sound chips are dropped.
+ * The Z80 area, bus request/reset and the PSG belong to sound.c.
  */
 #include "bus.h"
 #include "m68k.h"
+#include "sound.h"
 #include "vdp.h"
 
 #include <stdio.h>
@@ -24,8 +23,6 @@ uint8_t m68k_ram[0x10000];
 const uint8_t *m68k_rom;
 uint32_t m68k_rom_size;
 uint32_t m68k_rom_fast;
-
-static uint8_t z80_ram[0x2000];
 
 /* ------------------------------------------------------------------ SRAM */
 uint8_t bus_sram[BUS_SRAM_SIZE];          /* the odd bytes $200001, $200003, ... */
@@ -56,7 +53,7 @@ void bus_init(const uint8_t *rom, uint32_t size) {
     m68k_rom_size = size;
     m68k_rom_fast = size;
     memset(m68k_ram, 0, sizeof m68k_ram);
-    memset(z80_ram, 0, sizeof z80_ram);
+    sound_init();
     sram_mapped = 0;
     vdp_reset();
 }
@@ -67,14 +64,13 @@ uint8_t bus_rd8(uint32_t a) {
     int si = sram_index(a);
     if (si >= 0) return bus_sram[si];
     if (a < m68k_rom_size) return m68k_rom[a];
-    if (a >= 0xA04000 && a < 0xA04004) return 0x00;     /* YM2612 status: not busy */
-    if (a >= 0xA00000 && a < 0xA02000) return z80_ram[a & 0x1FFF];
-    if (a >= 0xA00000 && a < 0xA10000) return 0xFF;
+    if (a >= 0xA00000 && a < 0xA10000) return sound_68k_read(a);
     switch (a) {
     case 0xA10001: return 0xA0;                         /* overseas, NTSC, no expansion */
     case 0xA10003: return pad_read(0);
     case 0xA10005: return pad_read(1);
-    case 0xA11100: case 0xA11101: return 0x00;          /* Z80 bus granted */
+    case 0xA11100: return (uint8_t)(sound_busreq_read() >> 8);
+    case 0xA11101: return (uint8_t)sound_busreq_read();
     }
     if (a >= 0xC00000 && a < 0xC00020) {
         uint16_t w = bus_rd16(a & ~1u);
@@ -105,8 +101,8 @@ void bus_wr8(uint32_t a, uint8_t v) {
         bus_sram[si] = v;
         return;
     }
-    if (a >= 0xA00000 && a < 0xA02000) { z80_ram[a & 0x1FFF] = v; return; }
-    if (a >= 0xA00000 && a < 0xA10000) return;          /* YM2612: until the sound milestone */
+    if (a >= 0xA00000 && a < 0xA10000) { sound_68k_write(a, v); return; }
+    if (a >= 0xC00010 && a < 0xC00018) { if (a & 1) sound_psg_write(v); return; }
     if (a >= 0xC00000 && a < 0xC00010) {                /* byte writes reach the VDP doubled */
         bus_wr16(a & ~1u, (uint16_t)(v << 8 | v));
         return;
@@ -116,6 +112,8 @@ void bus_wr8(uint32_t a, uint8_t v) {
         sram_mapped = v & 1;
         m68k_rom_fast = sram_mapped ? 0x200000 : m68k_rom_size;
         return;
+    case 0xA11100: sound_busreq_write((uint16_t)(v << 8)); return;
+    case 0xA11200: sound_reset_write((uint16_t)(v << 8)); return;
     case 0xA10003: pad_th[0] = v & 0x40; return;
     case 0xA10005: pad_th[1] = v & 0x40; return;
     }
@@ -128,6 +126,9 @@ void bus_wr16(uint32_t a, uint16_t v) {
         else if ((a & 0x0C) == 0x04) vdp_write_control(v);
         return;
     }
+    if (a == 0xA11100) { sound_busreq_write(v); return; }
+    if (a == 0xA11200) { sound_reset_write(v); return; }
+    if (a >= 0xC00010 && a < 0xC00018) { sound_psg_write((uint8_t)v); return; }
     if (a >= 0xA00000 && a < 0xA10000) { bus_wr8(a, (uint8_t)(v >> 8)); return; }   /* Z80 side sees the high byte */
     bus_wr8(a, (uint8_t)(v >> 8));
     bus_wr8(a + 1, (uint8_t)v);
