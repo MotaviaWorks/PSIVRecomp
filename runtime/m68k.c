@@ -3,17 +3,13 @@
  * register changes, exceptions and indirect calls.
  */
 #include "m68k.h"
+#include "diag.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 
 M68KState m68k;
 uint32_t m68k_last_ret;
-
-/* generated: sorted by address */
-typedef struct { uint32_t addr; m68k_fn fn; } PsivFunction;
-extern const PsivFunction psiv_functions[];
-extern const int psiv_function_count;
 
 static uint32_t mask_of(int bits) { return bits == 32 ? 0xFFFFFFFFu : (1u << bits) - 1; }
 static uint32_t msb_of(int bits) { return 1u << (bits - 1); }
@@ -268,11 +264,8 @@ void m68k_interrupt(int level, uint32_t pc) {
 }
 
 void m68k_fatal(const char *what, uint32_t addr, uint32_t value) {
-    fprintf(stderr, "psiv: fatal: %s at $%06X (value $%08X)\n", what, addr & 0xFFFFFF, value);
-    fprintf(stderr, "  d0-d7:");
-    for (int i = 0; i < 8; i++) fprintf(stderr, " %08X", m68k.d[i]);
-    fprintf(stderr, "\n  a0-a7:");
-    for (int i = 0; i < 8; i++) fprintf(stderr, " %08X", m68k.a[i]);
-    fprintf(stderr, "\n  sr: %04X\n", GET_SR());
-    exit(1);
+    static char report[8192];
+    diag_report(report, sizeof report, what, addr, value);
+    platform_fatal(report);
+    exit(1);                            /* in case the front end returns */
 }

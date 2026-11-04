@@ -24,6 +24,7 @@
  * PSIV_TRACE it also prints the hottest code blocks.
  */
 #include "bus.h"
+#include "diag.h"
 #include "frame.h"
 #include "m68k.h"
 #include "sha256.h"
@@ -44,6 +45,7 @@ static int npress, nshot;
 static uint64_t frame_limit = 600;
 static int music_id = -1;
 static uint64_t music_frame;
+static uint64_t test_fatal_frame;          /* --test-fatal: exercise the crash report */
 static uint16_t last_mode = 0xFFFF;
 
 /* ------------------------------------------------------------------ PNG (stored deflate, no zlib) */
@@ -147,6 +149,13 @@ void platform_audio(const int16_t *samples, int count) {
 }
 
 /* ------------------------------------------------------------------ report */
+void platform_fatal(const char *text) {
+    fflush(stdout);
+    printf("FATAL at port frame %llu: %s", (unsigned long long)frame_count, text);
+    fflush(stdout);
+    exit(1);
+}
+
 static void report(void) {
     uint32_t hash = 2166136261u;                       /* FNV-1a over work RAM */
     for (int i = 0; i < 0x10000; i++) hash = (hash ^ m68k_ram[i]) * 16777619u;
@@ -369,6 +378,7 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         }
     /* Sound_Index: a request only beats what is playing if its priority is at
      * least as high, so stop everything ($FE) first, then ask for the song */
+    if (test_fatal_frame && f == test_fatal_frame) m68k_call(0x123456);
     if (music_id >= 0 && f == music_frame) m68k_ram[0x500A] = 0xFE;
     if (music_id >= 0 && f == music_frame + 2) m68k_ram[0x500A] = (uint8_t)music_id;
     if (!replay) {
@@ -426,6 +436,8 @@ int main(int argc, char **argv) {
             dump_at = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--keep-going")) {
             keep_going = 1;
+        } else if (!strcmp(argv[i], "--test-fatal") && i + 1 < argc) {
+            test_fatal_frame = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--wav") && i + 1 < argc) {
             wav = fopen(argv[++i], "wb");
             if (wav) wav_header(wav, 0);
@@ -451,6 +463,7 @@ int main(int argc, char **argv) {
     m68k.s = 1;
     m68k.imask = 7;
     A(7) = rd32(0);
+    diag_stack_top = A(7);
     m68k_call(rd32(4));
     printf("reset handler returned (unexpected)\n");
     report();

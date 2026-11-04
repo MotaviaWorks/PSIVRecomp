@@ -23,12 +23,12 @@ else()
 endif()
 
 # Recompiled game code + CPU semantics
-add_library(psiv_code STATIC ${GEN_SOURCES} ${GEN_DIR}/psiv_table.c runtime/m68k.c)
+add_library(psiv_code STATIC ${GEN_SOURCES} ${GEN_DIR}/psiv_table.c runtime/m68k.c runtime/diag.c)
 target_include_directories(psiv_code PUBLIC runtime ${GEN_DIR})
 target_compile_options(psiv_code PRIVATE ${WARN})
 
 # The same with block tracing and return-address checks, for debugging
-add_library(psiv_code_trace STATIC ${GEN_SOURCES} ${GEN_DIR}/psiv_table.c runtime/m68k.c)
+add_library(psiv_code_trace STATIC ${GEN_SOURCES} ${GEN_DIR}/psiv_table.c runtime/m68k.c runtime/diag.c)
 target_include_directories(psiv_code_trace PUBLIC runtime ${GEN_DIR})
 target_compile_definitions(psiv_code_trace PUBLIC PSIV_TRACE PSIV_CHECK_RETURNS)
 target_compile_options(psiv_code_trace PRIVATE ${WARN})
@@ -64,7 +64,7 @@ if(WIN32 AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/SDL3-3.4.20/cmake)
 endif()
 find_package(SDL3 CONFIG)
 if(SDL3_FOUND)
-  add_executable(psiv WIN32 runtime/main_sdl.c ${HW_SOURCES})
+  add_executable(psiv WIN32 runtime/main_sdl.c runtime/sha256.c ${HW_SOURCES})
   target_link_libraries(psiv PRIVATE psiv_code psiv_sound_chips SDL3::SDL3)
   target_compile_options(psiv PRIVATE ${WARN})
   if(WIN32)

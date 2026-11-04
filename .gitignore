@@ -16,3 +16,10 @@ mp3/
 
 # Third-party SDKs (fetched, see README)
 third_party/
+
+# Per-user files the game writes
+psiv.ini
+psiv.log
+psiv-crash.txt
+saves/
+screenshots/
