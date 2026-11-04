@@ -16,7 +16,8 @@ Requires Python 3.10+, and git with submodules.
 git submodule update --init
 python tools/prepare_rom.py "path/to/your/dump.smd"   # .smd, .bin, .md or .gen
 python tools/build_disasm.py                           # rebuild + verify, writes build/disasm/ps4.lst
-python tools/indirect_jumps.py                         # writes analysis/indirect_sites.{json,md}
+python tools/validate_decoder.py                       # decoder vs every instruction in the game
+python tools/resolve.py                                # function map + indirect-jump targets -> analysis/
 ```
 
 `prepare_rom.py` accepts raw and interleaved SMD dumps and refuses anything
@@ -29,10 +30,11 @@ Windows (`asl` on Linux) and fails unless the result is byte-identical.
 | Path | What |
 |---|---|
 | `disasm/ps4disasm` | Phantasy Star IV disassembly (submodule, [squidfeatures/ps4disasm](https://github.com/squidfeatures/ps4disasm), originally by lory90) |
-| `tools/` | ROM prep, rebuild, listing parser, analysis (recompiler to come) |
-| `analysis/` | Generated analysis reports (addresses and labels only) |
+| `tools/` | ROM prep, rebuild, listing parser, 68000 decoder, program model, resolver (recompiler to come) |
+| `analysis/` | Generated analysis: `functions.json` (every function entry and why), `indirect_targets.{json,md}` (addresses and labels only) |
 | `docs/` | Plan and ideas |
 | `rom/`, `build/` | Your ROM and build output (never committed) |
+| `vgm/`, `mp3/` | Your soundtrack references for the sound milestone (never committed) |
 
 The disassembly is for informational and educational use; commercial use is
 prohibited by its author.

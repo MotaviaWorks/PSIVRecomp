@@ -69,6 +69,9 @@ or cycle counting are needed.
 - **Sound**: the Z80 runs the game's own 1,314-byte DAC driver under emulation;
   YM2612 FM and PSG via small open-source chip cores (each download asked for
   first). Candidates: ymfm (BSD-3) for the YM2612, a zlib-licensed Z80 core.
+  References: `vgm/` holds VGM rips of all 48 tracks, which are logs of every
+  sound-chip write, so the port's own writes can be compared track by track;
+  `mp3/` is there for listening comparisons.
 - **Saves**: battery SRAM persisted to a file next to the executable.
 - **Overrides**: any recompiled function can be replaced or wrapped by
   hand-written C, keyed by ROM address. `WaitForVInt` is the first; the text
@@ -90,13 +93,35 @@ or cycle counting are needed.
 | | Milestone | Done when |
 |---|---|---|
 | M0 | Project setup | ROM prep, byte-identical rebuild and jump analysis run on Desk — **done 2026-11-03** |
-| M1 | Decoder + function map | Decoder matches the listing 100%; function list + CFG; cross-branch tracing closes the remaining indirect sites |
+| M1 | Decoder + function map | Decoder matches the listing 100%; function list + CFG; cross-branch tracing closes the remaining indirect sites — **done 2026-11-03** (see below) |
 | M2 | Emitter | All code recompiles to C and compiles cleanly |
 | M3 | First boot | SDL3 window shows the SEGA logo and the title screen (no sound) |
 | M4 | Reference harness | BizHawk recordings replay in the port with matching state through the intro |
 | M5 | Sound | Z80 + YM2612 + PSG; music and effects match |
 | M6 | Playable | Saves, controller support, scaling/fullscreen; full playthrough matches the reference |
 | M7 | Enhancements | Features from [IDEAS.md](IDEAS.md) |
+
+### M1 results
+
+- **Decoder**: all 102,494 68000 instructions pass length, mnemonic and byte-exact
+  round-trip checks (`tools/validate_decoder.py`).
+- **Reach**: 101,423 of 102,494 instructions are reachable from the vectors. The
+  other 1,071 (128 runs, nearly all unlabelled code right after an `rts`) look
+  dead; they are compiled anyway.
+- **Functions**: 3,925 entry points (`analysis/functions.json`), from direct
+  calls, jump tables, code addresses stored in data tables (`dc.l EnemyAI_…`,
+  2,103 of them: the window system, enemy AI and techniques are only reachable
+  this way), the vectors, and the RAM HInt trampoline (`jmp` written at
+  `$FFECB0`; targets `HInt`/`HInt2`).
+- **Indirect jumps**: 396 of 401 sites resolved with high confidence, plus all 180
+  `trap #2` callers. Remaining: 4 pointers read from object fields
+  (`Window_Update` and three in battle code) and the Nemesis decompressor's
+  saved pixel-writer pointer. Every code address the game uses as a value is a
+  function entry, so these go through the generated address→function table,
+  which aborts loudly on anything else; the BizHawk harness confirms them.
+- **Quirks found**: two branches into the middle of an instruction
+  (`bcc.w loc_586C2-2`, and one at `$58514`) that would end in a line-F
+  exception on hardware; the model reproduces that.
 
 ## Open risks
 

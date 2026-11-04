@@ -9,3 +9,7 @@ rom/
 build/
 __pycache__/
 *.pyc
+
+# Music references (game audio, never committed)
+vgm/
+mp3/
