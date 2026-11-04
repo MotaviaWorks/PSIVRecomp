@@ -41,8 +41,22 @@ The PSG is implemented in `runtime/sound.c`.
 | A / B / C | Z / X / C | West / South / East |
 | Start | Enter | Start |
 
-Hold Tab to fast-forward, F11 fullscreen, F12 screenshot (`screenshots/`),
-Esc quits. Battery saves go to `saves/psiv.srm`.
+Hold Tab to fast-forward, F10 pause, F11 fullscreen, F12 screenshot
+(`screenshots/`). **Esc** (or the pad's Back/Select) opens the system menu:
+resume, settings, quit. Battery saves go to `saves/psiv.srm`.
+
+### Enhancements
+
+Settings in the Esc menu (saved to `psiv.ini`). **Mode: Classic** is the
+original game, unchanged; **Enhanced** turns on the additions:
+
+- **Battle depth** (F9: off / subtle / strong): battles drawn as layers at
+  different depths under a gently moving camera that leans in on attacks.
+- **Battle fog** (F8: off / light / heavy): drifting mist between the enemies
+  and the party, tinted from each battle's background.
+
+Planned (see `docs/IDEAS.md`): attack flashes, flares and particles, modern
+text, 16:9 widescreen.
 
 ### Headless runs
 

@@ -100,6 +100,7 @@ static Setting settings[] = {
     {"video.aspect", "square", "square = square pixels; 4:3 = the console's TV shape (pixels a bit narrower)"},
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed"},
     {"audio.volume", "100", "0-200 percent"},
+    {"enhance.mode", "enhanced", "enhanced = the port's additions below are on; classic = the original game, unchanged (Esc menu > Settings)"},
     {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
@@ -385,6 +386,17 @@ static void screenshot_any(const uint32_t *pixels, int w, int h, int stride) {
     }
 }
 
+/* testing hooks (see main) */
+static uint64_t test_menu_frame, test_capture_frame;
+static int test_menu_settings;
+static const char *test_capture_path;
+static void quit(int code);
+
+/* the system menu (below) draws over the frame while it's open */
+static int menu_is_open(void);
+static void menu_draw(void);
+static int classic_mode(void);
+
 /* battle depth: the frame recomposed at a multiple of the game's resolution */
 static SDL_Texture *depth_texture;
 static int depth_tex_w, depth_tex_h, depth_shown;
@@ -436,6 +448,13 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     SDL_RenderTexture(renderer, depth_shown ? depth_texture : texture, NULL, &dst);
+    if (menu_is_open()) menu_draw();
+    if (test_capture_path && frame_count >= test_capture_frame) {
+        SDL_Surface *shot = SDL_RenderReadPixels(renderer, NULL);
+        if (shot) { SDL_SaveBMP(shot, test_capture_path); SDL_DestroySurface(shot); }
+        SDL_Log("captured %s", test_capture_path);
+        quit(0);
+    }
     SDL_RenderPresent(renderer);
 }
 
@@ -456,7 +475,14 @@ static void show_enhancements(void) {
     SDL_Log("%s", title);
 }
 
+static int classic_hotkey(void) {
+    if (!classic_mode()) return 0;
+    SDL_SetWindowTitle(window, "Phantasy Star IV - Classic mode: additions are off (Esc > Settings > Mode)");
+    return 1;
+}
+
 static void cycle_battle_depth(void) {
+    if (classic_hotkey()) return;
     int l = (depth_get_level() + 1) % DEPTH_LEVELS;
     depth_set_level(l);
     save_setting_int("enhance.battle_depth", l);
@@ -464,10 +490,205 @@ static void cycle_battle_depth(void) {
 }
 
 static void cycle_battle_fog(void) {
+    if (classic_hotkey()) return;
     int l = (depth_get_fog() + 1) % FOG_LEVELS;
     depth_set_fog(l);
     save_setting_int("enhance.battle_fog", l);
     show_enhancements();
+}
+
+/* ------------------------------------------------------------------ system menu (Esc) */
+/* An overlay drawn over the paused game: resume, settings, quit. Settings
+ * apply at once and are saved to psiv.ini. Text uses SDL's built-in 8x8
+ * font for now. */
+static int classic_mode(void) { return !strcmp(setting("enhance.mode"), "classic"); }
+
+/* what the enhancement settings mean right now (Classic turns them all off) */
+static void apply_enhancements(void) {
+    depth_set_level(classic_mode() ? 0 : setting_int("enhance.battle_depth"));
+    depth_set_fog(classic_mode() ? 0 : setting_int("enhance.battle_fog"));
+}
+
+static void apply_video(void) {
+    if (texture) SDL_SetTextureScaleMode(texture, scale_mode());
+    if (depth_texture) SDL_SetTextureScaleMode(depth_texture, scale_mode());
+    SDL_SetWindowFullscreen(window, setting_int("video.fullscreen") != 0);
+}
+
+static void apply_audio(void) {
+    if (audio) SDL_SetAudioStreamGain(audio, (float)setting_int("audio.volume") / 100.0f);
+}
+
+typedef struct {
+    const char *label;
+    const char *key;                  /* setting changed with left/right (NULL: an action) */
+    const char *values[4];            /* setting values, and how they're shown */
+    const char *names[4];
+    int lo, hi, step;                 /* numeric setting instead of a list */
+    int enhancement;                  /* greyed out in Classic mode */
+    const char *coming;               /* not built yet: shown greyed with this note */
+    void (*apply)(void);
+} MenuItem;
+
+static const MenuItem MAIN_ITEMS[] = {
+    {"Resume", NULL, {0}, {0}, 0, 0, 0, 0, NULL, NULL},
+    {"Settings", NULL, {0}, {0}, 0, 0, 0, 0, NULL, NULL},
+    {"Quit game", NULL, {0}, {0}, 0, 0, 0, 0, NULL, NULL},
+};
+static const MenuItem SETTINGS_ITEMS[] = {
+    {"Mode", "enhance.mode", {"enhanced", "classic"}, {"Enhanced", "Classic"}, 0, 0, 0, 0, NULL, apply_enhancements},
+    {"Battle depth", "enhance.battle_depth", {"0", "1", "2"}, {"Off", "Subtle", "Strong"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Battle fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Text", NULL, {0}, {0}, 0, 0, 0, 1, "Original - modern soon", NULL},
+    {"Aspect", "video.aspect", {"square", "4:3"}, {"Square pixels", "4:3 TV"}, 0, 0, 0, 0, NULL, NULL},
+    {"Widescreen", NULL, {0}, {0}, 0, 0, 0, 1, "16:9 - soon", NULL},
+    {"Pixels", "video.filter", {"nearest", "linear"}, {"Sharp", "Smooth"}, 0, 0, 0, 0, NULL, apply_video},
+    {"Integer scaling", "video.integer_scaling", {"1", "0"}, {"On", "Off"}, 0, 0, 0, 0, NULL, NULL},
+    {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0, NULL, apply_video},
+    {"Volume", "audio.volume", {0}, {0}, 0, 200, 10, 0, NULL, apply_audio},
+    {"Back", NULL, {0}, {0}, 0, 0, 0, 0, NULL, NULL},
+};
+#define N_MAIN     (int)(sizeof MAIN_ITEMS / sizeof MAIN_ITEMS[0])
+#define N_SETTINGS (int)(sizeof SETTINGS_ITEMS / sizeof SETTINGS_ITEMS[0])
+
+enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT };
+static int menu_screen, menu_sel;
+
+static int item_values(const MenuItem *it) {
+    int n = 0;
+    while (n < 4 && it->values[n]) n++;
+    return n;
+}
+
+static int item_disabled(const MenuItem *it) {
+    return it->coming || (it->enhancement && classic_mode());
+}
+
+static void item_value_text(const MenuItem *it, char *buf, size_t n) {
+    buf[0] = 0;
+    if (it->coming) { snprintf(buf, n, "%s", it->coming); return; }
+    if (!it->key) return;
+    if (it->step) { snprintf(buf, n, "< %d%% >", setting_int(it->key)); return; }
+    const char *v = setting(it->key);
+    for (int i = 0; i < item_values(it); i++)
+        if (!SDL_strcasecmp(v, it->values[i])) { snprintf(buf, n, "< %s >", it->names[i]); return; }
+    snprintf(buf, n, "< %s >", v);
+}
+
+static void item_change(const MenuItem *it, int dir) {
+    if (!it->key || item_disabled(it)) return;
+    char path[1100];
+    for (int i = 0; i < NSETTINGS; i++) {
+        if (strcmp(settings[i].key, it->key)) continue;
+        if (it->step) {
+            int v = atoi(settings[i].value) + dir * it->step;
+            v = v < it->lo ? it->lo : v > it->hi ? it->hi : v;
+            snprintf(settings[i].value, sizeof settings[i].value, "%d", v);
+        } else {
+            int n = item_values(it), cur = 0;
+            for (int j = 0; j < n; j++)
+                if (!SDL_strcasecmp(settings[i].value, it->values[j])) cur = j;
+            cur = (cur + dir + n) % n;
+            snprintf(settings[i].value, sizeof settings[i].value, "%s", it->values[cur]);
+        }
+    }
+    path_in_home(path, sizeof path, "psiv.ini");
+    write_settings(path);
+    if (it->apply) it->apply();
+}
+
+/* after the menu closes, the game sees no buttons until all are released, so
+ * the key that closed it (Enter = Start) doesn't also reach the game */
+static int input_hold;
+static void menu_open(void) { menu_screen = MENU_MAIN; menu_sel = 0; }
+static void menu_close(void) { menu_screen = MENU_CLOSED; input_hold = 1; }
+static int menu_is_open(void) { return menu_screen != MENU_CLOSED; }
+
+/* one key or button press while the menu is open */
+static void menu_input(int up, int down, int left, int right, int ok, int back) {
+    int n = menu_screen == MENU_MAIN ? N_MAIN : menu_screen == MENU_SETTINGS ? N_SETTINGS : 2;
+    const MenuItem *items = menu_screen == MENU_MAIN ? MAIN_ITEMS : SETTINGS_ITEMS;
+    if (up) menu_sel = (menu_sel + n - 1) % n;
+    if (down) menu_sel = (menu_sel + 1) % n;
+    if (menu_screen == MENU_SETTINGS && (left || right)) item_change(&items[menu_sel], right ? 1 : -1);
+    if (menu_screen == MENU_QUIT && (left || right)) menu_sel ^= 1;
+    if (back) {
+        if (menu_screen == MENU_MAIN) menu_close();
+        else { menu_sel = menu_screen == MENU_SETTINGS ? 1 : 2; menu_screen = MENU_MAIN; }
+        return;
+    }
+    if (!ok) return;
+    if (menu_screen == MENU_MAIN) {
+        if (menu_sel == 0) menu_close();
+        else if (menu_sel == 1) { menu_screen = MENU_SETTINGS; menu_sel = 0; }
+        else { menu_screen = MENU_QUIT; menu_sel = 1; }               /* default: No */
+    } else if (menu_screen == MENU_SETTINGS) {
+        if (menu_sel == N_SETTINGS - 1) { menu_screen = MENU_MAIN; menu_sel = 1; }
+        else item_change(&items[menu_sel], 1);
+    } else {
+        if (menu_sel == 0) quit(0);
+        menu_screen = MENU_MAIN;
+        menu_sel = 2;
+    }
+}
+
+static void menu_text(float x, float y, const char *s, Uint8 r, Uint8 g, Uint8 b) {
+    SDL_SetRenderDrawColor(renderer, r, g, b, 255);
+    SDL_RenderDebugText(renderer, x, y, s);
+}
+
+static void menu_draw(void) {
+    int ow, oh;
+    SDL_GetRenderOutputSize(renderer, &ow, &oh);
+    float k = floorf((float)oh / 300.0f);                  /* text scale: whole pixels */
+    if (k < 1) k = 1;
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 150);        /* dim the game */
+    SDL_FRect all = {0, 0, (float)ow, (float)oh};
+    SDL_RenderFillRect(renderer, &all);
+    SDL_SetRenderScale(renderer, k, k);
+    float vw = (float)ow / k, vh = (float)oh / k;
+
+    const char *title = menu_screen == MENU_SETTINGS ? "SETTINGS" : menu_screen == MENU_QUIT ? "QUIT GAME?" : "SYSTEM";
+    int n = menu_screen == MENU_MAIN ? N_MAIN : menu_screen == MENU_SETTINGS ? N_SETTINGS : 2;
+    float pw = menu_screen == MENU_SETTINGS ? 340.0f : 220.0f, row = 14.0f;
+    float ph = 34.0f + row * (float)n + 22.0f;
+    float px = floorf((vw - pw) / 2), py = floorf((vh - ph) / 2);
+    SDL_FRect panel = {px, py, pw, ph};
+    SDL_SetRenderDrawColor(renderer, 0x00, 0x24, 0x6D, 235);   /* the game's window blue */
+    SDL_RenderFillRect(renderer, &panel);
+    SDL_SetRenderDrawColor(renderer, 0xB0, 0xB8, 0xE8, 255);
+    SDL_RenderRect(renderer, &panel);
+    SDL_FRect inner = {px + 2, py + 2, pw - 4, ph - 4};
+    SDL_SetRenderDrawColor(renderer, 0x50, 0x60, 0xA8, 255);
+    SDL_RenderRect(renderer, &inner);
+    menu_text(px + (pw - 8.0f * (float)strlen(title)) / 2, py + 10, title, 0xFF, 0xFF, 0xFF);
+
+    for (int i = 0; i < n; i++) {
+        float y = py + 30 + row * (float)i;
+        int sel = i == menu_sel;
+        char line[96], value[64];
+        if (menu_screen == MENU_QUIT) {
+            snprintf(line, sizeof line, "%s", i == 0 ? "Yes, quit" : "No, keep playing");
+            value[0] = 0;
+        } else {
+            const MenuItem *it = (menu_screen == MENU_MAIN ? MAIN_ITEMS : SETTINGS_ITEMS) + i;
+            snprintf(line, sizeof line, "%s", it->label);
+            item_value_text(it, value, sizeof value);
+            if (item_disabled(it)) {
+                menu_text(px + 18, y, line, 0x70, 0x78, 0x98);
+                menu_text(px + 150, y, value, 0x70, 0x78, 0x98);
+                if (sel) menu_text(px + 8, y, ">", 0xFF, 0xD0, 0x40);
+                continue;
+            }
+        }
+        if (sel) menu_text(px + 8, y, ">", 0xFF, 0xD0, 0x40);
+        menu_text(px + 18, y, line, sel ? 0xFF : 0xE0, sel ? 0xD0 : 0xE0, sel ? 0x40 : 0xF0);
+        if (value[0]) menu_text(px + 150, y, value, sel ? 0xFF : 0xC0, sel ? 0xE8 : 0xC8, sel ? 0x90 : 0xE8);
+    }
+    const char *hint = menu_screen == MENU_SETTINGS ? "Left/Right change   Esc back" : "Enter select   Esc back";
+    menu_text(px + (pw - 8.0f * (float)strlen(hint)) / 2, py + ph - 14, hint, 0x90, 0x98, 0xC0);
+    SDL_SetRenderScale(renderer, 1, 1);
 }
 
 /* ------------------------------------------------------------------ frame and audio */
@@ -486,9 +707,19 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
         case SDL_EVENT_QUIT:
             quit(0);
             break;
-        case SDL_EVENT_KEY_DOWN:
+        case SDL_EVENT_KEY_DOWN: {
+            SDL_Scancode sc = e.key.scancode;
+            if (menu_is_open()) {                        /* the menu takes the keyboard */
+                int ok = sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER || sc == SDL_SCANCODE_SPACE
+                         || sc == key_of[IN_C] || sc == key_of[IN_START];
+                int back = sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_BACKSPACE || sc == key_of[IN_B];
+                menu_input(sc == SDL_SCANCODE_UP || sc == key_of[IN_UP], sc == SDL_SCANCODE_DOWN || sc == key_of[IN_DOWN],
+                           sc == SDL_SCANCODE_LEFT || sc == key_of[IN_LEFT], sc == SDL_SCANCODE_RIGHT || sc == key_of[IN_RIGHT],
+                           ok && !e.key.repeat, back && !e.key.repeat);
+                break;
+            }
             if (e.key.repeat) break;
-            if (e.key.key == SDLK_ESCAPE) quit(0);
+            if (e.key.key == SDLK_ESCAPE) { menu_open(); break; }
             if (e.key.key == SDLK_F12) {
                 if (depth_shown) screenshot_any(depth_pixels, depth_tex_w, depth_tex_h, depth_tex_w);
                 else screenshot_any(pixels, w, h, VDP_MAX_W);
@@ -496,9 +727,25 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             if (e.key.key == SDLK_F10) paused = !paused;
             if (e.key.key == SDLK_F9) cycle_battle_depth();
             if (e.key.key == SDLK_F8) cycle_battle_fog();
-            if (e.key.key == SDLK_F11)
-                SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+            if (e.key.key == SDLK_F11) {
+                int fs = !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN);
+                SDL_SetWindowFullscreen(window, fs);
+                save_setting_int("video.fullscreen", fs);
+            }
             break;
+        }
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
+            SDL_GamepadButton b = (SDL_GamepadButton)e.gbutton.button;
+            if (b == SDL_GAMEPAD_BUTTON_BACK || b == SDL_GAMEPAD_BUTTON_GUIDE) {   /* Select/Back opens it */
+                if (menu_is_open()) menu_close(); else menu_open();
+                break;
+            }
+            if (!menu_is_open()) break;
+            menu_input(b == SDL_GAMEPAD_BUTTON_DPAD_UP, b == SDL_GAMEPAD_BUTTON_DPAD_DOWN,
+                       b == SDL_GAMEPAD_BUTTON_DPAD_LEFT, b == SDL_GAMEPAD_BUTTON_DPAD_RIGHT,
+                       b == pad_of[IN_C] || b == pad_of[IN_START], b == pad_of[IN_B]);
+            break;
+        }
         case SDL_EVENT_GAMEPAD_ADDED:
             if (!pad) pad = SDL_OpenGamepad(e.gdevice.which);
             break;
@@ -511,13 +758,21 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
 
 void platform_frame(const uint32_t *pixels, int w, int h) {
     handle_events(pixels, w, h);
-    while (paused) {                                     /* F10: hold here, keep the window alive */
+    if (test_menu_frame && frame_count == test_menu_frame) {
+        menu_open();
+        if (test_menu_settings) { menu_screen = MENU_SETTINGS; menu_sel = 1; }
+    }
+    while (paused || menu_is_open()) {                   /* F10 or the menu: hold here, keep the window alive */
         present(pixels, w, h, 0);
         SDL_Delay(16);
         handle_events(pixels, w, h);
         next_deadline = SDL_GetTicksNS();
     }
     bus_pad[0] = read_input();
+    if (input_hold) {
+        if (bus_pad[0]) bus_pad[0] = 0;
+        else input_hold = 0;
+    }
     present(pixels, w, h, 1);
 
     uint64_t now = SDL_GetTicksNS();
@@ -537,8 +792,21 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
 /* ------------------------------------------------------------------ main */
 int main(int argc, char **argv) {
     const char *rom_arg = NULL;
-    for (int i = 1; i < argc; i++)
+    for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--rom") && i + 1 < argc) rom_arg = argv[++i];
+        /* testing: --menu F[:settings] opens the system menu at frame F;
+         * --capture F:FILE.bmp saves the rendered window at frame F and exits
+         * (run with SDL_VIDEO_DRIVER=offscreen to keep it off the screen) */
+        else if (!strcmp(argv[i], "--menu") && i + 1 < argc) {
+            char *e;
+            test_menu_frame = strtoull(argv[++i], &e, 10);
+            test_menu_settings = *e == ':';
+        } else if (!strcmp(argv[i], "--capture") && i + 1 < argc) {
+            char *e;
+            test_capture_frame = strtoull(argv[++i], &e, 10);
+            test_capture_path = *e == ':' ? e + 1 : "capture.bmp";
+        }
+    }
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Phantasy Star IV", SDL_GetError(), NULL);
@@ -547,8 +815,7 @@ int main(int argc, char **argv) {
     find_home();
     open_log();
     load_settings();
-    depth_set_level(setting_int("enhance.battle_depth"));
-    depth_set_fog(setting_int("enhance.battle_fog"));
+    apply_enhancements();
     resolve_bindings();
 
     int scale = setting_int("video.scale");
