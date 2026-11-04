@@ -98,7 +98,7 @@ or cycle counting are needed.
 | M3 | First boot | SDL3 window shows the SEGA logo and the title screen (no sound) — **done 2026-11-03**: SEGA logo, intro, title, and a new game through to the first field scene |
 | M4 | Reference harness | BizHawk recordings replay in the port with matching state through the intro — **done 2026-11-03**: 2,348/2,348 frames identical through the first field scene |
 | M5 | Sound | Z80 + YM2612 + PSG; music and effects match — **done 2026-11-03**: all 52 music IDs identical to BizHawk on every 68000 sound write |
-| M6 | Playable | Saves, controller support, scaling/fullscreen; full playthrough matches the reference |
+| M6 | Playable | Saves, controller support, scaling/fullscreen; full playthrough matches the reference — **done 2026-11-03**: playable and smooth (PsiLok's verdict: "almost just like the emulator"); a recorded 24,635-frame session with 7 battles identical to BizHawk, saves identical; more coverage comes from further recorded sessions |
 | M7 | Enhancements | Features from [IDEAS.md](IDEAS.md) |
 
 ### M1 results
@@ -269,8 +269,9 @@ or cycle counting are needed.
   opening), 7,091 (opening + save), and **PsiLok's first live session: 24,635
   frames, 7 battles, all identical, and his in-game save identical byte for
   byte** (`session1.movie`, from his own save).
-- **To do**: further into the game (more recorded sessions: towns, dungeons,
-  vehicles, techniques), packaging; normal-play beam-counter realism.
+- **Carried forward** (alongside M7): coverage further into the game through
+  more recorded sessions (towns, dungeons, vehicles, techniques); packaging;
+  normal-play beam-counter realism.
 
 ## Open risks
 
