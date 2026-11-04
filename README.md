@@ -58,6 +58,20 @@ original game, unchanged; **Enhanced** turns on the additions:
   technique sprites light the scene in their colours, sparks and a flash
   where hits land, embers rising from fire, a lens flare at bright moments.
 
+- **Music** (original chip / Algol): *Algol* is the port's own modern sound
+  chip (`runtime/algol.c`). The game's music driver still runs and still
+  writes the YM2612 and the PSG; Algol decodes those writes into notes
+  (pitch, instrument, loudness, pan) and plays them on new instruments --
+  unison saw leads, brass, strings, a bass with a sub, a driven guitar,
+  plucks, FM bells and keys, an organ, soft square leads -- each of the
+  game's FM patches voiced by the instrument closest to its sound, with a
+  synthesized drum kit in place of the drum samples (voices and effects
+  sampled in the game are played cleanly from your ROM), reverb, chorus and
+  a stereo delay. Parts the game doubles on several channels are merged.
+  Sound effects keep the original chips, on the channels they borrow.
+  `algol.ini` in the working folder overrides the instrument of any patch
+  (`PSIV_ALGOL_LOG=1` lists them); `psiv_headless --algol` renders with it.
+
 - **Sound effects** (modern / your samples / original): *modern* is the port's
   own set, synthesized at startup (`runtime/sfxsynth.c`), so nothing is
   shipped: blade hits (a short swing, a slice, a ringing edge, a thump; hits

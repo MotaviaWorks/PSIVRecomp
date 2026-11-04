@@ -12,12 +12,14 @@
  * hardware the Z80 runs during those retries.
  */
 #include "sound.h"
+#include "algol.h"
 #include "m68k.h"
 #include "ym2612.h"
 
 #include "z80.h"                 /* implementation compiled in z80_impl.c */
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define Z80_CLOCK       3579545.0
@@ -68,12 +70,16 @@ static void psg_init(void) {
  * Z80's; tick counts runs of the 68000 sound driver (psiv_sound_tick). */
 static uint64_t sound_ticks;
 
-void psiv_sound_tick(void) { sound_ticks++; }
+void psiv_sound_tick(void) {
+    sound_ticks++;
+    if (algol_enabled()) algol_driver_tick();
+}
 
 static void psg_write(uint8_t v, int from_z80) {
     if (write_log)
         fprintf(write_log, "%llu %spsg %02X %llu\n", (unsigned long long)(total_samples + (uint64_t)nsamples),
                 from_z80 ? "z" : "", v, (unsigned long long)sound_ticks);
+    algol_psg_write(v);
     if (v & 0x80) {
         psg.latch = (v >> 4) & 7;
         int ch = psg.latch >> 1;
@@ -110,10 +116,12 @@ static void psg_clock(void) {
     }
 }
 
-static int32_t psg_level(void) {
+/* the channels in `mask` (bit 3 = noise) */
+static int32_t psg_level(unsigned mask) {
     int32_t s = 0;
-    for (int ch = 0; ch < 3; ch++) s += psg.out[ch] ? psg_volume[psg.vol[ch]] : -psg_volume[psg.vol[ch]];
-    s += (psg.lfsr & 1) ? psg_volume[psg.vol[3]] : -psg_volume[psg.vol[3]];
+    for (int ch = 0; ch < 3; ch++)
+        if (mask >> ch & 1) s += psg.out[ch] ? psg_volume[psg.vol[ch]] : -psg_volume[psg.vol[ch]];
+    if (mask >> 3 & 1) s += (psg.lfsr & 1) ? psg_volume[psg.vol[3]] : -psg_volume[psg.vol[3]];
     return s;
 }
 
@@ -128,9 +136,12 @@ static uint8_t z80_mem_read(uint16_t a) {
 static void ym_logged_write(int port, uint8_t v, int from_z80) {
     static uint8_t addr[2];                /* one chip: the address latch is shared by both CPUs */
     if (!(port & 1)) addr[port >> 1] = v;
-    else if (write_log)
-        fprintf(write_log, "%llu %sym%d %02X %02X %llu\n", (unsigned long long)(total_samples + (uint64_t)nsamples),
-                from_z80 ? "z" : "", port >> 1, addr[port >> 1], v, (unsigned long long)sound_ticks);
+    else {
+        if (write_log)
+            fprintf(write_log, "%llu %sym%d %02X %02X %llu\n", (unsigned long long)(total_samples + (uint64_t)nsamples),
+                    from_z80 ? "z" : "", port >> 1, addr[port >> 1], v, (unsigned long long)sound_ticks);
+        if (addr[port >> 1] != 0x2A) algol_ym_write(port >> 1, addr[port >> 1], v);   /* Algol tracks the registers */
+    }
     ym_write(port, v);
 }
 
@@ -172,16 +183,38 @@ static void advance(double n) {
             sample_phase -= CYCLES_PER_SAMPLE;
             int32_t l, r, p = 0;
             int ticks = 0;
+            static int solo_read;
+            static unsigned solo = 0x7FF;                  /* PSIV_CHANNELS: see algol.c */
+            if (!solo_read) { const char *e = getenv("PSIV_CHANNELS"); if (e && *e) solo = (unsigned)strtoul(e, NULL, 16); solo_read = 1; }
+            unsigned psg_mask = algol_enabled() ? algol_psg_effects() : (solo >> 6 & 0xF);
             for (psg_phase += PSG_PER_SAMPLE; psg_phase >= 1; psg_phase -= 1, ticks++) {
                 psg_clock();
-                p += psg_level();
+                p += psg_level(psg_mask);
             }
             if (ticks) p /= ticks;
-            ym_generate(&l, &r);
-            /* master gain: the loudest song peaks near 11,500 raw; x2.25 puts it
-             * around -2 dBFS with headroom for effects over music */
-            l = (l + p) * 9 / 4;
-            r = (r + p) * 9 / 4;
+            if (algol_enabled()) {
+                /* the music on Algol; the original chips only for the
+                 * channels a sound effect holds */
+                float ml, mr;
+                ym_generate_mask(&l, &r, algol_fm_effects());
+                algol_render(&ml, &mr);
+                /* an effect on top of the music: a soft knee, not a clip */
+                float fl = (float)((l + p) * 9 / 4) + ml, fr = (float)((r + p) * 9 / 4) + mr;
+                if (fabsf(fl) > 28000.0f) fl = (fl > 0 ? 1.0f : -1.0f) * (28000.0f + 4700.0f * tanhf((fabsf(fl) - 28000.0f) / 4700.0f));
+                if (fabsf(fr) > 28000.0f) fr = (fr > 0 ? 1.0f : -1.0f) * (28000.0f + 4700.0f * tanhf((fabsf(fr) - 28000.0f) / 4700.0f));
+                l = (int32_t)fl;
+                r = (int32_t)fr;
+            } else if ((solo & 0x43F) != 0x43F) {
+                ym_generate_mask(&l, &r, (solo & 0x1F) | ((solo >> 5 | solo >> 10) & 1) << 5);   /* tuning: some channels */
+                l = (l + p) * 9 / 4;
+                r = (r + p) * 9 / 4;
+            } else {
+                ym_generate(&l, &r);
+                /* master gain: the loudest song peaks near 11,500 raw; x2.25 puts it
+                 * around -2 dBFS with headroom for effects over music */
+                l = (l + p) * 9 / 4;
+                r = (r + p) * 9 / 4;
+            }
             if (nsamples < MAX_SAMPLES) {
                 buffer[nsamples * 2] = (int16_t)(l > 32767 ? 32767 : l < -32768 ? -32768 : l);
                 buffer[nsamples * 2 + 1] = (int16_t)(r > 32767 ? 32767 : r < -32768 ? -32768 : r);
@@ -202,6 +235,7 @@ void sound_init(void) {
     nsamples = 0;
     ym_init();
     psg_init();
+    algol_reset();
 }
 
 uint8_t sound_68k_read(uint32_t a) {
@@ -213,7 +247,17 @@ uint8_t sound_68k_read(uint32_t a) {
 
 void sound_68k_write(uint32_t a, uint8_t v) {
     a &= 0xFFFF;
-    if (a < 0x4000) { z80_ram[a & 0x1FFF] = v; return; }
+    if (a < 0x4000) {
+        /* $1F00-$1F0F: the DAC driver's mailbox (sample, pitch, volume, pan) */
+        if (write_log && (a & 0x1FF0) == 0x1F00)
+            fprintf(write_log, "%llu zram %04X %02X %llu\n", (unsigned long long)(total_samples + (uint64_t)nsamples),
+                    a & 0x1FFF, v, (unsigned long long)sound_ticks);
+        z80_ram[a & 0x1FFF] = v;
+        /* a drum: the sample number (its pitch, volume and pan are already in place) */
+        if ((a & 0x1FFF) == 0x1F00 && v && v < 0x80 && algol_enabled())
+            algol_dac_hit(v, z80_ram[0x1F02], (z80_ram[0x1F01] & 0x80) ? z80_ram[0x1F03] : 16, z80_ram[0x1F04]);
+        return;
+    }
     if (a < 0x6000) { ym_logged_write(a & 3, v, 0); return; }
     if (a < 0x6100) { bank = (bank >> 1 | (uint32_t)(v & 1) << 8) & 0x1FF; return; }
 }

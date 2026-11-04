@@ -165,6 +165,39 @@ original chip sound.
   `Sound_Index`), so the port knows which song is playing, and a mixer that
   can mute chip channels and play the replacement in sync.
 
+### Algol, a modern sound chip (PsiLok, 2026-11-04) -- v1 done (`runtime/algol.c`)
+The second level above. The chips still run for the game (it reads their
+status); every write also goes to Algol, which keeps its own copy of the
+registers and decodes notes: key on/off from YM $28, pitch from F-number and
+block times the main carrier's multiple (the loudest carrier), loudness from
+the carriers' total levels, pan from $B4, the patch as a hash of its
+operator registers (carrier TLs left out: those are the volume). PSG: period
+and attenuation per channel (the driver's software envelope becomes the
+voice's amplitude), noise as filtered noise. Drums: the 68000 writes the DAC
+driver's mailbox in Z80 RAM -- $1F02 pitch, then $1F00 the sample (1-17;
+table at Z80 $0500 -> banks $E0000-$F8000, 8-bit PCM at 2,000-10,300 Hz).
+Samples 1/11/12 snare, 2/13/14 kick, 3 ride, 4 hat, 9 open hat, 5 tom, 6/10
+crash are synthesized; 7 (a pitched instrument, Ryucross Field), 8 (a voice),
+15-17 (effects) are played from the ROM, interpolated and smoothed.
+- **Effects keep the chips:** the driver's sound-effect tracks ($FF5220-$53A0,
+  $30 each: +0 bit 7 playing, +1 channel) say which channels an effect holds;
+  ym_generate_mask() plays only those on the YM (a subclass of ymfm's YM2612,
+  clocked as usual), the PSG likewise, Algol the rest.
+- **Instruments** come from the patch's sound (alg 7 -> organ; low notes ->
+  bass, or guitar if they die fast; slow attack -> strings / brass; decaying
+  -> pluck / keys, or bell if a modulator is off the harmonic series;
+  sustained -> lead / brass), a small table of picks by ear (`CURATED`), and
+  `algol.ini` ("hash = instrument", hashes from `PSIV_ALGOL_LOG=1`). Exact
+  doubles across channels (the driver's thickening trick) are merged.
+- **Tuned against the original** per channel with `PSIV_CHANNELS=mask` (solo
+  in both chips) and loudness / band balance measurements: each part within
+  ~2 dB of the original, the mix at its loudness; matching the FM's fizz is
+  not the aim (a modern tilt instead, with a little air on the master).
+- **Next:** per-song picks by ear with PsiLok (he produces: his choice of
+  sounds is the point); the PSG echo copies as one voice through a real
+  delay; a MIDI export of the decoded notes (for remixing); a "your bank"
+  mode (an SF2 or samples you provide, like the sound effects).
+
 ## Smaller ones worth keeping in mind
 - Fast-forward, and turbo for battles and text.
 - Save anywhere. Harder than in an emulator: the recompiled game's position

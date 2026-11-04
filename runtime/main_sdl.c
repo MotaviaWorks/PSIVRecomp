@@ -22,6 +22,7 @@
 #include "hdtext.h"
 #include "panels.h"
 #include "battleui.h"
+#include "algol.h"
 #include "sfx.h"
 #include "diag.h"
 #include "frame.h"
@@ -111,6 +112,7 @@ static Setting settings[] = {
     {"enhance.text", "modern", "text: modern = redrawn with the font below at full resolution; original = the game's pixel font"},
     {"enhance.text_font", "C:/Windows/Fonts/segoeui.ttf", "TrueType/OpenType font for modern text"},
     {"enhance.sfx", "modern", "sound effects: modern = the port's own, synthesized; custom = your samples, mapped in sfx/sfx.ini (the rest modern); original = the game's own"},
+    {"enhance.music", "original", "music: algol = the port's modern sound chip plays the game's music (new instruments, drums and reverb); original = the YM2612 and PSG"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
     {"enhance.battle_fx", "1", "attack and technique effects light the scene; sparks, flashes, embers, lens flares: 0 off, 1 subtle, 2 full"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
@@ -569,6 +571,7 @@ static void apply_enhancements(void) {
                  : !SDL_strcasecmp(sm, "custom") ? SFX_CUSTOM : SFX_MODERN);
     hdtext_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.text"), "original") != 0);
     battleui_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_ui"), "original") != 0);
+    algol_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.music"), "algol"));
 }
 
 static void apply_video(void) {
@@ -602,6 +605,7 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Battle depth", "enhance.battle_depth", {"0", "1", "2"}, {"Off", "Subtle", "Strong"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Music", "enhance.music", {"original", "algol"}, {"Original chip", "Algol (modern)"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Sound effects", "enhance.sfx", {"modern", "custom", "original"}, {"Modern", "Your samples", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle menus", "enhance.battle_ui", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
