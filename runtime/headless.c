@@ -43,6 +43,7 @@
 #include "bus.h"
 #include "diag.h"
 #include "depth.h"
+#include "hdtext.h"
 #include "sfx.h"
 #include "frame.h"
 #include "m68k.h"
@@ -141,7 +142,7 @@ static void save_png(const char *path, const uint32_t *px, int w, int h) {
 
 /* --depth L[:S]: battle depth at level L; screenshots of battle frames show
  * it, composed at S times the game's resolution (default 2) */
-static int depth_scale, depth_active;
+static int depth_scale, depth_active, text_scale = 3;
 static uint64_t shot_from, shot_to;              /* --shot-range F1-F2 */
 static uint32_t depth_buf[VDP_MAX_W * 4 * VDP_MAX_H * 4];
 
@@ -603,9 +604,18 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
     /* with a movie or a replay, screenshots and input are by logical frame */
     uint64_t when = (movie || replay) ? logical : f;
     int fresh = !movie || frame_vint_will_fire();      /* a logical frame only counts once */
-    if (depth_scale && fresh)                          /* battle depth: shots show what the player sees */
-        depth_active = depth_compose(frame_lines, width, height, depth_buf, width * depth_scale, depth_scale);
-    int sw = depth_active ? width * depth_scale : width, sh = depth_active ? height * depth_scale : height;
+    /* battle depth and modern text: shots show what the player sees */
+    int hs = depth_scale ? depth_scale : text_scale;
+    if (fresh) {
+        int hires = depth_scale ? depth_compose(frame_lines, width, height, depth_buf, width * hs, hs) : 0;
+        if (hdtext_enabled() && hdtext_has_text(frame_lines, width, height)) {
+            if (!hires) hdtext_upscale(pixels, VDP_MAX_W, width, height, depth_buf, width * hs, hs);
+            hdtext_draw(frame_lines, width, height, depth_buf, width * hs, hs);
+            hires = 1;
+        }
+        depth_active = hires;
+    }
+    int sw = depth_active ? width * hs : width, sh = depth_active ? height * hs : height;
     for (int i = 0; i < nshot && fresh; i++)
         if (shots[i].frame == when) {
             if (depth_active) save_png_stride(shots[i].path, depth_buf, sw, sh, sw);
@@ -756,6 +766,15 @@ int main(int argc, char **argv) {
             printf("sound effects: %d replaced from %s\n", n, argv[i]);
         } else if (!strcmp(argv[i], "--fx") && i + 1 < argc) {
             depth_set_fx(atoi(argv[++i]));                 /* battle effects level (with --depth) */
+        } else if (!strcmp(argv[i], "--text") && i + 1 < argc) {
+            char *font = argv[++i], *colon = strrchr(font, ':');   /* FONT[:SCALE] */
+            if (colon && colon[1] && strchr("0123456789", colon[1]) && colon - font > 1) {
+                text_scale = atoi(colon + 1);
+                *colon = 0;
+            }
+            if (text_scale < 1) text_scale = 1;
+            if (text_scale > 4) text_scale = 4;
+            hdtext_set_enabled(hdtext_init(font));
         } else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
             frame_wide_margin = atoi(argv[++i]);           /* widescreen: pixels beyond each side */
         } else if (!strcmp(argv[i], "--fog") && i + 1 < argc) {

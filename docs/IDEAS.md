@@ -38,6 +38,12 @@ An overlay menu on Esc (quitting moves into it): resume, settings, quit.
 - **Needs:** an overlay renderer with its own font (SDL3's built-in debug
   font to start, a proper font later) and saving to `psiv.ini`.
 
+## Widescreen side panels (PsiLok, 2026-11-03)
+In exploration, use the 16:9 margins as frames with party info instead of
+more map: each member's HP/TP, status, EXP, the inventory. Read from the
+party's RAM (stats, items) and drawn with the modern-text renderer; an
+option next to plain widescreen.
+
 ## Ideas from Gen1Recomp
 Its options and modules map onto this port: `Tilt` (an HD-2D diorama
 perspective for the field, eased between 0/15/35/50 degrees), survey `Zoom`,
@@ -54,7 +60,7 @@ Show more of the world to the left and right instead of a 320-pixel window.
 - **Hooks:** sprite culling and camera clamping (the game skips objects outside
   320 px), and window/menu positions so the UI stays centred.
 
-## Full text UI
+## Full text UI -- v1 done (2026-11-03): modern font in place; re-layout still open
 Dialogue, menus and battle text drawn with a modern font at native resolution,
 using the whole width instead of the original small windows.
 - **Needs:** overrides on the text and window routines (control-code tables

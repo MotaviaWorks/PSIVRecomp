@@ -214,7 +214,7 @@ static uint16_t nt_entry(uint32_t base, int cx, int cy, int wcells) {
 
 /* each renderer draws screen columns x0 .. x0+width-1 into out[0..width-1];
  * mode_w is the mode's own width (320 or 256): widescreen draws beyond it */
-static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, int x0, int width, int mode_w) {
+static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, uint8_t *txy, int x0, int width, int mode_w) {
     int wcells = plane_cells(vdp.reg[16] & 3), hcells = plane_cells(vdp.reg[16] >> 4 & 3);
     uint32_t base = plane == 0 ? (uint32_t)(vdp.reg[2] & 0x38) << 10 : (uint32_t)(vdp.reg[4] & 7) << 13;
     /* horizontal scroll: full screen, per 8-line cell, or per line */
@@ -235,6 +235,7 @@ static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, int 
         uint16_t e = nt_entry(base, px >> 3, py >> 3, wcells);
         out[i] = tile_pixel(e, px & 7, py & 7);
         if (entries) entries[i] = e;
+        if (txy) txy[i] = (uint8_t)((px & 7) | (py & 7) << 3);
     }
 }
 
@@ -320,8 +321,8 @@ void vdp_render_line(int y, VdpLine *l) {
         memset(l->sprite, 0, (size_t)w);
         return;
     }
-    render_plane(y, 1, l->plane_b, NULL, x0, w, mw);
-    render_plane(y, 0, l->plane_a, l->plane_a_tile, x0, w, mw);
+    render_plane(y, 1, l->plane_b, NULL, NULL, x0, w, mw);
+    render_plane(y, 0, l->plane_a, l->plane_a_tile, l->plane_a_txy, x0, w, mw);
     render_window(y, l->window, l->win_in, x0, w, mw);
     render_sprites(y, l->sprite, l->sprite_no, x0, w, mw);
 }

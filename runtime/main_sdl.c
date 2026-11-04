@@ -19,6 +19,7 @@
  */
 #include "bus.h"
 #include "depth.h"
+#include "hdtext.h"
 #include "sfx.h"
 #include "diag.h"
 #include "frame.h"
@@ -105,6 +106,8 @@ static Setting settings[] = {
     {"enhance.mode", "enhanced", "enhanced = the port's additions below are on; classic = the original game, unchanged (Esc menu > Settings)"},
     {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
+    {"enhance.text", "modern", "text: modern = redrawn with the font below at full resolution; original = the game's pixel font"},
+    {"enhance.text_font", "C:/Windows/Fonts/segoeui.ttf", "TrueType/OpenType font for modern text"},
     {"enhance.sfx", "modern", "sound effects: modern = your samples, mapped in sfx/sfx.ini; original = the game's own"},
     {"enhance.battle_fx", "1", "attack and technique effects light the scene; sparks, flashes, embers, lens flares: 0 off, 1 subtle, 2 full"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
@@ -427,6 +430,11 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
         if (ds < 1) ds = 1;
         if (ds > 4) ds = 4;
         depth_shown = depth_compose(frame_lines, w, h, depth_pixels, w * ds, ds);
+        if (hdtext_enabled() && hdtext_has_text(frame_lines, w, h)) {        /* modern text */
+            if (!depth_shown) hdtext_upscale(pixels, VDP_MAX_W, w, h, depth_pixels, w * ds, ds);
+            hdtext_draw(frame_lines, w, h, depth_pixels, w * ds, ds);
+            depth_shown = 1;
+        }
         if (depth_shown) {
             if (w * ds != depth_tex_w || h * ds != depth_tex_h) {
                 if (depth_texture) SDL_DestroyTexture(depth_texture);
@@ -532,6 +540,7 @@ static void apply_enhancements(void) {
     depth_set_fog(classic_mode() ? 0 : setting_int("enhance.battle_fog"));
     depth_set_fx(classic_mode() ? 0 : setting_int("enhance.battle_fx"));
     sfx_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.sfx"), "original") != 0);
+    hdtext_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.text"), "original") != 0);
 }
 
 static void apply_video(void) {
@@ -566,7 +575,7 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Battle fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Sound effects", "enhance.sfx", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Text", NULL, {0}, {0}, 0, 0, 0, 1, "Original - modern soon", NULL},
+    {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Widescreen", "video.widescreen", {"0", "1"}, {"Off", "16:9"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Aspect", "video.aspect", {"square", "4:3"}, {"Square pixels", "4:3 TV"}, 0, 0, 0, 0, NULL, apply_enhancements},
     {"Pixels", "video.filter", {"nearest", "linear"}, {"Sharp", "Smooth"}, 0, 0, 0, 0, NULL, apply_video},
@@ -847,6 +856,8 @@ int main(int argc, char **argv) {
         path_in_home(dir, sizeof dir, "sfx");
         SDL_Log("sound effects: %d replaced (%s/sfx.ini)", sfx_load(dir), dir);
     }
+    if (!hdtext_init(setting("enhance.text_font")))
+        SDL_Log("modern text: font %s not loaded; text stays original", setting("enhance.text_font"));
     apply_enhancements();
     resolve_bindings();
 

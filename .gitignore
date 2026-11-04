@@ -26,3 +26,6 @@ screenshots/
 
 # Sound effect samples (your own; licensed, never committed)
 sfx/**/*.wav
+
+# Character art for the side panels (game art, never committed)
+characters/

@@ -45,8 +45,14 @@ add_library(psiv_sound_chips STATIC
   runtime/ym2612.cpp runtime/z80_impl.c)
 target_include_directories(psiv_sound_chips PUBLIC runtime ${YMFM_DIR} ${CHIPS_DIR})
 
+# Modern text renders with stb_truetype (third_party/stb, public domain; see README)
+if(NOT EXISTS ${CMAKE_SOURCE_DIR}/third_party/stb/stb_truetype.h)
+  message(FATAL_ERROR "third_party/stb/stb_truetype.h is missing (see README)")
+endif()
+set_source_files_properties(runtime/hdtext.c PROPERTIES INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/third_party/stb)
+
 # Hardware: bus, VDP, sound, frame loop (object files, so the code<->hardware calls link either way)
-set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/sound.c runtime/frame.c runtime/depth.c runtime/sfx.c)
+set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/sound.c runtime/frame.c runtime/depth.c runtime/sfx.c runtime/hdtext.c)
 set(TEST_SOURCES runtime/headless.c runtime/sha256.c)
 
 # Headless front end: scripted input, PNG screenshots

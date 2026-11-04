@@ -75,6 +75,7 @@ typedef struct {
     uint8_t plane_b[VDP_MAX_W];
     uint8_t plane_a[VDP_MAX_W];  /* plane A as drawn, also where the window covers it */
     uint16_t plane_a_tile[VDP_MAX_W]; /* plane A's name-table entry under each pixel */
+    uint8_t plane_a_txy[VDP_MAX_W];   /* and where in that tile: x | y << 3 (before flips) */
     uint8_t window[VDP_MAX_W];   /* window plane, where it is shown */
     uint8_t win_in[VDP_MAX_W];   /* 1 where the window replaces plane A */
     uint8_t sprite[VDP_MAX_W];

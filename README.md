@@ -69,7 +69,14 @@ original game, unchanged; **Enhanced** turns on the additions:
   edge; battle backgrounds are mirrored outward. The title, intro and other
   screens built for 320 pixels keep their shape.
 
-Planned (see `docs/IDEAS.md`): modern text.
+- **Text** (modern / original): dialogue, menus and battle windows redrawn
+  with a TrueType font (`enhance.text_font`, Segoe UI by default) at full
+  resolution, in the game's own positions, colours and timing. Text is
+  recognised from what the game draws (its 8x8 window font and the 8x16
+  dialogue font, read from the ROM), so the game itself is untouched.
+  Needs `third_party/stb/stb_truetype.h` (public domain).
+
+Planned (see `docs/IDEAS.md`): side panels with party info in widescreen.
 
 ### Headless runs
 
