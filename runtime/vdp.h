@@ -33,6 +33,13 @@ typedef struct {
     int      hint_counter;
     int      status_toggle;
     uint16_t sprite_status;      /* $20 collision, $40 overflow: set while drawing, cleared on read */
+    /* The VDP's internal copy of the sprite table: refreshed only by VRAM
+     * writes that land inside the table's current address range, and the
+     * source of each sprite's Y, size and link when drawing. Moving the table
+     * (register 5) does not refresh it, so the hardware can draw stale
+     * positions for a while; the game can observe that through the collision
+     * flag. */
+    uint8_t  sat_cache[0x400];
 } Vdp;
 
 extern Vdp vdp;

@@ -3,6 +3,8 @@
 
     python tools/bizhawk/check.py                    record the newgame scenario, then replay it
     python tools/bizhawk/check.py --trace FILE       replay an existing trace (e.g. your own play)
+    python tools/bizhawk/check.py --movie FILE       play an input movie (by logical frame, see
+                                                     psiv_headless --movie) in BizHawk, then replay
     python tools/bizhawk/check.py --dump-at N        also dump raw memory at logical frame N
                                                      on both sides and diff them
 
@@ -28,7 +30,7 @@ BIZHAWK = Path(os.environ.get("PSIV_BIZHAWK", r"H:\Emulation\08 - Tools\BizHawk\
 HEADLESS = ROOT / "build" / ("native-Release/psiv_headless.exe" if os.name == "nt" else "native/psiv_headless")
 
 
-def record(scenario: str, dump_at: int | None) -> Path:
+def record(scenario: str, dump_at: int | None, movie: Path | None = None) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     rom = OUT / "psiv.md"
     if not rom.exists():
@@ -36,18 +38,28 @@ def record(scenario: str, dump_at: int | None) -> Path:
     env = dict(os.environ, PSIV_ROOT=str(ROOT))
     if dump_at:
         env["PSIV_DUMP_AT"] = str(dump_at)
-    lua = ROOT / "tools" / "bizhawk" / f"{scenario}.lua"
+    if movie:
+        # a movie: tools/bizhawk/movie.lua plays it by logical frame
+        name = movie.stem
+        trace = OUT / f"{name}.trace"
+        env.update(PSIV_MOVIE_FILE=str(movie.resolve()), PSIV_TRACE_OUT=str(trace))
+        lua = ROOT / "tools" / "bizhawk" / "movie.lua"
+        timeout = 1800
+    else:
+        name = scenario
+        trace = OUT / f"{scenario}.trace"
+        lua = ROOT / "tools" / "bizhawk" / f"{scenario}.lua"
+        timeout = 120
     err = OUT / "error.txt"
     err.unlink(missing_ok=True)
-    trace = OUT / f"{scenario}.trace"
     trace.unlink(missing_ok=True)
-    print(f"recording {scenario} in BizHawk (the window closes itself)...")
+    print(f"recording {name} in BizHawk (the window closes itself)...", flush=True)
     p = subprocess.Popen([str(BIZHAWK), f"--lua={lua}", str(rom)], env=env)
     try:
-        p.wait(timeout=120)
+        p.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         p.kill()
-        raise SystemExit("BizHawk did not finish within 2 minutes; closed it. "
+        raise SystemExit(f"BizHawk did not finish within {timeout // 60} minutes; closed it. "
                          + (err.read_text() if err.exists() else "No script error was logged."))
     if err.exists():
         raise SystemExit("BizHawk script error: " + err.read_text())
@@ -60,10 +72,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--trace", help="replay this trace instead of recording one")
     ap.add_argument("--scenario", default="newgame", help="tools/bizhawk/<scenario>.lua to record")
+    ap.add_argument("--movie", help="record this input movie (by logical frame) instead of a scenario")
     ap.add_argument("--dump-at", type=int, help="dump raw memory at this logical frame on both sides")
     args = ap.parse_args()
 
-    trace = Path(args.trace) if args.trace else record(args.scenario, args.dump_at)
+    if args.trace:
+        trace = Path(args.trace)
+    else:
+        trace = record(args.scenario, args.dump_at, Path(args.movie) if args.movie else None)
     cmd = [str(HEADLESS), "--replay", str(trace)]
     if args.dump_at:
         cmd += ["--dump-at", str(args.dump_at), "--keep-going"]

@@ -21,6 +21,8 @@
 --   The sound driver's RAM ($5000-$55FF) is left out of its block and hashed
 --   on its own as "sound": its state depends on exactly when lag VInts land
 --   inside the main code, which the port can only approximate.
+--   VDP_Status_Reg ($EF22-$EF23) is skipped: its $E000 block hash is two
+--   hashes joined by "+", before and after it.
 --
 -- The port replays the trace (psiv_headless --replay) and stops at the first
 -- logical frame whose hashes differ.
@@ -32,6 +34,9 @@
 --                    until closed, for recording your own play)
 --   PSIV_SCRIPT      scripted input: list of {frame, buttons, length} in
 --                    emulated frames (nil = live input)
+--   PSIV_MOVIE       scripted input by logical frame: list of {logical, buttons,
+--                    length} (see movie.lua); takes precedence over PSIV_SCRIPT
+--   PSIV_LOGICAL_END stop after this many logical frames
 -- PSIV_ROOT (project folder) is set by the entry script (newgame.lua,
 -- record_play.lua) or the PSIV_ROOT environment variable.
 PSIV_ROOT = PSIV_ROOT or (os.getenv("PSIV_ROOT") or "D:/Games/PSIV Project"):gsub("\\", "/")
@@ -39,11 +44,17 @@ local OUT = PSIV_TRACE_OUT or (PSIV_ROOT .. "/build/bizhawk/reference.trace")
 local DUMP_AT = PSIV_DUMP_AT
 local FRAMES = PSIV_FRAMES
 local SCRIPT = PSIV_SCRIPT
+local MOVIE = PSIV_MOVIE
+local LOGICAL_END = PSIV_LOGICAL_END
 
 local VINT, VINT_FLAG = 0x524, 0xEF12
 local out = assert(io.open(OUT, "w"))
-out:write("# psiv reference trace v3; rom " .. gameinfo.getromhash() .. "\n")
+out:write("# psiv reference trace v4; rom " .. gameinfo.getromhash() .. "\n")
 local SOUND_LO, SOUND_HI = 0x5000, 0x5600
+-- VDP_Status_Reg ($EF22): VInt's raw copy of the VDP status word. The game
+-- only tests its vblank bit; the sprite collision bit depends on emulator
+-- details of off-screen sprite pixels, so the word is left out of the hash
+local STATUS_LO, STATUS_HI = 0xEF22, 0xEF24
 
 local logical, lag = 0, 0
 local BUTTONS = { "Up", "Down", "Left", "Right", "A", "B", "C", "Start" }
@@ -82,12 +93,18 @@ event.onmemoryexecute(function()
     local lo, hi = b * 0x1000, b * 0x1000 + 0x1000
     if sp > lo and sp < hi then lo = sp end         -- live stack only
     if lo == SOUND_LO then lo = SOUND_HI end        -- sound driver hashed separately
-    parts[#parts + 1] = h("68K RAM", lo, hi - lo)
+    if lo <= STATUS_LO and hi >= STATUS_HI then     -- skip VDP_Status_Reg
+      parts[#parts + 1] = h("68K RAM", lo, STATUS_LO - lo) .. "+" .. h("68K RAM", STATUS_HI, hi - STATUS_HI)
+    else
+      parts[#parts + 1] = h("68K RAM", lo, hi - lo)
+    end
   end
   parts[#parts + 1] = "|"
   for b = 0, 15 do parts[#parts + 1] = h("VRAM", b * 0x1000, 0x1000) end
   parts[#parts + 1] = "| " .. h("CRAM", 0, 128) .. " | " .. h("VSRAM", 0, 80)
   parts[#parts + 1] = "| " .. h("68K RAM", SOUND_LO, SOUND_HI - SOUND_LO)
+  -- for analysis only (not compared): the VDP status VInt saved last frame
+  parts[#parts + 1] = string.format("| %04X", mainmemory.read_u16_be(0xEF22))
   out:write(table.concat(parts, " "), "\n")
   lag = 0
   if DUMP_AT and logical == DUMP_AT then
@@ -99,10 +116,28 @@ event.onmemoryexecute(function()
   end
 end, VINT, "psiv-reference")
 
-if FRAMES then emu.limitframerate(false) end
+local KEYNAMES = { U = "Up", D = "Down", L = "Left", R = "Right", A = "A", B = "B", C = "C", S = "Start" }
+
+local function hold(keys)
+  local held = {}
+  for c in string.gmatch(keys, ".") do
+    if KEYNAMES[c] then held["P1 " .. KEYNAMES[c]] = true end
+  end
+  joypad.set(held)
+end
+
+if FRAMES or LOGICAL_END then emu.limitframerate(false) end
 while true do
   local f = emu.framecount()
-  if SCRIPT then
+  if MOVIE then
+    -- the game reads the pad in the next VInt that finds VInt_Flag set,
+    -- i.e. logical frame logical+1; lag frames ignore it
+    local want, keys = logical + 1, ""
+    for _, m in ipairs(MOVIE) do
+      if want >= m[1] and want < m[1] + m[3] then keys = keys .. m[2] end
+    end
+    hold(keys)
+  elseif SCRIPT then
     local held = {}
     for _, s in ipairs(SCRIPT) do
       if f >= s[1] and f < s[1] + s[3] then
@@ -117,6 +152,7 @@ while true do
   emu.frameadvance()
   out:flush()
   if FRAMES and emu.framecount() >= FRAMES then break end
+  if LOGICAL_END and logical >= LOGICAL_END then break end
 end
 out:close()
-if FRAMES then client.exit() end
+if FRAMES or LOGICAL_END then client.exit() end

@@ -7,7 +7,15 @@
  *     --frames N         stop after N frames (default 600)
  *     --press F:KEYS:N   hold KEYS from frame F for N frames; KEYS from
  *                        U D L R A B C S (S = Start). Repeatable.
- *     --shot F:PATH      save frame F as a PNG. Repeatable.
+ *     --shot F:PATH      save frame F as a PNG. Repeatable. With --movie, F is a
+ *                        logical frame.
+ *     --movie FILE       input movie by logical frame (the frames where the game
+ *                        reads the pad), so the same file drives BizHawk
+ *                        (tools/bizhawk/movie.lua) identically. Lines:
+ *                          L KEYS [N]    hold KEYS from logical frame L for N frames (default 1)
+ *                          +D KEYS [N]   the same, D frames after the previous line's start
+ *                        KEYS from U D L R A B C S, or - for none; # starts a comment
+ *     --shot-every N:DIR with --movie: a PNG every N logical frames into DIR
  *     --replay TRACE     replay a BizHawk reference trace (tools/bizhawk/record.lua):
  *                        its input and lag per logical frame, checking memory
  *                        hashes; stops at the first difference and dumps the
@@ -42,6 +50,12 @@ typedef struct { uint64_t frame; const char *path; } Shot;
 static Press presses[256];
 static Shot shots[64];
 static int npress, nshot;
+static Press *movie;                 /* --movie: events by logical frame */
+static int nmovie;
+static uint64_t movie_end;           /* last logical frame the movie touches */
+static uint64_t shot_every;
+static const char *shot_dir;
+static int trace_pad;                /* --trace-pad: print movie input and the game's joypad bytes */
 static uint64_t frame_limit = 600;
 static int music_id = -1;
 static uint64_t music_frame;
@@ -225,7 +239,10 @@ static void dump_state(const char *prefix) {
         FILE *f = fopen(path, "wb");
         if (f) { fwrite(buf, 1, n, f); fclose(f); }
     }
-    printf("dumped %s.{ram,vram,cram,vsram}.bin\n", prefix);
+    snprintf(path, sizeof path, "%s.regs.bin", prefix);       /* VDP registers, for analysis only */
+    FILE *rf = fopen(path, "wb");
+    if (rf) { fwrite(vdp.reg, 1, sizeof vdp.reg, rf); fwrite(vdp.sat_cache, 1, sizeof vdp.sat_cache, rf); fclose(rf); }
+    printf("dumped %s.{ram,vram,cram,vsram,regs}.bin\n", prefix);
 }
 
 static void dump_prefix(char *out, size_t n, const char *tag) {
@@ -240,6 +257,11 @@ static void dump_prefix(char *out, size_t n, const char *tag) {
 
 #define SOUND_LO 0x5000u          /* sound driver RAM, compared as a soft check */
 #define SOUND_HI 0x5600u
+/* VDP_Status_Reg: VInt's raw copy of the status word. The game only tests its
+ * vblank bit; the collision bit depends on how an emulator treats off-screen
+ * sprite pixels, so both sides leave the word out of the hash */
+#define STATUS_LO 0xEF22u
+#define STATUS_HI 0xEF24u
 static char cur_line[2048];
 static int have_cur, cur_lag_delivered;
 static uint64_t sound_mismatches, first_sound_mismatch;
@@ -262,7 +284,7 @@ static int replay_step(void) {
     }
     memcpy(line, cur_line, sizeof line);
     for (char *t = strtok(line, " |\r\n"); t && nt < 40; t = strtok(NULL, " |\r\n")) tok[nt++] = t;
-    if (nt < 39) { fprintf(stderr, "bad trace line at logical frame %llu (need trace v3)\n", (unsigned long long)logical); exit(2); }
+    if (nt < 39) { fprintf(stderr, "bad trace line at logical frame %llu (need trace v4)\n", (unsigned long long)logical); exit(2); }
     uint64_t n = strtoull(tok[0], NULL, 10);
     int lag = atoi(tok[1]);
     uint32_t sp = (uint32_t)strtoul(tok[3], NULL, 16);
@@ -276,8 +298,8 @@ static int replay_step(void) {
     bus_pad[0] = (uint8_t)atoi(tok[2]);
 
     /* look ahead: the next frame's lag runs at the start of its main-code work */
-    char hashes_copy[34][17], sound_want[17];
-    for (int i = 0; i < 34; i++) { strncpy(hashes_copy[i], hashes[i], 16); hashes_copy[i][16] = 0; }
+    char hashes_copy[34][40], sound_want[17];
+    for (int i = 0; i < 34; i++) snprintf(hashes_copy[i], sizeof hashes_copy[i], "%s", hashes[i]);
     strncpy(sound_want, hashes[34], 16);
     sound_want[16] = 0;
     have_cur = read_line();
@@ -293,7 +315,7 @@ static int replay_step(void) {
     static uint8_t buf[0x10000];
     static const char *names[4] = {"RAM", "VRAM", "CRAM", "VSRAM"};
     int bad = 0;
-    char got[17];
+    char got[40];
     if ((A(7) & 0xFFFF) != sp) {
         printf("logical frame %llu (port frame %llu): MISMATCH\n  stack pointer  port $%04X  reference $%04X\n",
                (unsigned long long)logical, (unsigned long long)frame_count, A(7) & 0xFFFF, sp);
@@ -309,7 +331,14 @@ static int replay_step(void) {
             size_t lo = (size_t)b * bl, hi = lo + bl;
             if (r == 0 && sp > lo && sp < hi) lo = sp;          /* live stack only */
             if (r == 0 && lo == SOUND_LO) lo = SOUND_HI;         /* sound driver: soft check below */
-            sha256_hex16(buf + lo, hi - lo, got);
+            if (r == 0 && lo <= STATUS_LO && hi >= STATUS_HI) {  /* skip VDP_Status_Reg */
+                char a[17], b[17];
+                sha256_hex16(buf + lo, STATUS_LO - lo, a);
+                sha256_hex16(buf + STATUS_HI, hi - STATUS_HI, b);
+                snprintf(got, sizeof got, "%s+%s", a, b);
+            } else {
+                sha256_hex16(buf + lo, hi - lo, got);
+            }
             if (strcmp(got, want)) {
                 int quiet = keep_going && mismatched_frames >= 3;
                 if (!bad && !quiet) printf("logical frame %llu (port frame %llu): MISMATCH\n",
@@ -371,17 +400,35 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         printf("frame %llu: game mode %u\n", (unsigned long long)f, mode / 4);
         last_mode = mode;
     }
-    for (int i = 0; i < nshot; i++)
-        if (shots[i].frame == f) {
+    /* with a movie, screenshots and input are by logical frame */
+    uint64_t when = movie ? logical : f;
+    int fresh = !movie || frame_vint_will_fire();      /* a logical frame only counts once */
+    for (int i = 0; i < nshot && fresh; i++)
+        if (shots[i].frame == when) {
             save_png(shots[i].path, pixels, width, height);
-            printf("frame %llu: saved %s (%dx%d)\n", (unsigned long long)f, shots[i].path, width, height);
+            printf("%s %llu: saved %s (%dx%d)\n", movie ? "logical" : "frame", (unsigned long long)when,
+                   shots[i].path, width, height);
         }
+    if (movie && shot_every && fresh && logical % shot_every == 0) {
+        char p[512];
+        snprintf(p, sizeof p, "%s/%06llu.png", shot_dir, (unsigned long long)logical);
+        save_png(p, pixels, width, height);
+    }
+    if (movie && fresh) {
+        uint8_t keys = 0;
+        for (int i = 0; i < nmovie; i++)
+            if (logical >= movie[i].frame && logical < movie[i].frame + movie[i].len) keys |= movie[i].keys;
+        if (trace_pad && (keys || bus_pad[0]))
+            printf("logical %llu: pad %02X -> %02X; game Joypad_Held %02X Pressed %02X\n",
+                   (unsigned long long)logical, bus_pad[0], keys, m68k_ram[0xEF02], m68k_ram[0xEF03]);
+        bus_pad[0] = keys;
+    }
     /* Sound_Index: a request only beats what is playing if its priority is at
      * least as high, so stop everything ($FE) first, then ask for the song */
     if (test_fatal_frame && f == test_fatal_frame) m68k_call(0x123456);
     if (music_id >= 0 && f == music_frame) m68k_ram[0x500A] = 0xFE;
     if (music_id >= 0 && f == music_frame + 2) m68k_ram[0x500A] = (uint8_t)music_id;
-    if (!replay) {
+    if (!replay && !movie) {
         uint8_t keys = 0;
         for (int i = 0; i < npress; i++)
             if (f >= presses[i].frame && f < presses[i].frame + presses[i].len) keys |= presses[i].keys;
@@ -407,6 +454,37 @@ static uint8_t parse_keys(const char *s) {
         }
     }
     return k;
+}
+
+/* "L KEYS [N]" / "+D KEYS [N]" lines; KEYS "-" = nothing pressed */
+static int load_movie(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "cannot open %s\n", path); return 0; }
+    char line[256];
+    uint64_t prev = 0;
+    int cap = 0;
+    while (fgets(line, sizeof line, f)) {
+        char *s = line, keys[32] = "";
+        while (*s == ' ' || *s == '\t') s++;
+        if (*s == '#' || *s == '\n' || *s == '\r' || !*s) continue;
+        int rel = *s == '+';
+        if (rel) s++;
+        unsigned long long at = 0, len = 1;
+        if (sscanf(s, "%llu %31s %llu", &at, keys, &len) < 2) continue;
+        if (nmovie == cap) {
+            cap = cap ? cap * 2 : 256;
+            movie = realloc(movie, (size_t)cap * sizeof *movie);
+        }
+        Press *p = &movie[nmovie++];
+        p->frame = rel ? prev + at : at;
+        p->keys = strcmp(keys, "-") ? parse_keys(keys) : 0;
+        p->len = len;
+        prev = p->frame;
+        if (p->frame + p->len > movie_end) movie_end = p->frame + p->len;
+    }
+    fclose(f);
+    printf("movie %s: %d events, last logical frame %llu\n", path, nmovie, (unsigned long long)movie_end);
+    return 1;
 }
 
 int main(int argc, char **argv) {
@@ -436,6 +514,14 @@ int main(int argc, char **argv) {
             dump_at = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--keep-going")) {
             keep_going = 1;
+        } else if (!strcmp(argv[i], "--movie") && i + 1 < argc) {
+            if (!load_movie(argv[++i])) return 1;
+        } else if (!strcmp(argv[i], "--shot-every") && i + 1 < argc) {
+            char *e;
+            shot_every = strtoull(argv[++i], &e, 10);
+            shot_dir = *e == ':' ? e + 1 : ".";
+        } else if (!strcmp(argv[i], "--trace-pad")) {
+            trace_pad = 1;
         } else if (!strcmp(argv[i], "--test-fatal") && i + 1 < argc) {
             test_fatal_frame = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--wav") && i + 1 < argc) {
