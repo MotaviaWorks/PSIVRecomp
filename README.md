@@ -69,8 +69,13 @@ original game, unchanged; **Enhanced** turns on the additions:
   sampled in the game are played cleanly from your ROM), reverb, chorus and
   a stereo delay. Parts the game doubles on several channels are merged.
   Sound effects keep the original chips, on the channels they borrow.
+  The tense songs -- the title, Meet Them Head-On and the battle and boss
+  themes -- get hard rock drums: a kick with a beater knock, a snare with a
+  crack, deeper toms, brighter cymbals, a room and a punchy bus compressor,
+  and a hi-hat on the eighths locked to the song's own backbeat.
   `algol.ini` in the working folder overrides the instrument of any patch
-  (`PSIV_ALGOL_LOG=1` lists them); `psiv_headless --algol` renders with it.
+  (`PSIV_ALGOL_LOG=1` lists them) and the drums of any song (`song 8F =
+  rock` or `= standard`); `psiv_headless --algol` renders with it.
 
 - **Sound effects** (modern / your samples / original): *modern* is the port's
   own set, synthesized at startup (`runtime/sfxsynth.c`), so nothing is

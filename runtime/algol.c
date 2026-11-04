@@ -306,6 +306,24 @@ static void noise_run(Voice *v, float *l, float *r, float *rev) {
     *rev += s * 0.15f;
 }
 
+/* Drum styles, per song: standard, or hard rock -- a kick with a beater
+ * knock and drive, a snare with a crack and long wires, deeper toms,
+ * brighter cymbals, all through a room and a punchy bus compressor, and a
+ * hi-hat on the eighths locked to the song's own backbeat */
+enum { STYLE_STANDARD, STYLE_ROCK };
+static const uint8_t ROCK_SONGS[] = {
+    0xAC,                         /* The End of the Millennium (the title) */
+    0x8F,                         /* Meet Them Head-On */
+    0x95,                         /* Defeat at a Blow */
+    0xA0,                         /* The King of Terrors */
+    0x98,                         /* Edge of Darkness */
+    0xA9,                         /* Red Alert */
+};
+static uint8_t song_style[0x34];                       /* songs $81-$B4 */
+static int song, style;                                /* the one playing (0 = unknown) and its drums */
+
+static void song_tables(void);
+
 /* ------------------------------------------------------------------ patches */
 static uint8_t ym[2][256];
 static int fm_key[6], dac_on;
@@ -336,6 +354,11 @@ static void load_user_map(void) {
     while (fgets(line, sizeof line, f) && nuser < 256) {
         char name[64];
         unsigned h;
+        if (sscanf(line, " song %x = %63s", &h, name) == 2) {   /* "song 8F = rock" / "= standard" */
+            song_tables();
+            if (h >= 0x81 && h <= 0xB4) song_style[h - 0x81] = !strcmp(name, "rock") ? STYLE_ROCK : STYLE_STANDARD;
+            continue;
+        }
         if (line[0] == '#' || sscanf(line, " %x = %63s", &h, name) != 2) continue;
         int i = inst_by_name(name);
         if (i >= 0) { user_map[nuser].hash = h; user_map[nuser].inst = i; nuser++; }
@@ -403,7 +426,7 @@ static int patch_inst(int part, int c, float note, uint32_t *hash_out) {
         patches[npatches].notes = 1;
         npatches++;
     }
-    if (log_on < 0) { const char *v = getenv("PSIV_ALGOL_LOG"); log_on = v && *v == '1'; }
+    if (log_on < 0) { const char *v = getenv("PSIV_ALGOL_LOG"); log_on = v ? atoi(v) : 0; }
     if (log_on) {
         const uint8_t *R = ym[part];
         printf("algol: patch %08X -> %s (FM%d, note %.1f, alg %d fb %d)\n", h, INST[inst].name,
@@ -560,44 +583,131 @@ static const struct { int kind; float tone, decay, level; } KIT[18] = {
 static const uint8_t BANK_TBL[17][2] = {{0,0},{0,1},{0,2},{0,3},{0,4},{0,5},{1,0},{0,7},{2,0},{1,1},{0,8},{2,1},{0,9},{2,2},{0,6},{3,0},{2,3}};
 
 typedef struct {
-    int on, kind;
-    float t, tone, decay, gain, pl, pr, ph;
+    int on, kind, rock;
+    float t, tone, decay, gain, pl, pr, ph, room;
     float m[6];                   /* metallic oscillators: cycles per sample */
     float hp1, hp2, lp1, bp1;
     uint32_t rng;
     const uint8_t *pcm;
     int len;
     double pos, step;
-    float prev;
 } Drum;
-#define NDRUMS 10
+#define NDRUMS 24
 static Drum drums[NDRUMS];
+static double now;                                     /* samples rendered */
+static double last_hit[18];                            /* when each sample last played */
+
+static Drum *drum_new(void) {
+    Drum *d = NULL;
+    for (int i = 0; i < NDRUMS; i++) if (!drums[i].on) { d = &drums[i]; break; }
+    if (!d) {                                           /* steal the oldest */
+        d = &drums[0];
+        for (int i = 1; i < NDRUMS; i++) if (drums[i].t > d->t) d = &drums[i];
+    }
+    uint32_t rng = d->rng ? d->rng : 0x1234567u + (uint32_t)(d - drums);
+    memset(d, 0, sizeof *d);
+    d->rng = rng;
+    d->on = 1;
+    return d;
+}
+
+static void drum_pan(Drum *d, float p) {
+    d->pl = cosf(p * 1.5707963f) * 1.41421356f;
+    d->pr = sinf(p * 1.5707963f) * 1.41421356f;
+}
+
+static void drum_metal(Drum *d, float scale) {
+    static const float METAL[6] = {205.3f, 304.4f, 369.6f, 522.7f, 540.0f, 800.0f};
+    for (int i = 0; i < 6; i++) d->m[i] = METAL[i] * scale / SR;
+}
+
+/* The hi-hat that follows the backbeat (hard rock style). The snare on two
+ * and four gives the pulse: the time between backbeats is the commonest gap
+ * between snares (gaps under 0.4 s -- rolls, flams -- don't count, nor do
+ * the odd syncopated ones, being outvoted), an eighth a quarter of it. The
+ * hat plays every eighth, re-locked to each snare that lands on that grid,
+ * and stops when the drums do. */
+#define SN_N 12
+static double sn_gap[SN_N], sn_last, hat_p8, hat_anchor, hat_last_drum, hat_last;
+static int sn_n, hat_k, hat_running;
+
+static void hat_follow_snare(void) {
+    double t = now, gap = t - sn_last;
+    sn_last = t;
+    if (gap >= 0.4 * SR && gap <= 2.0 * SR) sn_gap[sn_n++ % SN_N] = gap;
+    int n = sn_n < SN_N ? sn_n : SN_N, best = 0;
+    double beat2 = 0.0;
+    for (int i = 0; i < n; i++) {                       /* the gap most others agree with */
+        int votes = 0;
+        double sum = 0.0;
+        for (int j = 0; j < n; j++)
+            if (fabs(sn_gap[j] - sn_gap[i]) < 0.03 * sn_gap[i]) { votes++; sum += sn_gap[j]; }
+        /* a tie: the one nearer a rock backbeat (~0.85 s, two beats at 140) */
+        if (votes > best || (votes == best && fabs(sum / votes - 0.85 * SR) < fabs(beat2 - 0.85 * SR))) {
+            best = votes;
+            beat2 = sum / votes;
+        }
+    }
+    if (best < 2) return;
+    double p8 = beat2 / 4.0;
+    if (!hat_running || fabs(p8 - hat_p8) > 0.02 * hat_p8) {
+        if (log_on >= 2) printf("algol: backbeat %.3f s, eighth %.3f s\n", beat2 / SR, p8 / SR);
+        if (!hat_running) { hat_anchor = t; hat_k = 0; }
+        hat_p8 = p8;
+        hat_running = 1;
+    }
+    double ph = (t - hat_anchor) / hat_p8, err = ph - floor(ph + 0.5);
+    if (fabs(err) < 0.3) {                              /* on the grid: re-lock here */
+        hat_anchor = t;
+        hat_k = t - hat_last < 0.4 * hat_p8 ? 1 : 0;   /* no second hat on one just played */
+    }
+}
+
+static void rock_hat(float accent) {
+    hat_last = now;
+    if (log_on >= 2) printf("algol: hat %.3f s (eighth %.3f s)\n", now / SR, hat_p8 / SR);
+    Drum *d = drum_new();
+    d->kind = D_HAT;
+    d->rock = 1;
+    d->decay = 0.03f + 0.012f * accent;
+    d->gain = (0.30f + 0.20f * accent) * (0.92f + 0.08f * rnd(&d->rng));
+    d->room = 0.05f;
+    drum_pan(d, 0.64f);
+    drum_metal(d, 2.9f);
+}
 
 void algol_dac_hit(int sample, int pitch, int volume, int pan) {
     if (!enabled || sample < 1 || sample > 17) return;
     if (fx_fm >> 5 & 1) return;                             /* an effect holds the DAC */
-    Drum *d = NULL;
-    for (int i = 0; i < NDRUMS; i++) if (!drums[i].on) { d = &drums[i]; break; }
-    if (!d) {                                               /* steal the oldest */
-        d = &drums[0];
-        for (int i = 1; i < NDRUMS; i++) if (drums[i].t > d->t) d = &drums[i];
-    }
-    uint32_t rng = d->rng ? d->rng : 0x1234567u + (uint32_t)sample;
-    memset(d, 0, sizeof *d);
-    d->rng = rng;
-    d->on = 1;
+    /* the game's two drum tracks can ask for the same sample in one tick */
+    if (now - last_hit[sample] < 0.004 * SR && last_hit[sample] > 0.0) return;
+    last_hit[sample] = now;
+    hat_last_drum = now;
+    int rock = style == STYLE_ROCK;
+    Drum *d = drum_new();
     d->kind = KIT[sample].kind;
+    d->rock = rock && d->kind != D_SAMPLE;
     float semis = (float)(pitch - 0x9A) * (12.0f / 12.6f);  /* the DAC's rate steps, about a semitone */
     d->tone = KIT[sample].tone * exp2f(semis / 12.0f);
     d->decay = KIT[sample].decay;
     d->gain = KIT[sample].level * (volume > 0 && volume <= 16 ? (float)volume / 16.0f : 1.0f);
     float p = (pan & 0xC0) == 0x80 ? 0.25f : (pan & 0xC0) == 0x40 ? 0.75f : 0.5f;
-    if (d->kind == D_HAT || d->kind == D_RIDE) p += 0.12f;
-    if (d->kind == D_CRASH) p -= 0.15f;
-    d->pl = cosf(p * 1.5707963f) * 1.41421356f;
-    d->pr = sinf(p * 1.5707963f) * 1.41421356f;
-    static const float METAL[6] = {205.3f, 304.4f, 369.6f, 522.7f, 540.0f, 800.0f};
-    for (int i = 0; i < 6; i++) d->m[i] = METAL[i] * 2.6f / SR;
+    if (d->kind == D_HAT || d->kind == D_RIDE) p += 0.14f;
+    if (d->kind == D_CRASH) p -= 0.18f;
+    if (d->kind == D_TOM && d->rock) p -= 0.12f;
+    drum_pan(d, p);
+    drum_metal(d, 2.6f);
+    d->room = 0.15f;
+    if (d->rock) {                                          /* the hard rock kit */
+        switch (d->kind) {
+        case D_KICK:  d->tone *= 1.05f; d->decay *= 0.8f; d->gain *= 1.15f; d->room = 0.10f; break;
+        case D_SNARE: d->decay *= 1.15f; d->gain *= 1.10f; d->room = 0.45f; hat_follow_snare(); break;
+        case D_TOM:   d->tone *= 0.9f; d->decay *= 1.35f; d->room = 0.40f; break;
+        case D_HAT:   d->decay *= 0.8f; d->room = 0.05f; drum_metal(d, 2.9f); break;
+        case D_RIDE:  d->decay *= 1.5f; d->room = 0.12f; break;
+        case D_CRASH: d->decay *= 1.25f; d->gain *= 1.10f; d->room = 0.15f; drum_metal(d, 2.3f); break;
+        }
+    }
     if (d->kind == D_SAMPLE) {
         static const uint32_t BASE[4] = {0xE0000, 0xE8000, 0xF0000, 0xF8000};
         uint32_t base = BASE[BANK_TBL[sample - 1][0]], e = base + BANK_TBL[sample - 1][1] * 8u;
@@ -619,53 +729,74 @@ static float metal(Drum *d) {
     return s / 6.0f;
 }
 
-static void drum_run(Drum *d, float *l, float *r, float *rev) {
+/* one sample of a drum into the drum bus (l, r) and the room send */
+static void drum_run(Drum *d, float *l, float *r, float *room) {
     const float dt = 1.0f / SR;
     float s = 0.0f, t = d->t;
     d->t += dt;
     switch (d->kind) {
-    case D_KICK: {
-        float f = d->tone + 120.0f * expf(-t / 0.032f);
+    case D_KICK:
+        if (d->rock) {                                      /* body, beater knock, click; driven */
+            float f = d->tone + 150.0f * expf(-t / 0.024f);
+            d->ph += f / SR;
+            if (d->ph >= 1.0f) d->ph -= 1.0f;
+            float body = sinf(TWO_PI * d->ph) * expf(-t / d->decay);
+            float knock = sinf(TWO_PI * 1700.0f * t) * expf(-t / 0.004f) * 0.35f;
+            float n = rnd(&d->rng);
+            d->hp1 += (n - d->hp1) * 0.4f;
+            float click = (n - d->hp1) * expf(-t / 0.0016f) * 0.7f;
+            s = tanhf((body + knock + click) * 2.6f) * 0.8f;
+        } else {
+            float f = d->tone + 120.0f * expf(-t / 0.032f);
+            d->ph += f / SR;
+            if (d->ph >= 1.0f) d->ph -= 1.0f;
+            float body = sinf(TWO_PI * d->ph) * expf(-t / d->decay);
+            float click = rnd(&d->rng) * expf(-t / 0.0025f) * 0.5f;
+            d->lp1 += (click - d->lp1) * 0.25f;
+            s = tanhf((body + d->lp1) * 1.8f) * 0.85f;
+        }
+        if (t > d->decay * 5.0f) d->on = 0;
+        break;
+    case D_SNARE: {
+        float f = d->rock ? d->tone * (1.0f + 0.3f * expf(-t / 0.008f)) : d->tone;
         d->ph += f / SR;
         if (d->ph >= 1.0f) d->ph -= 1.0f;
-        float body = sinf(TWO_PI * d->ph) * expf(-t / d->decay);
-        float click = rnd(&d->rng) * expf(-t / 0.0025f) * 0.5f;
-        d->lp1 += (click - d->lp1) * 0.25f;
-        s = tanhf((body + d->lp1) * 1.8f) * 0.85f;
-        if (t > d->decay * 6.0f) d->on = 0;
-        break;
-    }
-    case D_SNARE: {
-        d->ph += d->tone / SR;
-        if (d->ph >= 1.0f) d->ph -= 1.0f;
-        float tone = (sinf(TWO_PI * d->ph) + 0.45f * sinf(TWO_PI * d->ph * 1.78f)) * expf(-t / 0.06f);
+        float shell = (sinf(TWO_PI * d->ph) + 0.45f * sinf(TWO_PI * d->ph * 1.78f)) * expf(-t / (d->rock ? 0.09f : 0.06f));
         float n = rnd(&d->rng);
-        d->hp1 += (n - d->hp1) * 0.12f;                     /* high-pass ~1 kHz */
+        d->hp1 += (n - d->hp1) * 0.13f;                     /* wires: high-pass ~1.2 kHz */
         float hn = n - d->hp1;
-        d->lp1 += (hn - d->lp1) * 0.55f;                    /* and soften the very top */
-        s = 0.55f * tone + 0.95f * d->lp1 * expf(-t / d->decay);
-        if (t > d->decay * 6.0f) d->on = 0;
+        d->lp1 += (hn - d->lp1) * 0.55f;                    /* low-pass ~7 kHz: a crack, not a hiss */
+        /* the wires: a burst, then a quieter tail (d->decay sets the tail) */
+        float wires = d->lp1 * ((d->rock ? 0.95f : 0.85f) * expf(-t / (d->rock ? 0.07f : 0.055f))
+                              + 0.25f * expf(-t / (d->decay * 0.85f)));
+        if (d->rock) {
+            float crack = hn * expf(-t / 0.0035f) * 1.0f;
+            s = tanhf((0.8f * shell + 1.2f * wires + crack) * 1.7f) * 0.85f;
+        } else s = 0.55f * shell + 1.0f * wires;
+        if (t > d->decay * 4.5f) d->on = 0;
         break;
     }
     case D_HAT: case D_RIDE: case D_CRASH: {
         float n = rnd(&d->rng), mt = metal(d);
         float x = d->kind == D_RIDE ? 0.6f * mt + 0.4f * n : d->kind == D_CRASH ? 0.45f * mt + 0.55f * n : 0.5f * mt + 0.5f * n;
-        float k = d->kind == D_HAT ? 0.5f : d->kind == D_RIDE ? 0.3f : 0.35f;
+        float k = d->kind == D_HAT ? (d->rock ? 0.6f : 0.5f) : d->kind == D_RIDE ? 0.3f : (d->rock ? 0.42f : 0.35f);
         d->hp1 += (x - d->hp1) * k;
         float h = x - d->hp1;
         d->hp2 += (h - d->hp2) * k;
         h = h - d->hp2;
         float att = d->kind == D_CRASH ? (t < 0.002f ? t / 0.002f : 1.0f) : 1.0f;
-        s = h * att * expf(-t / d->decay) * (d->kind == D_RIDE ? 0.8f + 0.2f * sinf(TWO_PI * 3200.0f * t) : 1.0f);
-        if (t > d->decay * 7.0f) d->on = 0;
+        float ping = d->kind == D_RIDE ? (d->rock ? 0.65f + 0.35f * sinf(TWO_PI * 3150.0f * t) * expf(-t / 0.4f)
+                                                  : 0.8f + 0.2f * sinf(TWO_PI * 3200.0f * t)) : 1.0f;
+        s = h * att * expf(-t / d->decay) * ping;
+        if (t > d->decay * 5.8f) d->on = 0;
         break;
     }
     case D_TOM: {
-        float f = d->tone * (1.0f + 0.6f * expf(-t / 0.045f));
+        float f = d->tone * (1.0f + (d->rock ? 0.9f : 0.6f) * expf(-t / (d->rock ? 0.06f : 0.045f)));
         d->ph += f / SR;
         if (d->ph >= 1.0f) d->ph -= 1.0f;
-        float n = rnd(&d->rng) * expf(-t / 0.02f) * 0.25f;
-        s = tanhf((sinf(TWO_PI * d->ph) * expf(-t / d->decay) + n) * 1.4f) * 0.9f;
+        float n = rnd(&d->rng) * expf(-t / 0.02f) * (d->rock ? 0.35f : 0.25f);
+        s = tanhf((sinf(TWO_PI * d->ph) * expf(-t / d->decay) + n) * (d->rock ? 2.0f : 1.4f)) * 0.9f;
         if (t > d->decay * 6.0f) d->on = 0;
         break;
     }
@@ -687,7 +818,73 @@ static void drum_run(Drum *d, float *l, float *r, float *rev) {
     s *= d->gain * 0.2f;                                    /* the kit sits with the original's */
     *l += s * d->pl;
     *r += s * d->pr;
-    *rev += s * (d->kind == D_KICK ? 0.04f : d->kind == D_SNARE ? 0.22f : d->kind == D_TOM ? 0.18f : 0.12f);
+    *room += s * d->room;
+}
+
+/* The drum bus: a small room (four short delay lines, a Hadamard mix) and,
+ * in the rock style, a parallel compressor -- the dry kit plus a squashed
+ * copy of it -- and a little saturation */
+#define RM_N 4
+static const int RM_LEN[RM_N] = {293, 421, 557, 683};
+static float rm_buf[RM_N][700], rm_lp[RM_N], rm_g[RM_N];
+static int rm_pos[RM_N];
+static float comp_env;
+
+static void room_init(void) {
+    for (int i = 0; i < RM_N; i++) {
+        rm_g[i] = powf(10.0f, -3.0f * (float)RM_LEN[i] / (SR * 0.45f));   /* 0.45 s to -60 dB */
+        rm_pos[i] = 0;
+        rm_lp[i] = 0.0f;
+    }
+    memset(rm_buf, 0, sizeof rm_buf);
+    comp_env = 0.0f;
+}
+
+static void drum_bus(float *l, float *r, float room_in, float *rev) {
+    float y[RM_N], h[RM_N];
+    for (int i = 0; i < RM_N; i++) {
+        float v = rm_buf[i][rm_pos[i]];
+        rm_lp[i] += (v - rm_lp[i]) * 0.5f;
+        y[i] = h[i] = rm_lp[i];
+    }
+    float a = h[0] + h[1], b = h[0] - h[1], c = h[2] + h[3], e = h[2] - h[3];
+    h[0] = (a + c) * 0.5f; h[1] = (b + e) * 0.5f; h[2] = (a - c) * 0.5f; h[3] = (b - e) * 0.5f;
+    for (int i = 0; i < RM_N; i++) {
+        rm_buf[i][rm_pos[i]] = room_in + h[i] * rm_g[i];
+        if (++rm_pos[i] >= RM_LEN[i]) rm_pos[i] = 0;
+    }
+    *l += (y[0] - y[2]) * 0.6f;
+    *r += (y[1] - y[3]) * 0.6f;
+    if (style == STYLE_ROCK) {
+        /* parallel compression: the dry kit, plus a copy squashed 3:1 (5 ms
+         * attack lets the hits through, 100 ms release) a third as loud --
+         * fuller tails without pumping -- and a touch of saturation */
+        float in = fmaxf(fabsf(*l), fabsf(*r));
+        comp_env += (in - comp_env) * (in > comp_env ? 0.0037f : 0.00019f);
+        float thr = 0.08f, gr = comp_env > thr ? powf(thr / comp_env, 0.667f) : 1.0f;
+        float k = 1.0f + 0.33f * 1.6f * gr;
+        *l = tanhf(*l * k * 1.6f) / 1.6f;
+        *r = tanhf(*r * k * 1.6f) / 1.6f;
+    }
+    *rev += (*l + *r) * 0.5f * (style == STYLE_ROCK ? 0.08f : 0.12f);
+}
+
+/* ------------------------------------------------------------------ songs */
+static uint32_t song_vt[0x34];                         /* each song's voice table: how to tell them apart */
+
+static void song_tables(void) {
+    static int done;
+    if (done || !m68k_rom) return;
+    done = 1;
+    for (int i = 0; i < 0x34; i++) {
+        uint32_t p = 0xD1C40u + (uint32_t)i * 4u;      /* MusicPtrs */
+        if (p + 4 > m68k_rom_size) return;
+        uint32_t hdr = (uint32_t)m68k_rom[p] << 24 | (uint32_t)m68k_rom[p + 1] << 16 | (uint32_t)m68k_rom[p + 2] << 8 | m68k_rom[p + 3];
+        hdr &= 0xFFFFFF;
+        if (hdr + 2 > m68k_rom_size) continue;
+        song_vt[i] = hdr + (uint32_t)(m68k_rom[hdr] << 8 | m68k_rom[hdr + 1]);
+    }
+    for (size_t i = 0; i < sizeof ROCK_SONGS; i++) song_style[ROCK_SONGS[i] - 0x81] = STYLE_ROCK;
 }
 
 /* ------------------------------------------------------------------ effects */
@@ -782,6 +979,11 @@ static void silence(void) {
     memset(drums, 0, sizeof drums);
     for (int i = 0; i < NVOICES; i++) voice[i].rng = 0x9E3779B9u * (uint32_t)(i + 1);
     fx_init();
+    room_init();
+    hat_running = 0;
+    sn_n = 0;
+    sn_last = -1e9;
+    memset(last_hit, 0, sizeof last_hit);
 }
 
 /* the console reset: the chips start over too */
@@ -801,6 +1003,21 @@ unsigned algol_psg_effects(void) { return fx_psg; }
 
 /* which channels the driver's sound-effect tracks hold: the music has the rest */
 void algol_driver_tick(void) {
+    /* the song: PlayMusic leaves its voice table's address at $FF5020 */
+    song_tables();
+    if (!user_loaded) load_user_map();
+    uint32_t vt = (uint32_t)m68k_ram[0x5021] << 16 | (uint32_t)m68k_ram[0x5022] << 8 | m68k_ram[0x5023];
+    int now_song = 0;
+    for (int i = 0; i < 0x34; i++) if (song_vt[i] && song_vt[i] == vt) { now_song = 0x81 + i; break; }
+    if (now_song != song) {
+        song = now_song;
+        style = song ? song_style[song - 0x81] : STYLE_STANDARD;
+        hat_running = 0;
+        sn_n = 0;
+        sn_last = -1e9;
+        if (log_on < 0) { const char *v = getenv("PSIV_ALGOL_LOG"); log_on = v ? atoi(v) : 0; }
+        if (log_on) printf("algol: song %02X, %s drums\n", song, style == STYLE_ROCK ? "rock" : "standard");
+    }
     unsigned fm = 0, psg = 0;
     for (int i = 0; i < 9; i++) {
         unsigned a = 0x5220u + (unsigned)i * 0x30u;
@@ -838,13 +1055,16 @@ void algol_render(float *left, float *right) {
         if (!(solo >> i & 1)) continue;
         l += vl; r += vr; rev += vrev; dly += vdly; cho += vcho;
     }
-    for (int i = 0; i < NDRUMS; i++) {
-        if (!drums[i].on) continue;
-        float dl = 0.0f, dr = 0.0f, drev = 0.0f;
-        drum_run(&drums[i], &dl, &dr, &drev);
-        if (!(solo >> 10 & 1)) continue;
-        l += dl; r += dr; rev += drev;
+    /* the hat on the eighths (rock style), then the kit through its bus */
+    if (style == STYLE_ROCK && hat_running) {
+        if (now - hat_last_drum > 8.0 * hat_p8) hat_running = 0;           /* the drums stopped */
+        else if (now >= hat_anchor + (double)hat_k * hat_p8) { rock_hat(hat_k % 2 == 0 ? 1.0f : 0.0f); hat_k++; }
     }
+    now += 1.0;
+    float bl = 0.0f, br = 0.0f, room = 0.0f, brev = 0.0f;
+    for (int i = 0; i < NDRUMS; i++) if (drums[i].on) drum_run(&drums[i], &bl, &br, &room);
+    drum_bus(&bl, &br, room, &brev);
+    if (solo >> 10 & 1) { l += bl; r += br; rev += brev; }
     float el = 0.0f, er = 0.0f;
     reverb(rev, &el, &er);
     chorus(cho, &el, &er);

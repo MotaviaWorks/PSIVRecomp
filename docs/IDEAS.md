@@ -193,6 +193,17 @@ crash are synthesized; 7 (a pitched instrument, Ryucross Field), 8 (a voice),
   in both chips) and loudness / band balance measurements: each part within
   ~2 dB of the original, the mix at its loudness; matching the FM's fizz is
   not the aim (a modern tilt instead, with a little air on the master).
+- **Hard rock drums for the tense songs** (PsiLok, 2026-11-04; done): the song
+  playing is known from $FF5020, where PlayMusic leaves its voice table's
+  address (unique for all 52; table MusicPtrs at ROM $D1C40). Rock style
+  for $AC (the title), $8F, $95, $A0, $98, $A9 (algol.ini: `song XX = rock /
+  standard`): rock variants of each drum, a four-line room and a parallel
+  bus compressor, and a closed hat on the eighths -- the backbeat is the
+  commonest gap between snares (rolls under 0.4 s ignored, ties to the one
+  nearest ~0.85 s), re-locked on every snare on the grid (8F: 0.200 s
+  eighths; the title: 0.213 s). The game's two drum tracks can write the
+  same sample in one tick: deduplicated (the console plays one sample at a
+  time; Algol's kit rings together).
 - **Next:** per-song picks by ear with PsiLok (he produces: his choice of
   sounds is the point); the PSG echo copies as one voice through a real
   delay; a MIDI export of the decoded notes (for remixing); a "your bank"
