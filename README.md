@@ -54,9 +54,11 @@ original game, unchanged; **Enhanced** turns on the additions:
   different depths under a gently moving camera that leans in on attacks.
 - **Battle fog** (F8: off / light / heavy): drifting mist between the enemies
   and the party, tinted from each battle's background.
+- **Battle effects** (off / subtle / full): the game's own attack and
+  technique sprites light the scene in their colours, sparks and a flash
+  where hits land, embers rising from fire, a lens flare at bright moments.
 
-Planned (see `docs/IDEAS.md`): attack flashes, flares and particles, modern
-text, 16:9 widescreen.
+Planned (see `docs/IDEAS.md`): modern text, 16:9 widescreen.
 
 ### Headless runs
 

@@ -33,6 +33,14 @@ void        depth_set_fog(int level);
 int         depth_get_fog(void);
 const char *depth_fog_name(int level);
 
+/* Battle effects: the game's own attack and technique sprites light the
+ * scene (fire glows orange...), sparks and a flash where hits land, embers
+ * from fire, a lens flare at bright moments. 0 off, 1 subtle, 2 full. */
+#define FX_LEVELS 3
+void        depth_set_fx(int level);
+int         depth_get_fx(void);
+const char *depth_fx_name(int level);
+
 /* Call once per displayed frame, with that frame's layers. In a battle with
  * the effect on (or still easing out), composes the frame at `scale` times
  * the game's resolution into out (out_stride pixels per row, 0xAARRGGBB) and

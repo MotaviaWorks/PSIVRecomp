@@ -21,7 +21,7 @@ composited at the window's resolution so motion is sub-pixel smooth.
 Game context (enemies, techniques and their elements, locations):
 https://phantasystar.fandom.com/wiki/Phantasy_Star_IV:_The_End_of_the_Millennium
 
-## Battle atmosphere and effects (PsiLok, 2026-11-03)
+## Battle atmosphere and effects (PsiLok, 2026-11-03) -- fog, light, sparks, embers, flares done
 - **Fog between the party and the enemies**: an animated, semi-transparent
   layer in the depth stack, tinted from the battle background.
 - **Attack effects**: hit flashes, optical/lens flares, glow on spells.

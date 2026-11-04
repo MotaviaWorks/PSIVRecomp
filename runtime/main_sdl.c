@@ -103,6 +103,7 @@ static Setting settings[] = {
     {"enhance.mode", "enhanced", "enhanced = the port's additions below are on; classic = the original game, unchanged (Esc menu > Settings)"},
     {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
+    {"enhance.battle_fx", "1", "attack and technique effects light the scene; sparks, flashes, embers, lens flares: 0 off, 1 subtle, 2 full"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
     {"keys.down", "Down", ""},
     {"keys.left", "Left", ""},
@@ -507,6 +508,7 @@ static int classic_mode(void) { return !strcmp(setting("enhance.mode"), "classic
 static void apply_enhancements(void) {
     depth_set_level(classic_mode() ? 0 : setting_int("enhance.battle_depth"));
     depth_set_fog(classic_mode() ? 0 : setting_int("enhance.battle_fog"));
+    depth_set_fx(classic_mode() ? 0 : setting_int("enhance.battle_fx"));
 }
 
 static void apply_video(void) {
@@ -539,6 +541,7 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Mode", "enhance.mode", {"enhanced", "classic"}, {"Enhanced", "Classic"}, 0, 0, 0, 0, NULL, apply_enhancements},
     {"Battle depth", "enhance.battle_depth", {"0", "1", "2"}, {"Off", "Subtle", "Strong"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Text", NULL, {0}, {0}, 0, 0, 0, 1, "Original - modern soon", NULL},
     {"Aspect", "video.aspect", {"square", "4:3"}, {"Square pixels", "4:3 TV"}, 0, 0, 0, 0, NULL, NULL},
     {"Widescreen", NULL, {0}, {0}, 0, 0, 0, 1, "16:9 - soon", NULL},
