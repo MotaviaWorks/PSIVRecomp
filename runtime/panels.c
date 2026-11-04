@@ -190,20 +190,35 @@ void panels_draw(uint32_t *out, int stride, int S, int margin, int view_w, int h
         if (id & 0x80) break;
         if (id < 11) ids[n++] = (int)id;
     }
+    {   /* PSIV_PANELS_PARTY=0,1,2,3,4: show these characters instead (layout testing) */
+        const char *test = getenv("PSIV_PANELS_PARTY");
+        if (test && *test) {
+            n = 0;
+            for (const char *t = test; *t && n < 5;) {
+                ids[n++] = atoi(t) % 11;
+                while (*t && *t != ',') t++;
+                if (*t == ',') t++;
+            }
+        }
+    }
+    /* cards are sized for a full party of five and the stack is centred, so
+     * a smaller party sits in the middle with space above and below */
     float gap = pad * 0.6f;
-    float card_h = n ? (H - 2 * pad - (float)(n - 1) * gap) / (float)n : 0;
-    if (card_h > P * 1.35f) card_h = P * 1.35f;
+    float card_h = (H - 2 * pad - 4 * gap) / 5.0f;
+    float top = (H - ((float)n * card_h + (float)(n > 0 ? n - 1 : 0) * gap)) / 2.0f;
     for (int k = 0; k < n; k++) {
         unsigned base = CHAR_STATS + (unsigned)ids[k] * 0x80;
         unsigned level = ram16(base + 0x08), hp = ram16(base + 0x0E), mhp = ram16(base + 0x10);
         unsigned tp = ram16(base + 0x12), mtp = ram16(base + 0x14), status = ram8(base + 0x16);
         uint32_t exp = ram32(base + 0x0A);
         int dead = (status & 0x44) != 0;
-        float cx0 = pad, cy0 = pad + (float)k * (card_h + gap), cx1 = P - pad, cy1 = cy0 + card_h;
+        float cx0 = pad, cy0 = top + (float)k * (card_h + gap), cx1 = P - pad, cy1 = cy0 + card_h;
         round_rect(&left, cx0, cy0, cx1, cy1, P * 0.05f, 0x2E4C9A, 140);              /* border */
         round_rect(&left, cx0 + 1, cy0 + 1, cx1 - 1, cy1 - 1, P * 0.05f, 0x12204A, 235);
-        float ip = pad * 0.7f, ps = fminf((cx1 - cx0) * 0.42f, card_h * 0.40f);
-        if (ps >= 96.0f) ps = 96.0f; else if (ps >= 44.0f) ps = 48.0f;    /* 1x or 2x: even pixels */
+        /* the portrait at a whole multiple of its 48 pixels where it fits,
+         * so the pixel art stays even; scaled down only in small windows */
+        float ip = pad * 0.7f, room = fminf((cx1 - cx0) * 0.5f, card_h * 0.42f), ps;
+        ps = room >= 96.0f ? 96.0f : room >= 46.0f ? 48.0f : room;
         float px = cx0 + ip, py = cy0 + ip;
         if (portraits[ids[k]].rgba) {
             round_rect(&left, px, py, px + ps, py + ps, ps * 0.16f, 0x1C2C5E, 255);
@@ -213,7 +228,7 @@ void panels_draw(uint32_t *out, int stride, int S, int margin, int view_w, int h
             char ini[2] = {NAMES[ids[k]][0], 0};
             text(&left, px + ps * 0.3f, py + ps * 0.72f, ps * 0.45f, ini, 0xE8ECFF);
         }
-        float tx = px + ps + ip, name_cap = ps * 0.27f;
+        float tx = px + ps + ip, name_cap = fmaxf(ps * 0.27f, P * 0.1f);   /* text grows with the panel */
         text(&left, tx, py + name_cap * 1.35f, name_cap, NAMES[ids[k]], dead ? 0x8890A8 : 0xFFFFFF);
         char buf[48];
         snprintf(buf, sizeof buf, "Lv %u", level);
