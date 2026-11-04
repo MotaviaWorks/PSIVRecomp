@@ -101,6 +101,7 @@ static Setting settings[] = {
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed"},
     {"audio.volume", "100", "0-200 percent"},
     {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
+    {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
     {"keys.down", "Down", ""},
     {"keys.left", "Left", ""},
@@ -438,17 +439,35 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     SDL_RenderPresent(renderer);
 }
 
+/* store a changed setting and save psiv.ini */
+static void save_setting_int(const char *key, int v) {
+    for (int i = 0; i < NSETTINGS; i++)
+        if (!strcmp(settings[i].key, key)) snprintf(settings[i].value, sizeof settings[i].value, "%d", v);
+    char path[1100];
+    path_in_home(path, sizeof path, "psiv.ini");
+    write_settings(path);
+}
+
+static void show_enhancements(void) {
+    char title[128];
+    snprintf(title, sizeof title, "Phantasy Star IV - battle depth: %s, fog: %s",
+             depth_level_name(depth_get_level()), depth_fog_name(depth_get_fog()));
+    SDL_SetWindowTitle(window, title);
+    SDL_Log("%s", title);
+}
+
 static void cycle_battle_depth(void) {
     int l = (depth_get_level() + 1) % DEPTH_LEVELS;
     depth_set_level(l);
-    for (int i = 0; i < NSETTINGS; i++)
-        if (!strcmp(settings[i].key, "enhance.battle_depth")) snprintf(settings[i].value, sizeof settings[i].value, "%d", l);
-    char path[1100], title[96];
-    path_in_home(path, sizeof path, "psiv.ini");
-    write_settings(path);
-    snprintf(title, sizeof title, "Phantasy Star IV - battle depth: %s", depth_level_name(l));
-    SDL_SetWindowTitle(window, title);
-    SDL_Log("battle depth: %s", depth_level_name(l));
+    save_setting_int("enhance.battle_depth", l);
+    show_enhancements();
+}
+
+static void cycle_battle_fog(void) {
+    int l = (depth_get_fog() + 1) % FOG_LEVELS;
+    depth_set_fog(l);
+    save_setting_int("enhance.battle_fog", l);
+    show_enhancements();
 }
 
 /* ------------------------------------------------------------------ frame and audio */
@@ -476,6 +495,7 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             }
             if (e.key.key == SDLK_F10) paused = !paused;
             if (e.key.key == SDLK_F9) cycle_battle_depth();
+            if (e.key.key == SDLK_F8) cycle_battle_fog();
             if (e.key.key == SDLK_F11)
                 SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
             break;
@@ -528,6 +548,7 @@ int main(int argc, char **argv) {
     open_log();
     load_settings();
     depth_set_level(setting_int("enhance.battle_depth"));
+    depth_set_fog(setting_int("enhance.battle_fog"));
     resolve_bindings();
 
     int scale = setting_int("video.scale");

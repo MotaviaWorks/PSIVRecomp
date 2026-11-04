@@ -749,6 +749,8 @@ int main(int argc, char **argv) {
             depth_scale = *e == ':' ? atoi(e + 1) : 2;
             if (depth_scale < 1) depth_scale = 1;
             if (depth_scale > 4) depth_scale = 4;
+        } else if (!strcmp(argv[i], "--fog") && i + 1 < argc) {
+            depth_set_fog(atoi(argv[++i]));                /* battle fog level (with --depth) */
         } else if (!strcmp(argv[i], "--shot-range") && i + 1 < argc) {
             char *e;                                       /* F1-F2: limit --shot-every */
             shot_from = strtoull(argv[++i], &e, 10);

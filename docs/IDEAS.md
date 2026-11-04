@@ -18,6 +18,9 @@ composited at the window's resolution so motion is sub-pixel smooth.
 - Next: battle **fog**, hit **flashes / flares / particles** (below), vehicle
   battles (different layout, not checked yet).
 
+Game context (enemies, techniques and their elements, locations):
+https://phantasystar.fandom.com/wiki/Phantasy_Star_IV:_The_End_of_the_Millennium
+
 ## Battle atmosphere and effects (PsiLok, 2026-11-03)
 - **Fog between the party and the enemies**: an animated, semi-transparent
   layer in the depth stack, tinted from the battle background.

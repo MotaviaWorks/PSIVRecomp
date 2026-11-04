@@ -20,10 +20,18 @@
 #include "vdp.h"
 
 #define DEPTH_LEVELS 3
+#define FOG_LEVELS   3
 
 void        depth_set_level(int level);
 int         depth_get_level(void);
 const char *depth_level_name(int level);
+
+/* Battle fog: drifting mist between the enemies and the party, tinted from
+ * the battle background. 0 off, 1 light, 2 heavy. Works with any depth level
+ * (with depth off it is the only change). */
+void        depth_set_fog(int level);
+int         depth_get_fog(void);
+const char *depth_fog_name(int level);
 
 /* Call once per displayed frame, with that frame's layers. In a battle with
  * the effect on (or still easing out), composes the frame at `scale` times

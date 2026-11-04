@@ -57,6 +57,53 @@ static const char *NAMES[DEPTH_LEVELS] = {"off", "subtle", "strong"};
 
 static int level;
 static Params cur;                       /* eased toward LEVEL_PARAMS[level] */
+
+/* fog: maximum opacity per level, eased like the camera parameters */
+static const float FOG_ALPHA[FOG_LEVELS] = {0.0f, 0.42f, 0.68f};
+static const char *FOG_NAMES[FOG_LEVELS] = {"off", "light", "heavy"};
+#define F_FOG   0.8f                     /* the fog sheet sits between enemies and party */
+static int fog_level = 1;
+static float fog_cur;
+static float fog_tint[3];                /* eased toward the background's colour */
+static int fog_tint_valid;
+
+void depth_set_fog(int l) { fog_level = l < 0 ? 0 : l >= FOG_LEVELS ? FOG_LEVELS - 1 : l; }
+int depth_get_fog(void) { return fog_level; }
+const char *depth_fog_name(int l) { return FOG_NAMES[l < 0 || l >= FOG_LEVELS ? 0 : l]; }
+
+/* tileable 256x256 value noise, 3 octaves, 0..255 */
+#define NOISE 256
+static uint8_t noise[NOISE][NOISE];
+static int noise_ready;
+
+static float hash01(int x, int y, int seed) {
+    uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u + (uint32_t)seed * 2246822519u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return (float)((h ^ (h >> 16)) & 0xFFFF) / 65535.0f;
+}
+
+static float value_noise(float x, float y, int period, int seed) {
+    int x0 = (int)floorf(x), y0 = (int)floorf(y);
+    float fx = x - (float)x0, fy = y - (float)y0;
+    fx = fx * fx * (3.0f - 2.0f * fx);
+    fy = fy * fy * (3.0f - 2.0f * fy);
+    int x1 = x0 + 1, y1 = y0 + 1;
+    x0 = ((x0 % period) + period) % period; x1 = ((x1 % period) + period) % period;
+    y0 = ((y0 % period) + period) % period; y1 = ((y1 % period) + period) % period;
+    float a = hash01(x0, y0, seed), b = hash01(x1, y0, seed), c = hash01(x0, y1, seed), d = hash01(x1, y1, seed);
+    return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
+}
+
+static void make_noise(void) {
+    for (int y = 0; y < NOISE; y++)
+        for (int x = 0; x < NOISE; x++) {
+            float n = 0.55f * value_noise(x / 64.0f, y / 64.0f, 4, 1)
+                    + 0.30f * value_noise(x / 32.0f, y / 32.0f, 8, 2)
+                    + 0.15f * value_noise(x / 16.0f, y / 16.0f, 16, 3);
+            noise[y][x] = (uint8_t)(fminf(1.0f, fmaxf(0.0f, n)) * 255.0f);
+        }
+    noise_ready = 1;
+}
 static float ramp;                       /* 0..1, eases the effect in at battle start */
 static float t;                          /* seconds of battle shown */
 static float pan_x, pan_y, zoom_extra;   /* camera, eased */
@@ -104,12 +151,15 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     ease(&cur.pan, tp->pan, k);
     ease(&cur.shake, tp->shake, k);
 
+    ease(&fog_cur, FOG_ALPHA[fog_level], k);
     if (mode != MODE_BATTLE) {
         ramp = t = pan_x = pan_y = zoom_extra = shake_amp = 0.0f;
         last_popups = 0;
+        fog_tint_valid = 0;
         return 0;
     }
-    if (level == 0 && cur.drift_x < 0.02f && cur.zoom < 0.0005f) return 0;   /* eased out */
+    if (level == 0 && cur.drift_x < 0.02f && cur.zoom < 0.0005f && fog_cur < 0.005f) return 0;   /* all eased out */
+    if (!noise_ready) make_noise();
     if (scale > MAX_SCALE) scale = MAX_SCALE;
     if (scale < 1) scale = 1;
     ramp = fminf(1.0f, ramp + dt / 0.6f);
@@ -201,19 +251,79 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     uint32_t pal[128];
     for (int i = 0; i < 64; i++) pal[i] = pal[i + 64] = vdp_color(i);
 
+    /* fog: tinted from the background's average colour (eased, so flashes
+     * don't make it flicker), densest along the floor, two drifting octaves */
+    int fog_on = fog_cur > 0.005f;
+    static uint8_t fog_row1[VDP_MAX_H * MAX_SCALE], fog_row2[VDP_MAX_H * MAX_SCALE];
+    static uint8_t fog_col1[VDP_MAX_W * MAX_SCALE], fog_col2[VDP_MAX_W * MAX_SCALE];
+    static uint16_t fog_profile[VDP_MAX_H * MAX_SCALE];
+    int tint_r = 0, tint_g = 0, tint_b = 0;
+    if (fog_on) {
+        long sr = 0, sg = 0, sb = 0, n = 0;
+        for (int y = 0; y < h * 6 / 7; y += 4)
+            for (int x = 0; x < w; x += 4) {
+                uint32_t c = pal[layer[L_BG][y][x] & 0x3F];
+                sr += c >> 16 & 255; sg += c >> 8 & 255; sb += c & 255; n++;
+            }
+        float target[3] = {(float)sr / (float)n * 0.5f + 105.0f, (float)sg / (float)n * 0.5f + 105.0f,
+                           (float)sb / (float)n * 0.5f + 112.0f};
+        for (int i = 0; i < 3; i++) {
+            if (!fog_tint_valid) fog_tint[i] = target[i];
+            else ease(&fog_tint[i], target[i], 1.0f - expf(-dt / 0.5f));
+        }
+        fog_tint_valid = 1;
+        tint_r = (int)fog_tint[0]; tint_g = (int)fog_tint[1]; tint_b = (int)fog_tint[2];
+        float s_fog = 1.0f + F_FOG * (zoom - 1.0f);
+        for (int X = 0; X < ow; X++) {
+            float q = ((float)X + 0.5f) / (float)scale;
+            float fx = w / 2.0f + (q - w / 2.0f) / s_fog + F_FOG * cam_x;
+            fog_col1[X] = (uint8_t)(int)floorf(fx * 0.8f + t * 5.0f);
+            fog_col2[X] = (uint8_t)(int)floorf(fx * 1.6f - t * 9.0f + 97.0f);
+        }
+        for (int Y = 0; Y < oh; Y++) {
+            float q = ((float)Y + 0.5f) / (float)scale;
+            float fy = h / 2.0f + (q - h / 2.0f) / s_fog + F_FOG * cam_y;
+            fog_row1[Y] = (uint8_t)(int)floorf(fy * 0.8f);
+            fog_row2[Y] = (uint8_t)(int)floorf(fy * 1.6f + t * 2.0f + 41.0f);
+            /* thickest along the floor (y ~120-175), gone where the background ends (~192) */
+            float a = (q - 20.0f) / 100.0f, b = (195.0f - q) / 20.0f;
+            a = a < 0 ? 0 : a > 1 ? 1 : a * a * (3 - 2 * a);
+            b = b < 0 ? 0 : b > 1 ? 1 : b * b * (3 - 2 * b);
+            a *= b;
+            fog_profile[Y] = (uint16_t)(a * fog_cur * 256.0f);
+        }
+    }
+
     for (int Y = 0; Y < oh; Y++) {
         int vu = Y / scale, ve = row_en[Y], vp = row_pa[Y], vb = row_bg[Y];
         uint32_t *dst = out + (size_t)Y * (size_t)out_stride;
+        const uint8_t *nrow1 = noise[fog_row1[Y]], *nrow2 = noise[fog_row2[Y]];
+        int prof = fog_profile[Y];
         for (int X = 0; X < ow; X++) {
-            int u, c;
+            int u = -1, c;
+            /* in front of the fog: cursor over an enemy, windows, party */
             if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_POINTER][ve][u]) != 0) { dst[X] = pal[c & 0x3F]; continue; }
             if ((c = layer[L_UI][vu][X / scale]) != 0) { dst[X] = pal[c & 0x3F]; continue; }
             if (vp >= 0 && (u = col_pa[X]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0) { dst[X] = pal[c & 0x3F]; continue; }
-            if (ve >= 0 && (u = col_en[X]) >= 0) {
-                if ((c = layer[L_ACTION][ve][u]) != 0) { dst[X] = pal[c & 0x3F]; continue; }
-                if ((c = layer[L_ENEMY][ve][u]) != 0) { dst[X] = pal[c & 0x3F]; continue; }
+            /* behind it: action, enemies, background */
+            uint32_t far;
+            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_ACTION][ve][u]) != 0) far = pal[c & 0x3F];
+            else if (ve >= 0 && u >= 0 && (c = layer[L_ENEMY][ve][u]) != 0) far = pal[c & 0x3F];
+            else far = pal[layer[L_BG][vb][col_bg[X]] & 0x3F];
+            if (fog_on && prof) {
+                int d = (nrow1[fog_col1[X]] * 5 + nrow2[fog_col2[X]] * 3) >> 3;   /* 0..255 */
+                d = (d - 80) * 2;                                                 /* contrast: wisps */
+                if (d > 0) {
+                    if (d > 255) d = 255;
+                    int a = (d * prof) >> 8;                                      /* 0..256 */
+                    int r = far >> 16 & 255, g = far >> 8 & 255, b = far & 255;
+                    r += ((tint_r - r) * a) >> 8;
+                    g += ((tint_g - g) * a) >> 8;
+                    b += ((tint_b - b) * a) >> 8;
+                    far = 0xFF000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+                }
             }
-            dst[X] = pal[layer[L_BG][vb][col_bg[X]] & 0x3F];
+            dst[X] = far;
         }
     }
     return 1;
