@@ -98,6 +98,7 @@ static Setting settings[] = {
     {"video.scale", "3", "window size at start, in multiples of the game's resolution"},
     {"video.fullscreen", "0", "1 = start fullscreen (F11 toggles)"},
     {"video.integer_scaling", "1", "1 = whole-number scaling only (sharpest)"},
+    {"video.widescreen", "1", "16:9 widescreen in the field and in battles (other screens keep their shape): 0 off, 1 on"},
     {"video.aspect", "square", "square = square pixels; 4:3 = the console's TV shape (pixels a bit narrower)"},
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed"},
     {"audio.volume", "100", "0-200 percent"},
@@ -506,8 +507,27 @@ static void cycle_battle_fog(void) {
  * font for now. */
 static int classic_mode(void) { return !strcmp(setting("enhance.mode"), "classic"); }
 
+/* widescreen margin for the current settings: 16:9 is 400 pixels wide with
+ * square pixels, 424 with the 4:3 TV pixel shape */
+static int wide_margin(void) {
+    if (classic_mode() || !setting_int("video.widescreen")) return 0;
+    return strcmp(setting("video.aspect"), "4:3") ? 40 : 52;
+}
+
+/* keep the window's height and give it the frame's shape */
+static void fit_window(void) {
+    if (!window || SDL_GetWindowFlags(window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED)) return;
+    int ww, wh;
+    SDL_GetWindowSize(window, &ww, &wh);
+    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / (320.0f / 224.0f);
+    float fw = (float)(320 + 2 * wide_margin()) * par;
+    SDL_SetWindowSize(window, (int)lrintf((float)wh * fw / 224.0f), wh);
+}
+
 /* what the enhancement settings mean right now (Classic turns them all off) */
 static void apply_enhancements(void) {
+    int m = wide_margin();
+    if (m != frame_wide_margin) { frame_wide_margin = m; fit_window(); }
     depth_set_level(classic_mode() ? 0 : setting_int("enhance.battle_depth"));
     depth_set_fog(classic_mode() ? 0 : setting_int("enhance.battle_fog"));
     depth_set_fx(classic_mode() ? 0 : setting_int("enhance.battle_fx"));
@@ -547,8 +567,8 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Sound effects", "enhance.sfx", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Text", NULL, {0}, {0}, 0, 0, 0, 1, "Original - modern soon", NULL},
-    {"Aspect", "video.aspect", {"square", "4:3"}, {"Square pixels", "4:3 TV"}, 0, 0, 0, 0, NULL, NULL},
-    {"Widescreen", NULL, {0}, {0}, 0, 0, 0, 1, "16:9 - soon", NULL},
+    {"Widescreen", "video.widescreen", {"0", "1"}, {"Off", "16:9"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Aspect", "video.aspect", {"square", "4:3"}, {"Square pixels", "4:3 TV"}, 0, 0, 0, 0, NULL, apply_enhancements},
     {"Pixels", "video.filter", {"nearest", "linear"}, {"Sharp", "Smooth"}, 0, 0, 0, 0, NULL, apply_video},
     {"Integer scaling", "video.integer_scaling", {"1", "0"}, {"On", "Off"}, 0, 0, 0, 0, NULL, NULL},
     {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0, NULL, apply_video},
@@ -832,7 +852,7 @@ int main(int argc, char **argv) {
 
     int scale = setting_int("video.scale");
     if (scale < 1) scale = 1;
-    if (!SDL_CreateWindowAndRenderer("Phantasy Star IV", 320 * scale, 224 * scale,
+    if (!SDL_CreateWindowAndRenderer("Phantasy Star IV", (320 + 2 * wide_margin()) * scale, 224 * scale,
                                      SDL_WINDOW_RESIZABLE, &window, &renderer)) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Phantasy Star IV", SDL_GetError(), NULL);
         return 1;

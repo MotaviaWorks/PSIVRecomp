@@ -30,9 +30,34 @@ uint32_t frame_pixels[VDP_MAX_W * VDP_MAX_H];
 uint64_t frame_count;
 int frame_pending_lag;
 VdpLine frame_lines[VDP_MAX_H];
+int frame_wide_margin;
+
+/* Widescreen draws in the field and in battles (and the fades into them):
+ * the planes hold more of the map than the 320-pixel view, and battles get
+ * their background mirrored into the margins (depth.c). Screens built for
+ * exactly 320 pixels (title, intro, menus) stay as they are, pillarboxed. */
+#define GAME_MODE_INDEX 0xEF00u
+static int wide_allowed(void) {
+    int mode = (m68k_ram[GAME_MODE_INDEX] << 8 | m68k_ram[GAME_MODE_INDEX + 1]) / 4;
+    return mode >= 2 && mode <= 5;      /* LoadFieldMap, Field, LoadBattle, Battle */
+}
+
+/* Widescreen and objects (see IMM_OVERRIDES in tools/emit.py): the game's
+ * sprite builders drop pieces at screen x 320 or beyond. While frames are
+ * drawn wide they keep them out to x 383, as long as the sprite table has
+ * room (d6 is the next entry); otherwise the original limit applies. */
+uint32_t psiv_sprite_xlimit(uint32_t d6) {
+    if (vdp_view_x0 >= 0) return 0x17F;
+    return (d6 & 0xFF) < 80 ? 0x1BF : 0;
+}
 
 void frame_run(void) {
-    int w = vdp_width(), h = vdp_height();
+    int h = vdp_height(), mw = vdp_width();
+    int m = frame_wide_margin > VDP_WIDE_MAX ? VDP_WIDE_MAX : frame_wide_margin;
+    int wide = m > 0 && mw == 320 && wide_allowed();
+    vdp_view_x0 = wide ? -m : 0;
+    vdp_view_w = wide ? mw + 2 * m : mw;
+    int w = vdp_view_w;
     int counter = vdp.reg[10];
 
     vdp.in_vblank = 0;

@@ -62,7 +62,14 @@ original game, unchanged; **Enhanced** turns on the additions:
   sounds, mapped by sound ID in `sfx/sfx.ini` (a file, or a folder played at
   random). The samples themselves stay out of git.
 
-Planned (see `docs/IDEAS.md`): modern text, 16:9 widescreen.
+- **16:9 widescreen** (on / off; 400 pixels wide, 424 with the 4:3 TV
+  shape): the field and battles show more to the left and right. Field
+  margins come straight from the game's planes, which hold more of the map
+  than the original view; objects are no longer dropped at the old right
+  edge; battle backgrounds are mirrored outward. The title, intro and other
+  screens built for 320 pixels keep their shape.
+
+Planned (see `docs/IDEAS.md`): modern text.
 
 ### Headless runs
 

@@ -46,7 +46,7 @@ text), `PaletteFX`/`Pipelines` (colour modes, filters), a mod system with
 profiles (hooks, asset swaps -- music replacement fits there), rulesets
 (faithful vs. quality-of-life), a save converter and save editor.
 
-## Widescreen
+## Widescreen -- v1 done (2026-11-03)
 Show more of the world to the left and right instead of a 320-pixel window.
 - **Needs:** a renderer that can draw past 320 px. The VDP's planes are 512 px
   wide or more, so field maps often already have the tiles; where they don't,

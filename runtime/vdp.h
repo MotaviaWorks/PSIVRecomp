@@ -12,8 +12,15 @@
 
 #include <stdint.h>
 
-#define VDP_MAX_W 320
+#define VDP_MAX_W 448            /* widest line drawn: 320 plus widescreen margins */
 #define VDP_MAX_H 240
+#define VDP_WIDE_MAX 64          /* largest widescreen margin on each side */
+
+/* The columns drawn: screen x from vdp_view_x0, vdp_view_w of them. Normally
+ * 0 and the mode's width (320); widescreen draws margins beyond both edges,
+ * straight from the planes (they hold more of the map than is shown) and the
+ * sprite table. Set by the frame loop before each frame. */
+extern int vdp_view_x0, vdp_view_w;
 
 typedef struct {
     uint8_t  vram[0x10000];

@@ -11,6 +11,7 @@
 #include <string.h>
 
 Vdp vdp;
+int vdp_view_x0 = 0, vdp_view_w = 320;
 static int vdp_debug;                 /* PSIV_DEBUG_VDP=1: log register changes to stderr */
 
 void vdp_reset(void) {
@@ -211,7 +212,9 @@ static uint16_t nt_entry(uint32_t base, int cx, int cy, int wcells) {
     return (uint16_t)(vdp.vram[a] << 8 | vdp.vram[a + 1]);
 }
 
-static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, int width) {
+/* each renderer draws screen columns x0 .. x0+width-1 into out[0..width-1];
+ * mode_w is the mode's own width (320 or 256): widescreen draws beyond it */
+static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, int x0, int width, int mode_w) {
     int wcells = plane_cells(vdp.reg[16] & 3), hcells = plane_cells(vdp.reg[16] >> 4 & 3);
     uint32_t base = plane == 0 ? (uint32_t)(vdp.reg[2] & 0x38) << 10 : (uint32_t)(vdp.reg[4] & 7) << 13;
     /* horizontal scroll: full screen, per 8-line cell, or per line */
@@ -222,30 +225,33 @@ static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, int 
     int hscroll = (vdp.vram[ha] << 8 | vdp.vram[ha + 1]) & 0x3FF;
     int vmode = vdp.reg[11] >> 2 & 1;
     int pw = wcells * 8, ph = hcells * 8;
-    for (int x = 0; x < width; x++) {
-        int col = vmode ? (x / 16) : 0;           /* per 2-cell column vertical scroll */
+    for (int i = 0; i < width; i++) {
+        int x = x0 + i;
+        int col = 0;                              /* per 2-cell column vertical scroll */
+        if (vmode) col = x < 0 ? 0 : x >= mode_w ? mode_w / 16 - 1 : x / 16;
         int vscroll = vdp.vsram[(col * 2 + plane) % 40] & 0x3FF;
         int px = (x - hscroll) & (pw - 1);
         int py = (y + vscroll) & (ph - 1);
         uint16_t e = nt_entry(base, px >> 3, py >> 3, wcells);
-        out[x] = tile_pixel(e, px & 7, py & 7);
-        if (entries) entries[x] = e;
+        out[i] = tile_pixel(e, px & 7, py & 7);
+        if (entries) entries[i] = e;
     }
 }
 
-static void render_window(int y, uint8_t *out, uint8_t *in_out, int width) {
-    int h40 = width == 320;
+static void render_window(int y, uint8_t *out, uint8_t *in_out, int x0, int width, int mode_w) {
+    int h40 = mode_w == 320;
     uint32_t base = (uint32_t)(vdp.reg[3] & (h40 ? 0x3C : 0x3E)) << 10;
     int wcells = h40 ? 64 : 32;
     int hpos = (vdp.reg[17] & 0x1F) * 16, right = vdp.reg[17] & 0x80;
     int vpos = (vdp.reg[18] & 0x1F) * 8, down = vdp.reg[18] & 0x80;
     int line_in = down ? y >= vpos : y < vpos;
-    for (int x = 0; x < width; x++) {
-        int in = line_in || (right ? x >= hpos : x < hpos);
-        in_out[x] = (uint8_t)in;
-        if (!in) { out[x] = 0; continue; }
+    for (int i = 0; i < width; i++) {
+        int x = x0 + i;                           /* widescreen margins: never window */
+        int in = x >= 0 && x < mode_w && (line_in || (right ? x >= hpos : x < hpos));
+        in_out[i] = (uint8_t)in;
+        if (!in) { out[i] = 0; continue; }
         uint16_t e = nt_entry(base, x >> 3, y >> 3, wcells);
-        out[x] = tile_pixel(e, x & 7, y & 7);
+        out[i] = tile_pixel(e, x & 7, y & 7);
     }
 }
 
@@ -254,10 +260,14 @@ static void render_window(int y, uint8_t *out, uint8_t *in_out, int width) {
  * set the collision flag, and the game stores that flag (VDP_Status_Reg). */
 #define SPRITE_MARGIN 32
 
-static void render_sprites(int y, uint8_t *out, uint8_t *who, int width) {
-    int h40 = width == 320;
+static void render_sprites(int y, uint8_t *out, uint8_t *who, int x0, int width, int mode_w) {
+    int h40 = mode_w == 320;
     uint32_t base = (uint32_t)(vdp.reg[5] & (h40 ? 0x7E : 0x7F)) << 9;
     int max_sprites = h40 ? 80 : 64, per_line = h40 ? 20 : 16, max_px = h40 ? 320 : 256;
+    if (width > mode_w) {                         /* widescreen: a wider line holds more sprites */
+        per_line = per_line * width / mode_w + 1;
+        max_px = width + 2 * SPRITE_MARGIN;
+    }
     int link = 0, count = 0, drawn = 0, pixels = 0, masked = 0, prev_on_line = 0;
     uint8_t seen[VDP_MAX_W + 2 * SPRITE_MARGIN];
     memset(seen, 0, sizeof seen);
@@ -281,26 +291,26 @@ static void render_sprites(int y, uint8_t *out, uint8_t *who, int width) {
             for (int cx = 0; cx < hs * 8; cx++) {
                 if (pixels++ >= max_px) { vdp.sprite_status |= 0x40; break; }
                 int x = sx + cx;
-                if (masked || x < -SPRITE_MARGIN || x >= width + SPRITE_MARGIN) continue;
+                if (masked || x < x0 - SPRITE_MARGIN || x >= x0 + width + SPRITE_MARGIN) continue;
                 int tx = (attr & 0x0800) ? hs * 8 - 1 - cx : cx;
                 /* sprite cells are stored column by column */
                 uint16_t tile = (uint16_t)((attr & 0x07FF) + (tx >> 3) * vs + (ty >> 3));
                 uint16_t e = (uint16_t)((attr & 0xE000) | (tile & 0x07FF));   /* flips already applied */
                 uint8_t p = tile_pixel(e, tx & 7, ty & 7);
                 if (!p) continue;
-                if (seen[x + SPRITE_MARGIN]) {                   /* two opaque sprite pixels: collision */
+                if (seen[x - x0 + SPRITE_MARGIN]) {              /* two opaque sprite pixels: collision */
                     vdp.sprite_status |= 0x20;
                     continue;
                 }
-                seen[x + SPRITE_MARGIN] = 1;
-                if (x >= 0 && x < width) { out[x] = p; who[x] = (uint8_t)me; }
+                seen[x - x0 + SPRITE_MARGIN] = 1;
+                if (x >= x0 && x < x0 + width) { out[x - x0] = p; who[x - x0] = (uint8_t)me; }
             }
         }
     } while (link && ++count < max_sprites);
 }
 
 void vdp_render_line(int y, VdpLine *l) {
-    int w = vdp_width();
+    int mw = vdp_width(), x0 = vdp_view_x0, w = vdp_view_w;
     l->backdrop = vdp.reg[7] & 0x3F;
     if (!(vdp.reg[1] & 0x40)) {                              /* display disabled */
         memset(l->plane_b, 0, (size_t)w);
@@ -310,10 +320,10 @@ void vdp_render_line(int y, VdpLine *l) {
         memset(l->sprite, 0, (size_t)w);
         return;
     }
-    render_plane(y, 1, l->plane_b, NULL, w);
-    render_plane(y, 0, l->plane_a, l->plane_a_tile, w);
-    render_window(y, l->window, l->win_in, w);
-    render_sprites(y, l->sprite, l->sprite_no, w);
+    render_plane(y, 1, l->plane_b, NULL, x0, w, mw);
+    render_plane(y, 0, l->plane_a, l->plane_a_tile, x0, w, mw);
+    render_window(y, l->window, l->win_in, x0, w, mw);
+    render_sprites(y, l->sprite, l->sprite_no, x0, w, mw);
 }
 
 void vdp_compose_line(const VdpLine *l, uint32_t *dst, int width) {

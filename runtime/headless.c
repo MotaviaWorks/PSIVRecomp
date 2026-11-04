@@ -756,6 +756,8 @@ int main(int argc, char **argv) {
             printf("sound effects: %d replaced from %s\n", n, argv[i]);
         } else if (!strcmp(argv[i], "--fx") && i + 1 < argc) {
             depth_set_fx(atoi(argv[++i]));                 /* battle effects level (with --depth) */
+        } else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
+            frame_wide_margin = atoi(argv[++i]);           /* widescreen: pixels beyond each side */
         } else if (!strcmp(argv[i], "--fog") && i + 1 < argc) {
             depth_set_fog(atoi(argv[++i]));                /* battle fog level (with --depth) */
         } else if (!strcmp(argv[i], "--shot-range") && i + 1 < argc) {

@@ -11,6 +11,11 @@ extern uint64_t frame_count;
  * recompose it, and for layer dumps). Valid inside platform_frame. */
 extern VdpLine frame_lines[VDP_MAX_H];
 
+/* Widescreen: pixels drawn beyond each side of the 320-pixel view where the
+ * game allows it (field, battles); 0 = off. platform_frame then gets the
+ * wider frame (width 320 + 2 * margin). Set by the front end. */
+extern int frame_wide_margin;
+
 /* Called once per frame after rendering, before the game's VInt runs: show
  * the frame, read input into bus_pad[], pace to 60 Hz. Implemented by the
  * front end (main_sdl.c, headless.c). */

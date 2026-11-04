@@ -464,7 +464,8 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         memset(light_grid, 0, sizeof light_grid);
         return 0;
     }
-    if (level == 0 && cur.drift_x < 0.02f && cur.zoom < 0.0005f && fog_cur < 0.005f && fx_cur < 0.005f)
+    int wide = vdp_view_x0 < 0;                               /* widescreen: margins to fill */
+    if (!wide && level == 0 && cur.drift_x < 0.02f && cur.zoom < 0.0005f && fog_cur < 0.005f && fx_cur < 0.005f)
         return 0;                                             /* all eased out */
     if (!noise_ready) make_noise();
     if (scale > MAX_SCALE) scale = MAX_SCALE;
@@ -513,6 +514,20 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             }
         }
     }
+    /* widescreen: battle backgrounds are drawn exactly 320 pixels wide, so
+     * where a line's margins are empty, mirror the background into them */
+    if (wide) {
+        int m = -vdp_view_x0, right0 = m + (w - 2 * m);
+        for (int y = 0; y < h; y++) {
+            int empty = 0;
+            for (int x = 0; x < m; x++) empty += lines[y].plane_b[x] == 0;
+            for (int x = right0; x < w; x++) empty += lines[y].plane_b[x] == 0;
+            if (empty * 10 < 2 * m * 9) continue;              /* the margins have art: keep it */
+            for (int x = 0; x < m; x++) layer[L_BG][y][x] = layer[L_BG][y][2 * m - 1 - x];
+            for (int x = right0; x < w; x++) layer[L_BG][y][x] = layer[L_BG][y][2 * right0 - 1 - x];
+        }
+    }
+
     /* high-priority sprites: menu cursors stay with their window, the
      * cursor over an enemy moves with the enemies */
     for (int id = 0; id < 128; id++) {
