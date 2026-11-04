@@ -110,7 +110,7 @@ static Setting settings[] = {
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
     {"enhance.text", "modern", "text: modern = redrawn with the font below at full resolution; original = the game's pixel font"},
     {"enhance.text_font", "C:/Windows/Fonts/segoeui.ttf", "TrueType/OpenType font for modern text"},
-    {"enhance.sfx", "modern", "sound effects: modern = your samples, mapped in sfx/sfx.ini; original = the game's own"},
+    {"enhance.sfx", "modern", "sound effects: modern = the port's own, synthesized; custom = your samples, mapped in sfx/sfx.ini (the rest modern); original = the game's own"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
     {"enhance.battle_fx", "1", "attack and technique effects light the scene; sparks, flashes, embers, lens flares: 0 off, 1 subtle, 2 full"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
@@ -564,7 +564,9 @@ static void apply_enhancements(void) {
     depth_set_level(classic_mode() ? 0 : setting_int("enhance.battle_depth"));
     depth_set_fog(classic_mode() ? 0 : setting_int("enhance.battle_fog"));
     depth_set_fx(classic_mode() ? 0 : setting_int("enhance.battle_fx"));
-    sfx_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.sfx"), "original") != 0);
+    const char *sm = setting("enhance.sfx");
+    sfx_set_mode(classic_mode() || !SDL_strcasecmp(sm, "original") ? SFX_ORIGINAL
+                 : !SDL_strcasecmp(sm, "custom") ? SFX_CUSTOM : SFX_MODERN);
     hdtext_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.text"), "original") != 0);
     battleui_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_ui"), "original") != 0);
 }
@@ -600,7 +602,7 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Battle depth", "enhance.battle_depth", {"0", "1", "2"}, {"Off", "Subtle", "Strong"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Sound effects", "enhance.sfx", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Sound effects", "enhance.sfx", {"modern", "custom", "original"}, {"Modern", "Your samples", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle menus", "enhance.battle_ui", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Widescreen", "video.widescreen", {"0", "1", "2"}, {"Off", "More map", "Side panels"}, 0, 0, 0, 1, NULL, apply_enhancements},
@@ -881,7 +883,7 @@ int main(int argc, char **argv) {
     {
         char dir[1100];
         path_in_home(dir, sizeof dir, "sfx");
-        SDL_Log("sound effects: %d replaced (%s/sfx.ini)", sfx_load(dir), dir);
+        SDL_Log("sound effects: %d synthesized; %d of yours (%s/sfx.ini)", sfx_synth_load(), sfx_load(dir), dir);
     }
     if (!hdtext_init(setting("enhance.text_font")))
         SDL_Log("modern text: font %s not loaded; text stays original", setting("enhance.text_font"));

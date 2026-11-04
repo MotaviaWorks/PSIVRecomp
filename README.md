@@ -58,9 +58,16 @@ original game, unchanged; **Enhanced** turns on the additions:
   technique sprites light the scene in their colours, sparks and a flash
   where hits land, embers rising from fire, a lens flare at bright moments.
 
-- **Sound effects** (modern / original): your own samples instead of chosen
-  sounds, mapped by sound ID in `sfx/sfx.ini` (a file, or a folder played at
-  random). The samples themselves stay out of git.
+- **Sound effects** (modern / your samples / original): *modern* is the port's
+  own set, synthesized at startup (`runtime/sfxsynth.c`), so nothing is
+  shipped: blade hits (a short swing, a slice, a ringing edge, a thump; hits
+  in quick succession overlap), the slasher's throw (the spin flying off and
+  coming back, timed to its hits, with Doppler), a menu-cursor tick and a
+  two-note chime for choices -- several variants each, picked at random.
+  *Your samples* maps sound IDs to your own WAVs in `sfx/sfx.ini` (a file, or
+  a folder played at random); IDs it doesn't map stay modern. Samples stay out
+  of git. `psiv_headless --sfx-dump DIR` writes every synthesized sound to
+  WAV files; `--sfx-synth` / `--sfx DIR` play them in headless runs.
 
 - **16:9 widescreen** (on / off; 400 pixels wide, 424 with the 4:3 TV
   shape): the field and battles show more to the left and right. Field
@@ -93,7 +100,8 @@ original game, unchanged; **Enhanced** turns on the additions:
   are the port's own (`runtime/battledesc.c`). Vehicle battles keep the
   original windows. Needs the modern-text font.
 
-Planned (see `docs/IDEAS.md`): generated sound effects for public builds.
+Planned (see `docs/IDEAS.md`): more of the sound set synthesized (techniques,
+enemy attacks, the field).
 
 ### Headless runs
 

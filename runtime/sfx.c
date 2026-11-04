@@ -2,6 +2,8 @@
  * Sound effect replacement: see sfx.h.
  */
 #include "sfx.h"
+#include "frame.h"
+#include "sfxsynth.h"
 #include "sound.h"
 
 #include <ctype.h>
@@ -24,6 +26,7 @@ typedef struct {
     int16_t *pcm[MAX_FILES];             /* stereo, SOUND_RATE */
     int frames[MAX_FILES];
     float gain;
+    int overlap;                         /* how many may sound at once; 1 = a new one cuts the last */
 } Bank;
 
 typedef struct {
@@ -33,9 +36,9 @@ typedef struct {
     uint8_t id;
 } Voice;
 
-static Bank banks[256];
+static Bank custom[256], synth[256];     /* your samples; the port's own */
 static Voice voices[MAX_VOICES];
-static int enabled, mapped;
+static int mode, n_custom, n_synth;
 static uint32_t rng = 0x2545F491u;
 
 static uint32_t next_rand(void) { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; }
@@ -161,6 +164,21 @@ static void add_path(Bank *b, const char *path) {
     }
 }
 
+/* every variant of one of the port's own recipes (sfxsynth.c) */
+static void add_synth(Bank *b, const char *name) {
+    const SfxRecipe *r = sfxsynth_find(name);
+    if (!r) { fprintf(stderr, "sfx: no synth recipe \"%s\"\n", name); return; }
+    for (int v = 0; v < r->variants && b->nfiles < MAX_FILES; v++) {
+        int frames = 0;
+        int16_t *pcm = sfxsynth_render(name, v, &frames);
+        if (!pcm) continue;
+        b->pcm[b->nfiles] = pcm;
+        b->frames[b->nfiles] = frames;
+        b->nfiles++;
+    }
+    b->overlap = r->overlap;
+}
+
 static char *trim(char *s) {
     while (isspace((unsigned char)*s)) s++;
     char *e = s + strlen(s);
@@ -187,34 +205,88 @@ int sfx_load(const char *dir) {
         if (comma) { *comma = 0; gain_db = (float)atof(comma + 1); }
         rhs = trim(rhs);
         if (id > 255 || !*rhs) continue;
-        Bank *b = &banks[id];
-        char target[1200];
-        snprintf(target, sizeof target, "%s/%s", dir, rhs);
-        add_path(b, target);
+        Bank *b = &custom[id];
+        if (!strncmp(rhs, "synth:", 6)) {                /* one of the port's own recipes */
+            add_synth(b, trim(rhs + 6));
+        } else {
+            char target[1200];
+            snprintf(target, sizeof target, "%s/%s", dir, rhs);
+            add_path(b, target);
+            b->overlap = 1;
+        }
         b->gain = powf(10.0f, gain_db / 20.0f);
         b->last = -1;
-        if (b->nfiles) mapped++;
+        if (b->nfiles) n_custom++;
     }
     fclose(f);
-    return mapped;
+    return n_custom;
 }
 
-void sfx_set_enabled(int on) { enabled = on && mapped; }
-int sfx_enabled(void) { return enabled; }
+/* the modern set: which recipe replaces which of the game's sounds */
+static const struct { uint8_t id; const char *recipe; float gain_db; } MODERN[] = {
+    {0xF5, "slash", 0.0f},          /* SFXID_Sword: every blade hit (swords, daggers, the slasher's hits) */
+    {0xB7, "slasher", 0.0f},        /* SFXID_Slasher: Alys's throw */
+    {0xF2, "cursor", 0.0f},         /* SFXID_MovingCursor */
+    {0xF3, "select", 0.0f},         /* SFXID_Selection */
+};
+
+int sfx_synth_load(void) {
+    if (n_synth) return n_synth;
+    for (size_t i = 0; i < sizeof MODERN / sizeof MODERN[0]; i++) {
+        Bank *b = &synth[MODERN[i].id];
+        add_synth(b, MODERN[i].recipe);
+        b->gain = powf(10.0f, MODERN[i].gain_db / 20.0f);
+        b->last = -1;
+        if (b->nfiles) n_synth++;
+    }
+    return n_synth;
+}
+
+int sfx_synth_dump(const char *dir) {
+    int n = 0;
+    for (int i = 0; i < sfxsynth_count(); i++) {
+        const SfxRecipe *r = sfxsynth_recipe(i);
+        for (int v = 0; v < r->variants; v++) {
+            int frames = 0;
+            int16_t *pcm = sfxsynth_render(r->name, v, &frames);
+            char path[1200];
+            snprintf(path, sizeof path, "%s/%s_v%d.wav", dir, r->name, v + 1);
+            if (pcm && sfxsynth_write_wav(path, pcm, frames)) n++;
+            free(pcm);
+        }
+    }
+    return n;
+}
+
+void sfx_set_mode(int m) { mode = m; }
+int sfx_mode(void) { return mode; }
+int sfx_enabled(void) { return mode == SFX_CUSTOM ? n_custom + n_synth > 0 : mode == SFX_MODERN ? n_synth > 0 : 0; }
+
+static Bank *bank_for(uint8_t id) {
+    if (mode == SFX_CUSTOM && custom[id].nfiles) return &custom[id];
+    if (mode != SFX_ORIGINAL && synth[id].nfiles) return &synth[id];
+    return NULL;
+}
 
 int sfx_request(uint8_t id) {
     static int log_on = -1;                              /* PSIV_SFX_LOG=1: every request, replaced or not */
     if (log_on < 0) { const char *e = getenv("PSIV_SFX_LOG"); log_on = e && *e == '1'; }
-    Bank *b = &banks[id];
-    if (log_on) fprintf(stderr, "sound request %02X%s\n", id, enabled && b->nfiles ? " (replaced)" : "");
-    if (!enabled || !b->nfiles) return 0;
+    Bank *b = bank_for(id);
+    if (log_on) fprintf(stderr, "frame %llu: sound request %02X%s\n", (unsigned long long)frame_count, id,
+                        b ? " (replaced)" : "");
+    if (!b) return 0;
     int pick = b->nfiles == 1 ? 0 : (int)(next_rand() % (uint32_t)b->nfiles);
     if (b->nfiles > 1 && pick == b->last) pick = (pick + 1) % b->nfiles;   /* no immediate repeats */
     b->last = pick;
-    /* the same sound again cuts the previous one short (a 30 ms fade) */
+    /* past its overlap, the same sound again cuts the oldest one short (a 30 ms fade) */
+    int sounding = 0, oldest = -1;
     for (int i = 0; i < MAX_VOICES; i++)
-        if (voices[i].pcm && voices[i].id == id && voices[i].fade_step >= 0)
-            voices[i].fade_step = -1.0f / (0.03f * SOUND_RATE);
+        if (voices[i].pcm && voices[i].id == id && voices[i].fade_step >= 0) {
+            sounding++;
+            if (oldest < 0 || voices[i].pos > voices[oldest].pos) oldest = i;
+        }
+    if (oldest >= 0 && sounding >= (b->overlap > 0 ? b->overlap : 1))
+        voices[oldest].fade_step = -1.0f / (0.03f * SOUND_RATE);
     int slot = 0;
     for (int i = 0; i < MAX_VOICES; i++) {
         if (!voices[i].pcm) { slot = i; break; }
@@ -231,19 +303,33 @@ int sfx_request(uint8_t id) {
     return 1;
 }
 
+/* above about -2 dBFS the sum bends smoothly towards full scale instead of
+ * clipping: a loud hit over loud music stays clean */
+static int16_t soft_limit(float s) {
+    const float knee = 26000.0f, room = 32767.0f - 26000.0f;
+    float a = fabsf(s);
+    if (a > knee) a = knee + room * tanhf((a - knee) / room);
+    return (int16_t)lrintf(s < 0 ? -a : a);
+}
+
 void sfx_mix(int16_t *samples, int frames) {
+    static float acc[2 * 8192];
+    int any = 0;
+    if (frames > 8192) frames = 8192;
     for (int i = 0; i < MAX_VOICES; i++) {
         Voice *v = &voices[i];
         if (!v->pcm) continue;
+        if (!any) { memset(acc, 0, (size_t)frames * 2 * sizeof(float)); any = 1; }
         for (int n = 0; n < frames; n++) {
             if (v->pos >= v->frames || v->fade <= 0.0f) { v->pcm = NULL; break; }
             float g = v->gain * v->fade;
-            for (int ch = 0; ch < 2; ch++) {
-                int s = samples[n * 2 + ch] + (int)lrintf((float)v->pcm[v->pos * 2 + ch] * g);
-                samples[n * 2 + ch] = (int16_t)(s > 32767 ? 32767 : s < -32768 ? -32768 : s);
-            }
+            acc[n * 2] += (float)v->pcm[v->pos * 2] * g;
+            acc[n * 2 + 1] += (float)v->pcm[v->pos * 2 + 1] * g;
             v->pos++;
             v->fade += v->fade_step;
         }
     }
+    if (any)                                             /* untouched where nothing replaced plays */
+        for (int n = 0; n < frames * 2; n++)
+            if (acc[n] != 0.0f) samples[n] = soft_limit((float)samples[n] + acc[n]);
 }

@@ -96,7 +96,7 @@ Action Replay codes.
   ROM patches are a byte overlay. Game Genie/PAR codes decode to these.
 - **UI:** an overlay menu (settings and cheats together).
 
-## Generated sound effects for the public build (PsiLok, 2026-11-03)
+## Generated sound effects for the public build (PsiLok, 2026-11-03) -- v1 started: blade hits, slasher, cursor, choice (`runtime/sfxsynth.c`)
 The Splice samples stay local (`sfx/` + `sfx.ini` is a personal override);
 a release needs effects of its own. Plan, best fit first:
 - **Synthesized in the port** (the default pack): each effect a short recipe
@@ -106,6 +106,13 @@ a release needs effects of its own. Plan, best fit first:
   thumps plus a noise crack (hits), crackle through resonant filters (fire),
   shimmering arpeggios (healing), short blips (menus), a synthetic reverb.
   Nothing to ship but code; deterministic, so the replays stay checkable.
+- **Done so far** (Esc > Settings > Sound effects: Modern): $F5 every blade
+  hit (the request comes as the blow lands; also each enemy the slasher
+  passes through), $B7 Alys's throw (the first hit follows 38-41 frames
+  later, so the return is timed to it), $F2 cursor, $F3 choice; levels within
+  ~2 dB of the originals in the mix, a soft knee where they meet loud music.
+  Next candidates by frequency in a session: BA/D8/D7 enemy attacks, B9 enemy
+  killed, B8 miss, the technique sounds (BB, BE Foi, C6 Zan...).
 - **Remastered originals** (an option): the game's own FM effect, with a
   modern layer added at runtime (sub-bass on hits, a transient, stereo room).
 - **AI-generated** (later, only for what synthesis does badly, e.g. monster

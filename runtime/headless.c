@@ -814,9 +814,18 @@ int main(int argc, char **argv) {
             depth_scale = *e == ':' ? atoi(e + 1) : 2;
             if (depth_scale < 1) depth_scale = 1;
             if (depth_scale > 4) depth_scale = 4;
+        } else if (!strcmp(argv[i], "--sfx-synth")) {
+            int n = sfx_synth_load();                      /* the port's own sound effects */
+            sfx_set_mode(SFX_MODERN);
+            printf("sound effects: %d synthesized\n", n);
+        } else if (!strcmp(argv[i], "--sfx-dump") && i + 1 < argc) {
+            const char *dir = argv[++i];                   /* every synthesized effect as a WAV */
+            printf("sound effects: %d written to %s\n", sfx_synth_dump(dir), dir);
+            return 0;
         } else if (!strcmp(argv[i], "--sfx") && i + 1 < argc) {
-            int n = sfx_load(argv[++i]);                   /* replacement sound effects (DIR/sfx.ini) */
-            sfx_set_enabled(1);
+            sfx_synth_load();                              /* what sfx.ini doesn't map stays modern */
+            int n = sfx_load(argv[++i]);                   /* your sound effects (DIR/sfx.ini) */
+            sfx_set_mode(SFX_CUSTOM);
             printf("sound effects: %d replaced from %s\n", n, argv[i]);
         } else if (!strcmp(argv[i], "--fx") && i + 1 < argc) {
             depth_set_fx(atoi(argv[++i]));                 /* battle effects level (with --depth) */
