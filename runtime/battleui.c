@@ -274,8 +274,13 @@ static int utf8(uint32_t cp, char *o) {
 }
 
 /* ------------------------------------------------------------------ the party bar */
-#define HUD_Y0 174.0f
-#define HUD_Y1 221.0f
+/* The party's battle art is cut off at y 168, the top of the game's status
+ * window, which hid the edge. The bar sits on a dock across the whole view
+ * from just above that line, so the party stands behind it as in the
+ * original, and a soft shadow above the dock lets them fade into it. */
+#define DOCK_Y    165.0f
+#define HUD_Y0    171.0f
+#define HUD_Y1    219.0f
 
 typedef struct { float x0, x1; int id; } Card;
 static Card cards[5];
@@ -321,7 +326,20 @@ static void command_tag(int fighter, char *out, size_t n, uint32_t *color) {
     snprintf(out, n, "%s", s && *s ? s : COMMANDS[cmd - 1]);
 }
 
+static void draw_dock(float a) {
+    float x0 = SX(-OX), x1 = (float)cv.x1, top = SY(DOCK_Y);
+    int rows = (int)(9.0f * S);
+    for (int i = 0; i < rows; i++) {                         /* the shadow: 0 to ~60% just above the dock */
+        float t = (float)(i + 1) / (float)rows;
+        ui_round_rect(&cv, x0, top - (float)(rows - i), x1, top - (float)(rows - i) + 1.0f, 0, 0x04060E,
+                      AL(150.0f * t * t * a));
+    }
+    ui_round_rect_v(&cv, x0, top, x1, (float)cv.y1, 0, 0x131C3C, 0x070A18, AL(244 * a));
+    ui_round_rect(&cv, x0, top, x1, top + fmaxf(1.0f, 0.5f * S), 0, 0x6F8FE0, AL(140 * a));
+}
+
 static void draw_hud(int acting, int target_id, int show_commands, int frame, float a) {
+    draw_dock(a);
     for (int k = 0; k < ncards; k++) {
         int id = cards[k].id;
         unsigned base = CHAR_STATS + (unsigned)id * 0x80;
@@ -413,17 +431,22 @@ static void draw_main(float alpha) {
 /* the command bar over a card; `chosen` >= 0 dims the rest (picking a target) */
 static void draw_commands(int fighter, float cx, int chosen, const char *prompt, float alpha) {
     int cur = chosen >= 0 ? chosen : (int)r16(COMD_INDEX + (unsigned)fighter * 2) % 5;
-    float cap = 4.6f, padx = 5.0f, gap = 3.0f, h = 12.0f, y0 = 157.0f;
+    float cap = 4.6f, padx = 5.0f, gap = 3.0f, h = 12.0f, y0 = 148.0f;    /* clear of the dock */
     float wsum = 0, w[5];
     for (int i = 0; i < 5; i++) { w[i] = width(COMMANDS[i], cap) + 2 * padx; wsum += w[i]; }
     wsum += 4 * gap;
     float lo = -OX + 4.0f, hi = (float)(cv.x1 / S) - OX - 4.0f;
-    /* beside the character choosing where it fits, else over their card */
+    /* beside the character choosing where it fits; else (4:3, someone in
+     * the middle) on the dock's edge over their card, where it only covers
+     * their waist, with what it does beside them */
     float x, right = actor_sx + 24.0f, left = actor_sx - 24.0f;
+    int beside = 1;
     if (actor_sx <= 160.0f && right + wsum <= hi) x = right;
     else if (left - wsum >= lo) x = left - wsum;
     else if (right + wsum <= hi) x = right;
     else {
+        beside = 0;
+        y0 = DOCK_Y - h + 2.0f;
         x = cx - wsum / 2.0f;
         if (x < lo) x = lo;
         if (x + wsum > hi) x = hi - wsum;
@@ -437,13 +460,18 @@ static void draw_commands(int fighter, float cx, int chosen, const char *prompt,
                     on ? 0x1A1406 : chosen >= 0 ? 0x6F7FA8 : 0xFFFFFF, alpha);
         bx += w[i] + gap;
     }
-    /* what it does, above */
+    /* what it does, above the bar (or beside the character, clear of them) */
     const char *line = prompt ? prompt : COMMAND_HELP[cur];
-    float lw = width(line, 3.8f) + 12.0f, lx = x + wsum / 2.0f - lw / 2.0f;
+    float lw = width(line, 3.8f) + 12.0f, lx = x + wsum / 2.0f - lw / 2.0f, ly = y0 - 16.0f;
+    if (!beside) {
+        if (left - lw >= lo) lx = left - lw;
+        else if (right + lw <= hi) lx = right;
+        ly = y0 - 15.0f;
+    }
     if (lx < lo) lx = lo;
     if (lx + lw > hi) lx = hi - lw;
-    panel(lx, y0 - 16.0f, lx + lw, y0 - 5.0f, alpha * 0.92f);
-    text_center(lx + lw / 2.0f, y0 - 8.3f, 3.8f, line, prompt ? 0xFFE08A : 0xD8E2FF, alpha);
+    panel(lx, ly, lx + lw, ly + 11.0f, alpha * 0.92f);
+    text_center(lx + lw / 2.0f, ly + 7.7f, 3.8f, line, prompt ? 0xFFE08A : 0xD8E2FF, alpha);
 }
 
 typedef struct { char name[24]; char cost[12]; int usable; const char *desc; } Entry;
@@ -462,7 +490,7 @@ static void draw_list(const char *title, const char *info, const Entry *e, int c
     float lo = -OX + 4.0f, hi = (float)(cv.x1 / S) - OX - 4.0f;
     /* beside the character choosing, so they stay in view; above their card
      * when neither side has room */
-    float x0, y1 = 168.0f, right = actor_sx + 26.0f, left = actor_sx - 26.0f;
+    float x0, y1 = DOCK_Y - 4.0f, right = actor_sx + 26.0f, left = actor_sx - 26.0f;
     if (actor_sx <= 160.0f && right + w <= hi) x0 = right;
     else if (left - w >= lo) x0 = left - w;
     else if (right + w <= hi) x0 = right;
