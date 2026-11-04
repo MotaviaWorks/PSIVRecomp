@@ -53,6 +53,9 @@
 
 static int enabled, active, vx0;
 static uint16_t override[64 * 32];
+static uint8_t cell_flags[64 * 32];       /* see vdp_plane_a_flags */
+static uint8_t shadow[0x10000];           /* the party's art as they stand, at its VRAM addresses */
+static int16_t sprite_dx[80];             /* see vdp_sprite_dx */
 static uint8_t hidden[80];
 
 void battleui_set_enabled(int on) { enabled = on; }
@@ -128,6 +131,9 @@ void battleui_frame(void) {
     active = 0;
     vdp_plane_a_override = NULL;
     vdp_sprite_hidden = NULL;
+    vdp_plane_a_flags = NULL;
+    vdp_tile_shadow = NULL;
+    vdp_sprite_dx = NULL;
     if (!enabled || !ui_ready()) { party_reset(); return; }
     if (r16(GAME_MODE_INDEX) / 4 != MODE_BATTLE || r16(VEHICLE_INDEX) != 0) { party_reset(); return; }
     if (!(vdp.reg[1] & 0x40) || (vdp.reg[16] & 3) != 1) return;    /* display on, 64-cell planes */
@@ -149,6 +155,9 @@ void battleui_frame(void) {
             override[r * 64 + c] = o;
         }
     vdp_plane_a_override = override;
+    memset(cell_flags, 0, sizeof cell_flags);
+    vdp_plane_a_flags = cell_flags;
+    vdp_tile_shadow = shadow;
 
     /* cursor sprites: high priority, palette 3, the arrow tiles */
     memset(hidden, 0, sizeof hidden);
@@ -207,20 +216,30 @@ static int nth_fighter(int first, int last, int n) {
 }
 
 /* ------------------------------------------------------------------ the party in the picture */
-/* While commands are chosen the game shows only the member choosing: it
- * clears the others from plane A (and from the window-free copy of the map),
- * and its command window covers part of the one it shows. Their art stays in
- * VRAM, so the port keeps each member's cells from frames where they stand
- * in full and draws the whole party back while commands are chosen. */
+/* PSIV shows the whole party only at the main menu (and for techniques on all
+ * of them): while commands are chosen it shows only the member choosing (its
+ * command window over part of them); while the battle plays out, only the
+ * one acting (often as a sprite at the enemy instead) or the one an enemy
+ * attacks, stood in front of that enemy. The port keeps everyone standing in
+ * their place: each member's name-table cells and the tiles they use are
+ * kept while they stand at the main menu (and while they choose), and drawn
+ * back into plane A wherever the game leaves a member out -- from the port's
+ * copy of the tiles (the game reuses an attacker's VRAM for its attack
+ * sprites) and behind low-priority sprites (so the game's attacks and
+ * effects still pass in front). Members the game draws itself are left to it
+ * (moved back to their place if it stood them elsewhere), the one acting
+ * stays out while action sprites are on screen, the dead stay out. */
 #define PARTY_ROW0 4
 #define PARTY_ROWS 17                       /* rows 4-20: the battle area above the status window */
+#define CURRENT_ACTOR 0x4142u               /* during the actions: fighter + 1 (shares RAM with the skill list) */
 typedef struct {
-    int valid, base, col0, x;               /* art (first tile), first column, centre (game x) */
+    int valid, base, col0, x;               /* art (first tile); their place: first column, centre (game x) */
     uint16_t cell[PARTY_ROWS][6];           /* name-table entries; 0 = not theirs */
 } Member;
 static Member members[5];
 static int standing;                        /* members on screen at the last main menu */
 static int restore;                         /* the members drawn back this frame */
+static int shown;                           /* the members in the picture this frame (theirs or the game's) */
 
 /* their aura (see below): how strong, gold (0) or cyan (1); motes rising */
 static float aura_level[5], aura_mix[5];
@@ -237,24 +256,57 @@ static int choosing(int menu) { return menu != M_NONE && menu != M_MAIN; }
 
 static void party_reset(void) {
     memset(members, 0, sizeof members);
-    standing = restore = 0;
+    standing = restore = shown = 0;
     memset(aura_level, 0, sizeof aura_level);
     nmotes = 0;
     mote_due = 0;
 }
 
+/* the game's low-priority sprites on screen: a character mid-action, its
+ * weapon, a technique's effect (the menu cursors are high priority) */
+static int low_sprites(void) {
+    uint32_t sat = (uint32_t)(vdp.reg[5] & 0x7E) << 9;
+    int link = 0, count = 0, n = 0;
+    do {
+        const uint8_t *s = &vdp.vram[(sat + (uint32_t)link * 8) & 0xFFFF];
+        const uint8_t *c = &vdp.sat_cache[((uint32_t)link * 8) & 0x3FF];
+        int sy = ((c[0] << 8 | c[1]) & 0x3FF) - 128, sx = ((s[6] << 8 | s[7]) & 0x1FF) - 128;
+        if (!(s[4] & 0x80) && sx > -32 && sx < 352 && sy > -32 && sy < 224) n++;
+        link = c[3] & 0x7F;
+    } while (link && ++count < 80);
+    return n;
+}
+
+/* the first row of a member's picture, 0 if none */
+static int member_top(const Member *m) {
+    for (int r = 0; r < PARTY_ROWS; r++)
+        for (int c = 0; c < 6; c++)
+            if (m->cell[r][c]) return r;
+    return 0;
+}
+
 static void party_frame(void) {
-    int bases[5];
-    for (int k = 0; k < 5; k++)
-        bases[k] = fighter_char(k) >= 0 ? (int)(r16(FIGHTERS + (unsigned)k * 0x40 + 0x0E) >> 5) : -1;
-    int present = 0;
+    int r2 = (int)(r16(BATTLE_ROUTINE_2) & 0x7FFF), menu = menu_of(r2);
+    int results = (r2 >= 0x1E && r2 <= 0x26) || (r2 >= 0x2D && r2 <= 0x2F);
+    /* their cells and tiles are kept while they stand at the main menu or choose */
+    int keep = menu == M_MAIN || choosing(menu);
+    int bases[5], alive = 0;
+    for (int k = 0; k < 5; k++) {
+        int id = fighter_char(k);
+        bases[k] = id >= 0 ? (int)(r16(FIGHTERS + (unsigned)k * 0x40 + 0x0E) >> 5) : -1;
+        if (id >= 0 && r16(CHAR_STATS + (unsigned)id * 0x80 + 0x0E) && !(r8(CHAR_STATS + (unsigned)id * 0x80 + 0x16) & 0x44))
+            alive |= 1 << k;                         /* HP left, not dead (bit 2; bit 6 for androids) */
+    }
+    int present = 0, moved = 0, now_col[5] = {0};
     for (int k = 0; k < 5; k++) {
         Member *m = &members[k];
         if (bases[k] < 0) { m->valid = 0; continue; }
+        /* where the game has them now; their home is m->col0 */
         int x = (int)r16(FIGHTERS + (unsigned)k * 0x40 + 0x0C) - 128, col0 = (x - 24) >> 3;
         int lo = bases[k], hi = lo + 0x30;          /* their tiles: up to the next member's */
         for (int j = 0; j < 5; j++) if (bases[j] > lo && bases[j] < hi) hi = bases[j];
-        if (m->valid && (m->base != lo || m->col0 != col0)) m->valid = 0;
+        if (m->valid && (m->base != lo || (keep && m->col0 != col0))) m->valid = 0;
+        now_col[k] = col0;
         uint16_t now[PARTY_ROWS][6];
         int any = 0;
         for (int r = 0; r < PARTY_ROWS; r++)
@@ -266,31 +318,63 @@ static void party_frame(void) {
             }
         if (!any) continue;
         present |= 1 << k;
-        for (int r = 0; r < PARTY_ROWS; r++)            /* cells under a window keep what they had */
+        if (m->valid && col0 != m->col0) moved |= 1 << k;   /* stood in front of the action */
+        if (!keep) continue;                          /* mid-action they may be in another pose */
+        for (int r = 0; r < PARTY_ROWS; r++)          /* cells under a window keep what they had */
             for (int c = 0; c < 6; c++) {
                 uint16_t e = now[r][c];
                 int t = e & 0x7FF;
-                if (party_tile(e) && t >= lo && t < hi) m->cell[r][c] = e;
-                else if (!m->valid || !ui_tile(e)) m->cell[r][c] = 0;
+                if (party_tile(e) && t >= lo && t < hi) {
+                    m->cell[r][c] = e;
+                    memcpy(&shadow[t * 32], &vdp.vram[t * 32], 32);
+                } else if (!m->valid || !ui_tile(e)) m->cell[r][c] = 0;
             }
         m->valid = 1; m->base = lo; m->col0 = col0; m->x = x;
     }
-    int r2 = (int)(r16(BATTLE_ROUTINE_2) & 0x7FFF), menu = menu_of(r2);
     if (menu == M_MAIN) standing = present;
-    /* after the last command the game clears the picture before it draws the
-     * party for the actions: they stay up until it draws someone itself */
-    static int hold;
-    if (choosing(menu)) { restore = standing; hold = 45; }
-    else if (menu == M_NONE && hold > 0 && !present) { restore = standing; hold--; }
-    else { restore = 0; hold = 0; }
+    else if (!keep) standing |= present & alive;     /* e.g. revived, and drawn by the game */
+    /* while the party acts, the one acting is out of their place while their
+     * sprites (or their technique's) are on screen */
+    int out = 0;
+    if (!keep && !results) {
+        unsigned a = r16(CURRENT_ACTOR);
+        if (a >= 1 && a <= 5 && low_sprites()) out = 1 << (a - 1);
+    }
+    restore = standing & alive & ~out;
+    if (!keep) restore &= ~present;                   /* the ones the game draws are its own */
+    shown = restore | present;
     {   /* PSIV_BUI_LOG=1: the party on screen as the battle state changes */
         static int log_on = -1, last = -1;
         if (log_on < 0) { const char *v = getenv("PSIV_BUI_LOG"); log_on = v && *v == '1'; }
-        int key = r2 << 16 | (int)r16(COMD_INPUT) << 8 | present << 4 | restore;
+        int key = r2 << 24 | ((int)r16(COMD_INPUT) & 15) << 20 | moved << 15 | present << 10 | restore << 5
+                | ((int)r16(CURRENT_ACTOR) & 31);
         if (log_on && key != last)
-            printf("battleui: routine %02X fighter %u present %02X standing %02X restore %02X\n",
-                   r2, r16(COMD_INPUT), present, standing, restore);
+            printf("battleui: routine %02X fighter %u actor %04X present %02X moved %02X standing %02X restore %02X\n",
+                   r2, r16(COMD_INPUT), r16(CURRENT_ACTOR), present, moved, standing, restore);
         last = key;
+    }
+    /* The game stands the one an enemy attacks (or a caster) in front of the
+     * action, often in another member's place. The party stays put instead:
+     * the game's picture of them there (with its hit flash and damage box)
+     * moves back to their own place, and so do the sprites on them, more the
+     * nearer they are to the party (a bolt from the enemy bends towards them). */
+    static uint16_t taken[5][PARTY_ROWS][6];
+    static uint8_t freed[64 * 32];
+    if (moved) memset(freed, 0, sizeof freed);
+    for (int k = 0; k < 5; k++) {
+        if (!(moved >> k & 1)) continue;
+        int r0 = member_top(&members[k]) - 2;
+        if (r0 < 0) r0 = 0;
+        for (int r = 0; r < PARTY_ROWS; r++)
+            for (int c = 0; c < 6; c++) {
+                int row = PARTY_ROW0 + r, col = now_col[k] + c;
+                uint16_t e = col >= 0 && col < 64 ? nt(row, col) : 0;
+                taken[k][r][c] = 0;
+                if (r < r0 || !(e & 0x8000) || !(e & 0x7FF) || ui_tile(e)) continue;
+                taken[k][r][c] = e;
+                override[row * 64 + col] = 0;
+                freed[row * 64 + col] = 1;
+            }
     }
     for (int k = 0; k < 5; k++) {
         const Member *m = &members[k];
@@ -301,10 +385,46 @@ static void party_frame(void) {
                 int row = PARTY_ROW0 + r, col = m->col0 + c;
                 if (!e || col < 0 || col >= 64) continue;
                 uint16_t cur = nt(row, col);
-                if ((cur & 0x7FF) && !ui_tile(cur) && !party_tile(cur)) continue;   /* something else is there */
+                if ((cur & 0x7FF) && !ui_tile(cur) && !(moved && freed[row * 64 + col]))
+                    continue;                                 /* the game drew something there */
                 override[row * 64 + col] = e;
+                cell_flags[row * 64 + col] = 3;               /* behind low sprites, from the copy */
             }
     }
+    memset(sprite_dx, 0, sizeof sprite_dx);
+    int shifted = 0;
+    for (int k = 0; k < 5; k++) {
+        const Member *m = &members[k];
+        if (!(moved >> k & 1)) continue;
+        for (int r = 0; r < PARTY_ROWS; r++)
+            for (int c = 0; c < 6; c++) {
+                int row = PARTY_ROW0 + r, col = m->col0 + c;
+                if (taken[k][r][c] && col >= 0 && col < 64) {
+                    override[row * 64 + col] = taken[k][r][c];
+                    cell_flags[row * 64 + col] = 0;           /* as the game drew it */
+                }
+            }
+        /* the sprites on them */
+        int dx = (m->col0 - now_col[k]) * 8, top = (PARTY_ROW0 + member_top(m)) * 8;
+        int bx0 = now_col[k] * 8 - 16, bx1 = now_col[k] * 8 + 64;
+        uint32_t sat = (uint32_t)(vdp.reg[5] & 0x7E) << 9;
+        int link = 0, count = 0;
+        do {
+            int me = link;
+            const uint8_t *s = &vdp.vram[(sat + (uint32_t)link * 8) & 0xFFFF];
+            const uint8_t *c = &vdp.sat_cache[((uint32_t)link * 8) & 0x3FF];
+            int sy = ((c[0] << 8 | c[1]) & 0x3FF) - 128, sx = ((s[6] << 8 | s[7]) & 0x1FF) - 128;
+            int sw = ((c[2] >> 2 & 3) + 1) * 8, sh = ((c[2] & 3) + 1) * 8;
+            link = c[3] & 0x7F;
+            if ((s[4] & 0x80) || sprite_dx[me] || sx + sw <= bx0 || sx >= bx1 || sy + sh <= top - 48 || sy >= 176)
+                continue;
+            float w = ((float)sy + (float)sh / 2.0f - (float)(top - 40)) / 40.0f;
+            w = w < 0.0f ? 0.0f : w > 1.0f ? 1.0f : w;
+            sprite_dx[me] = (int16_t)lroundf((float)dx * w);
+            shifted |= sprite_dx[me] != 0;
+        } while (link && ++count < 80);
+    }
+    vdp_sprite_dx = shifted ? sprite_dx : NULL;
 }
 
 static const char *const COMMANDS[5] = {"Attack", "Technique", "Skill", "Item", "Defend"};
@@ -603,7 +723,11 @@ static void card_layout(int view_w) {
     for (int k = 0; k < 5; k++) {
         int id = fighter_char(k);
         if (id < 0) continue;
-        int x = (int)r16(FIGHTERS + (unsigned)k * 0x40 + 0x0C), j = n++;
+        /* by their place in the line (fighter +$13, 1 = left), set from the
+         * battle's first frame; their x is not (and the game moves the one
+         * in front of the action now and then) */
+        int x = (int)r8(FIGHTERS + (unsigned)k * 0x40 + 0x13), j = n++;
+        if (!x) x = 0x100 + (members[k].valid ? members[k].x : (int)r16(FIGHTERS + (unsigned)k * 0x40 + 0x0C));
         while (j > 0 && xs[j - 1] > x) { ids[j] = ids[j - 1]; xs[j] = xs[j - 1]; j--; }
         ids[j] = id;
         xs[j] = x;
@@ -741,16 +865,16 @@ static void draw_main(float alpha) {
     }
 }
 
-/* where the party stands (game x, y), from the members drawn this frame,
- * with a margin for the depth camera's drift: menus are placed by it and
- * stay put while the camera moves; 0 if none */
+/* where the party stands (game x, y), from the members in the picture this
+ * frame, with a margin for the depth camera's drift: menus are placed by it
+ * and stay put while the camera moves; 0 if none */
 static float party_l, party_r, party_top;
 static int party_span(void) {
     int any = 0;
     party_l = 1e9f; party_r = -1e9f; party_top = 1e9f;
     for (int k = 0; k < 5; k++) {
         const Member *m = &members[k];
-        if (!m->valid || !(restore >> k & 1)) continue;
+        if (!m->valid || !(shown >> k & 1)) continue;
         for (int r = 0; r < PARTY_ROWS; r++)
             for (int c = 0; c < 6; c++) {
                 if (!m->cell[r][c]) continue;
@@ -940,16 +1064,32 @@ static void draw_target(const char *label, int party, int frame, float alpha) {
     }
 }
 
-/* any other window: its text, read back from the tiles, in the same style */
+/* any other window: its text, read back from the tiles, in the same style.
+ * The game puts its messages during the battle (a technique's name,
+ * "Victory!") where the party stood, as they were gone by then: one that
+ * would cover them goes to the top of the screen, under the enemy names if
+ * those are up, clear of the action */
 static void draw_window(const Win *w, int names, float alpha) {
     float x0 = (float)w->x * 8.0f + 2.0f, y0 = (float)w->y * 8.0f + 2.0f;
     float x1 = (float)(w->x + w->w) * 8.0f - 2.0f, y1 = (float)(w->y + w->h) * 8.0f - 2.0f;
+    float dy = 0.0f;
+    if (w->y >= 4 && party_span() && x1 > party_l && x0 < party_r && y1 > party_top) {
+        float top = 6.0f;
+        for (int i = 0; i < nwins; i++) {
+            const Win *o = &wins[i];
+            if (o->y < 4 && (float)(o->x + o->w) * 8.0f > x0 && (float)o->x * 8.0f < x1)
+                top = fmaxf(top, (float)(o->y + o->h) * 8.0f + 2.0f);
+        }
+        dy = top - y0;
+    }
+    y0 += dy;
+    y1 += dy;
     int any = 0;
     for (int r = 0; r < w->h - 2 && !any; r++)
         for (int c = 0; c < w->w - 2; c++) if (w->ch[r][c]) { any = 1; break; }
     panel(x0, y0, x1, y1, alpha * (any ? 1.0f : 0.6f));
     for (int r = 0; r < w->h - 2; r++) {
-        float base = (float)(w->y + 1 + r) * 8.0f + 6.6f;
+        float base = (float)(w->y + 1 + r) * 8.0f + 6.6f + dy;
         if (r == w->cursor) highlight(x0 + 2.0f, base - 6.8f, x1 - 2.0f, base + 1.8f, alpha);
         /* runs of text split at gaps of two cells or more; a run of digits
          * is right-aligned to its last cell so columns of numbers line up */

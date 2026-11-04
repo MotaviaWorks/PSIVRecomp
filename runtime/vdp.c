@@ -194,21 +194,26 @@ uint32_t vdp_color(int index) {
 
 const uint16_t *vdp_plane_a_override;
 const uint8_t *vdp_sprite_hidden;
+const uint8_t *vdp_plane_a_flags;
+const uint8_t *vdp_tile_shadow;
+const int16_t *vdp_sprite_dx;
 
 static int plane_cells(int bits) {
     return bits == 0 ? 32 : bits == 1 ? 64 : bits == 3 ? 128 : 32;
 }
 
-/* pixel of a tile: entry = name-table word, tx/ty = pixel inside the 8x8 cell */
-static uint8_t tile_pixel(uint16_t entry, int tx, int ty) {
+/* pixel of a tile in `vram`: entry = name-table word, tx/ty = pixel inside the 8x8 cell */
+static uint8_t tile_pixel_in(const uint8_t *vram, uint16_t entry, int tx, int ty) {
     if (entry & 0x0800) tx = 7 - tx;
     if (entry & 0x1000) ty = 7 - ty;
     uint32_t a = (uint32_t)(entry & 0x07FF) * 32 + (uint32_t)ty * 4 + (uint32_t)(tx >> 1);
-    uint8_t b = vdp.vram[a & 0xFFFF];
+    uint8_t b = vram[a & 0xFFFF];
     uint8_t px = (tx & 1) ? (b & 0x0F) : (b >> 4);
     if (!px) return 0;
     return (uint8_t)((entry >> 13 & 3) << 4 | px | (entry & 0x8000 ? 0x80 : 0));
 }
+
+static uint8_t tile_pixel(uint16_t entry, int tx, int ty) { return tile_pixel_in(vdp.vram, entry, tx, ty); }
 
 static uint16_t nt_entry(uint32_t base, int cx, int cy, int wcells) {
     uint32_t a = (base + ((uint32_t)cy * (uint32_t)wcells + (uint32_t)cx) * 2) & 0xFFFF;
@@ -217,7 +222,8 @@ static uint16_t nt_entry(uint32_t base, int cx, int cy, int wcells) {
 
 /* each renderer draws screen columns x0 .. x0+width-1 into out[0..width-1];
  * mode_w is the mode's own width (320 or 256): widescreen draws beyond it */
-static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, uint8_t *txy, int x0, int width, int mode_w) {
+static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, uint8_t *txy, uint8_t *under,
+                         int x0, int width, int mode_w) {
     int wcells = plane_cells(vdp.reg[16] & 3), hcells = plane_cells(vdp.reg[16] >> 4 & 3);
     uint32_t base = plane == 0 ? (uint32_t)(vdp.reg[2] & 0x38) << 10 : (uint32_t)(vdp.reg[4] & 7) << 13;
     /* horizontal scroll: full screen, per 8-line cell, or per line */
@@ -236,13 +242,23 @@ static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, uint
         int px = (x - hscroll) & (pw - 1);
         int py = (y + vscroll) & (ph - 1);
         uint16_t e = nt_entry(base, px >> 3, py >> 3, wcells);
+        const uint8_t *src = vdp.vram;
+        uint8_t below = 0;
         if (plane == 0 && vdp_plane_a_override && wcells == 64 && py < 256) {
-            uint16_t o = vdp_plane_a_override[(py >> 3) * 64 + (px >> 3)];
-            if (o != 0xFFFF) e = o;
+            int cell = (py >> 3) * 64 + (px >> 3);
+            uint16_t o = vdp_plane_a_override[cell];
+            if (o != 0xFFFF) {
+                e = o;
+                if (vdp_plane_a_flags) {
+                    below = vdp_plane_a_flags[cell] & 1;
+                    if ((vdp_plane_a_flags[cell] & 2) && vdp_tile_shadow) src = vdp_tile_shadow;
+                }
+            }
         }
-        out[i] = tile_pixel(e, px & 7, py & 7);
+        out[i] = tile_pixel_in(src, e, px & 7, py & 7);
         if (entries) entries[i] = e;
         if (txy) txy[i] = (uint8_t)((px & 7) | (py & 7) << 3);
+        if (under) under[i] = below;
     }
 }
 
@@ -317,24 +333,57 @@ static void render_sprites(int y, uint8_t *out, uint8_t *who, int x0, int width,
     } while (link && ++count < max_sprites);
 }
 
+/* sprites moved to the side for display (vdp_sprite_dx), after the real
+ * evaluation: their pixels taken out, then drawn again where they go, in
+ * link order, into pixels no other sprite holds */
+static void shift_sprites(int y, VdpLine *l, int x0, int width, int mode_w) {
+    int h40 = mode_w == 320;
+    uint32_t base = (uint32_t)(vdp.reg[5] & (h40 ? 0x7E : 0x7F)) << 9;
+    int max_sprites = h40 ? 80 : 64, link = 0, count = 0;
+    for (int i = 0; i < width; i++)
+        if (l->sprite[i] && vdp_sprite_dx[l->sprite_no[i] & 0x7F]) l->sprite[i] = 0;
+    do {
+        int me = link;
+        const uint8_t *s = &vdp.vram[(base + (uint32_t)link * 8) & 0xFFFF];
+        const uint8_t *c = &vdp.sat_cache[((uint32_t)link * 8) & sat_addr_mask()];
+        int sy = ((c[0] << 8 | c[1]) & 0x3FF) - 128, vs = (c[2] & 3) + 1, hs = (c[2] >> 2 & 3) + 1;
+        uint16_t attr = (uint16_t)(s[4] << 8 | s[5]);
+        int sx = ((s[6] << 8 | s[7]) & 0x1FF) - 128, dx = vdp_sprite_dx[me & 0x7F];
+        link = c[3] & 0x7F;
+        if (!dx || y < sy || y >= sy + vs * 8 || (vdp_sprite_hidden && vdp_sprite_hidden[me & 0x7F])) continue;
+        int ty = y - sy;
+        if (attr & 0x1000) ty = vs * 8 - 1 - ty;
+        for (int cx = 0; cx < hs * 8; cx++) {
+            int x = sx + dx + cx;
+            if (x < x0 || x >= x0 + width || l->sprite[x - x0]) continue;
+            int tx = (attr & 0x0800) ? hs * 8 - 1 - cx : cx;
+            uint16_t tile = (uint16_t)((attr & 0x07FF) + (tx >> 3) * vs + (ty >> 3));
+            uint8_t p = tile_pixel((uint16_t)((attr & 0xE000) | (tile & 0x07FF)), tx & 7, ty & 7);
+            if (p) { l->sprite[x - x0] = p; l->sprite_no[x - x0] = (uint8_t)me; }
+        }
+    } while (link && ++count < max_sprites);
+}
+
 void vdp_render_line(int y, VdpLine *l) {
     int mw = vdp_width(), x0 = vdp_view_x0, w = vdp_view_w;
     l->backdrop = vdp.reg[7] & 0x3F;
     if (!(vdp.reg[1] & 0x40)) {                              /* display disabled */
         memset(l->plane_b, 0, (size_t)w);
         memset(l->plane_a, 0, (size_t)w);
+        memset(l->plane_a_under, 0, (size_t)w);
         memset(l->window, 0, (size_t)w);
         memset(l->win_in, 0, (size_t)w);
         memset(l->sprite, 0, (size_t)w);
         return;
     }
-    render_plane(y, 1, l->plane_b, NULL, NULL, x0, w, mw);
-    render_plane(y, 0, l->plane_a, l->plane_a_tile, l->plane_a_txy, x0, w, mw);
+    render_plane(y, 1, l->plane_b, NULL, NULL, NULL, x0, w, mw);
+    render_plane(y, 0, l->plane_a, l->plane_a_tile, l->plane_a_txy, l->plane_a_under, x0, w, mw);
     render_window(y, l->window, l->win_in, x0, w, mw);
     render_sprites(y, l->sprite, l->sprite_no, x0, w, mw);
     if (vdp_sprite_hidden)
         for (int i = 0; i < w; i++)
             if (l->sprite[i] && vdp_sprite_hidden[l->sprite_no[i] & 0x7F]) l->sprite[i] = 0;
+    if (vdp_sprite_dx) shift_sprites(y, l, x0, w, mw);
 }
 
 void vdp_compose_line(const VdpLine *l, uint32_t *dst, int width) {
@@ -346,7 +395,8 @@ void vdp_compose_line(const VdpLine *l, uint32_t *dst, int width) {
         if (a && !(a & 0x80)) c = a;
         if (s && !(s & 0x80)) c = s;
         if (b & 0x80) c = b;
-        if (a & 0x80) c = a;
+        /* a picture put back by the port goes behind the game's low sprites */
+        if ((a & 0x80) && !(!l->win_in[x] && l->plane_a_under[x] && s && !(s & 0x80))) c = a;
         if (s & 0x80) c = s;
         dst[x] = vdp_color(c & 0x3F);
     }

@@ -15,12 +15,16 @@
  * messages) are read back from their tiles and redrawn in the same style.
  * Vehicle battles keep the original windows.
  *
- * While commands are chosen the game shows only the member choosing; here
- * the whole party stays in the picture (their name-table cells, kept from
- * frames where they stand in full, drawn back into plane A; their art never
- * leaves VRAM), the member choosing has a gold aura (an ally being targeted
- * a cyan one), and the commands sit in a strip the dock opens under the
- * party, so no menu covers anyone.
+ * The game shows the whole party only at the main menu: while commands are
+ * chosen, only the member choosing; while the battle plays out, only the one
+ * acting or the one an enemy attacks (moved in front of it). Here the whole
+ * party stays in their places: their name-table cells and tiles, kept from
+ * the main menu, are drawn back into plane A (behind the game's action
+ * sprites), and a member the game moves goes back to their place with the
+ * sprites on them. The member choosing has a gold aura (an ally being
+ * targeted a cyan one); the commands sit in a strip the dock opens under the
+ * party and the game's battle messages move to the top, so nothing covers
+ * anyone.
  */
 #ifndef PSIV_BATTLEUI_H
 #define PSIV_BATTLEUI_H

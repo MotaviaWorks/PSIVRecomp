@@ -65,9 +65,22 @@ messages) are read back from their tiles and redrawn in the same style.
   frame, blurred, never over the party's own pixels; motes rising), cyan on an
   ally target. Commands moved to a strip the dock opens under the party; lists
   beside the party where they fit, else above everyone's heads.
-- **Next, if wanted:** during the party's own actions the game still hides
-  everyone but the actor (who appears as a sprite); the same mechanism could
-  keep the others standing.
+- **The whole party for the whole battle** (PsiLok, 2026-11-04; done): while
+  the battle plays out the game also shows only one member -- the one acting
+  (Current_Actor_Index $4142 = fighter + 1; attackers appear as sprites at
+  the enemy and reuse their own VRAM for the attack frames) or the one an
+  enemy attacks, *moved* (fighter +$C) in front of that enemy; casters move
+  to the centre. The port keeps a copy of each member's tiles from the main
+  menu and draws absent members from it, behind low-priority sprites
+  (vdp_plane_a_flags, vdp_tile_shadow); the one acting stays out while
+  low-priority sprites are on screen; a member the game moved goes back to
+  their place with the game's picture of them (white hit flash = their
+  cells in palette 2, damage box = tiles $5E4+ inside their block), and the
+  sprites on them follow, weighted by height so a bolt from the enemy bends
+  to them (vdp_sprite_dx, display only). Messages that would cover the party
+  go to the top; party cards are ordered by fighter +$13 (place in the line,
+  set from the first frame, even in an ambush). An ambush still shows the
+  original view until the first main menu (nobody to copy yet).
 
 ## Public release (PsiLok, 2026-11-03)
 Players bring their own ROM; nothing from the game is in the repo or the

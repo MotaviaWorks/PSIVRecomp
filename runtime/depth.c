@@ -160,6 +160,8 @@ const char *depth_level_name(int l) { return NAMES[l < 0 || l >= DEPTH_LEVELS ? 
 /* the frame sorted into layers: palette index | priority, 0 = transparent */
 enum { L_BG, L_ENEMY, L_ACTION, L_PARTY, L_UI, L_POINTER, NLAYERS };
 static uint8_t layer[NLAYERS][VDP_MAX_H][VDP_MAX_W];
+/* party pixels the port put back (battleui.c): the action sprites pass in front */
+static uint8_t party_under[VDP_MAX_H][VDP_MAX_W];
 
 static void ease(float *v, float target, float k) { *v += (target - *v) * k; }
 
@@ -502,11 +504,15 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             uint8_t a = l->win_in[x] ? l->window[x] : l->plane_a[x];
             uint16_t tile = l->plane_a_tile[x] & 0x7FF;
             for (int n = 1; n < NLAYERS; n++) layer[n][y][x] = 0;
+            party_under[y][x] = 0;
             layer[L_BG][y][x] = b ? b : (uint8_t)(l->backdrop | 0x40);   /* never transparent */
             if (a) {
                 if (l->win_in[x]) layer[L_UI][y][x] = a;
                 else if (!(a & 0x80)) layer[L_ENEMY][y][x] = a;
-                else if (tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI) layer[L_PARTY][y][x] = a;
+                else if (tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI) {
+                    layer[L_PARTY][y][x] = a;
+                    party_under[y][x] = l->plane_a_under[x];
+                }
                 else if (tile >= TILE_PARTY_HI && tile < TILE_UI_HI) {
                     layer[L_ENEMY][y][x] = a;                 /* a damage number */
                     popups++; pop_cnt[x]++; pop_ysum[x] += y;
@@ -678,7 +684,8 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             /* in front of the fog: cursor over an enemy, windows, party */
             if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_POINTER][ve][u]) != 0) { dst[X] = pal[c & 0x3F]; continue; }
             if ((c = layer[L_UI][vu][X / scale]) != 0) { dst[X] = pal[c & 0x3F]; continue; }
-            if (vp >= 0 && (u = col_pa[X]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0) {
+            if (vp >= 0 && (u = col_pa[X]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0
+                && !(party_under[vp][u] && ve >= 0 && col_en[X] >= 0 && layer[L_ACTION][ve][col_en[X]])) {
                 uint32_t pc = pal[c & 0x3F];
                 if (lit && ve >= 0 && col_en[X] >= 0) {                /* the party catches some of the light */
                     const uint8_t *lp = light_px[ve][col_en[X]];

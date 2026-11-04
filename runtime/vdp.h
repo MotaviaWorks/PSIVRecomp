@@ -76,6 +76,7 @@ typedef struct {
     uint8_t plane_a[VDP_MAX_W];  /* plane A as drawn, also where the window covers it */
     uint16_t plane_a_tile[VDP_MAX_W]; /* plane A's name-table entry under each pixel */
     uint8_t plane_a_txy[VDP_MAX_W];   /* and where in that tile: x | y << 3 (before flips) */
+    uint8_t plane_a_under[VDP_MAX_W]; /* 1: drawn in by an override that stays behind low-priority sprites */
     uint8_t window[VDP_MAX_W];   /* window plane, where it is shown */
     uint8_t win_in[VDP_MAX_W];   /* 1 where the window replaces plane A */
     uint8_t sprite[VDP_MAX_W];
@@ -91,6 +92,16 @@ typedef struct {
  * collision flags the game reads stay as the hardware sets them. NULL = off. */
 extern const uint16_t *vdp_plane_a_override;
 extern const uint8_t *vdp_sprite_hidden;
+/* With an override, per cell: bit 0 = its tile stays behind low-priority
+ * sprites (a picture the port put back, which the game's own action sprites
+ * pass in front of); bit 1 = its pixels come from vdp_tile_shadow, a copy of
+ * VRAM the port keeps (the game reuses that VRAM meanwhile). NULL = off. */
+extern const uint8_t *vdp_plane_a_flags;
+extern const uint8_t *vdp_tile_shadow;
+/* Per sprite-table entry: drawn this many pixels to the side (display only:
+ * sprites are evaluated where the game put them, so the status flags it
+ * reads are unchanged). NULL = off. */
+extern const int16_t *vdp_sprite_dx;
 
 void vdp_render_line(int y, VdpLine *out);
 /* mix a line's layers into 0xAARRGGBB pixels */
