@@ -43,6 +43,7 @@
 #include "bus.h"
 #include "diag.h"
 #include "depth.h"
+#include "sfx.h"
 #include "frame.h"
 #include "m68k.h"
 #include "sha256.h"
@@ -749,6 +750,10 @@ int main(int argc, char **argv) {
             depth_scale = *e == ':' ? atoi(e + 1) : 2;
             if (depth_scale < 1) depth_scale = 1;
             if (depth_scale > 4) depth_scale = 4;
+        } else if (!strcmp(argv[i], "--sfx") && i + 1 < argc) {
+            int n = sfx_load(argv[++i]);                   /* replacement sound effects (DIR/sfx.ini) */
+            sfx_set_enabled(1);
+            printf("sound effects: %d replaced from %s\n", n, argv[i]);
         } else if (!strcmp(argv[i], "--fx") && i + 1 < argc) {
             depth_set_fx(atoi(argv[++i]));                 /* battle effects level (with --depth) */
         } else if (!strcmp(argv[i], "--fog") && i + 1 < argc) {

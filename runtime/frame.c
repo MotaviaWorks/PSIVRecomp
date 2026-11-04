@@ -17,9 +17,13 @@
 #include "frame.h"
 #include "bus.h"
 #include "m68k.h"
+#include "sfx.h"
 #include "sound.h"
 
+#include <string.h>
+
 #define VINT_FLAG 0xEF12u          /* VInt_Flag = $FFFFEF12 */
+#define SOUND_QUEUE 0x500Au        /* Sound_Index and the 3 queue slots after it */
 #define SPIN_PC   0x42076u         /* where the interrupted code resumes */
 
 uint32_t frame_pixels[VDP_MAX_W * VDP_MAX_H];
@@ -47,6 +51,14 @@ void frame_run(void) {
 
     vdp.in_vblank = 1;
     vdp.line = h;
+    /* replaced sound effects: the game's requests wait in the sound queue
+     * ($FF500A-$FF500D) for the driver, which runs in VInt; a replaced one
+     * starts its sample and is taken out of the queue */
+    if (sfx_enabled())
+        for (int i = 0; i < 4; i++) {
+            uint8_t id = m68k_ram[SOUND_QUEUE + i];
+            if (id && sfx_request(id)) m68k_ram[SOUND_QUEUE + i] = 0;
+        }
     if (vdp_vint_enabled()) m68k_interrupt(6, SPIN_PC);
     vdp.in_vblank = 0;
 
@@ -60,6 +72,13 @@ void frame_run(void) {
     /* the Z80, YM2612 and PSG play out the rest of the frame */
     const int16_t *samples;
     int n = sound_end_frame(&samples);
+    if (sfx_enabled()) {                                 /* plus any replacement samples */
+        static int16_t mix[2 * 8192];
+        if (n > 8192) n = 8192;
+        memcpy(mix, samples, (size_t)n * 2 * sizeof(int16_t));
+        sfx_mix(mix, n);
+        samples = mix;
+    }
     platform_audio(samples, n);
 }
 

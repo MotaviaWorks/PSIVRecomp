@@ -23,3 +23,6 @@ psiv.log
 psiv-crash.txt
 saves/
 screenshots/
+
+# Sound effect samples (your own; licensed, never committed)
+sfx/**/*.wav
