@@ -16,4 +16,15 @@ void platform_frame(const uint32_t *pixels, int width, int height);
 /* Render a frame and deliver HInt/VInt. Called from the WaitForVInt hook. */
 void frame_run(void);
 
+/* True if this frame ends with the game's VInt actually running (a logical
+ * frame, in reference-trace terms). Valid inside platform_frame. */
+int frame_vint_will_fire(void);
+
+/* Run one VInt as the original does while the game is still busy: VInt_Flag
+ * clear, so only the sound driver runs. Used to replay recorded lag. */
+void frame_lag_vint(void);
+
+/* Lag VInts to run right after this frame's VInt (reference replay only). */
+extern int frame_pending_lag;
+
 #endif

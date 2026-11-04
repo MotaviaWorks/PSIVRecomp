@@ -96,7 +96,7 @@ or cycle counting are needed.
 | M1 | Decoder + function map | Decoder matches the listing 100%; function list + CFG; cross-branch tracing closes the remaining indirect sites — **done 2026-11-03** (see below) |
 | M2 | Emitter | All code recompiles to C and compiles cleanly — **done 2026-11-03** (see below) |
 | M3 | First boot | SDL3 window shows the SEGA logo and the title screen (no sound) — **done 2026-11-03**: SEGA logo, intro, title, and a new game through to the first field scene |
-| M4 | Reference harness | BizHawk recordings replay in the port with matching state through the intro |
+| M4 | Reference harness | BizHawk recordings replay in the port with matching state through the intro — **done 2026-11-03**: 2,348/2,348 frames identical through the first field scene |
 | M5 | Sound | Z80 + YM2612 + PSG; music and effects match |
 | M6 | Playable | Saves, controller support, scaling/fullscreen; full playthrough matches the reference |
 | M7 | Enhancements | Features from [IDEAS.md](IDEAS.md) |
@@ -170,6 +170,35 @@ or cycle counting are needed.
     outside VInt; the HV counter is coarse.
   - Shadow/highlight mode and interlace are not implemented.
   - Colours use a linear 3-bit to 8-bit ramp.
+
+### M4 results
+
+- **BizHawk execute hooks work** on the Genesis Plus GX core, so the reference
+  samples at exactly the port's frame boundary: entry to `VInt` ($524) with
+  `VInt_Flag` set (a *logical frame*). VInts with the flag clear are counted as
+  lag.
+- **Trace** (`tools/bizhawk/record.lua`, v3): per logical frame the pad byte,
+  lag count, main-code stack pointer, and 16-hex-digit SHA-256s of RAM (16 ×
+  4 KB, live stack only, sound driver split out), VRAM (16 × 4 KB), CRAM,
+  VSRAM, and the sound driver's RAM. `psiv_headless --replay` mirrors it;
+  `tools/bizhawk/check.py` runs both and `diffdump.py` names differing bytes.
+- **Result**: the scripted new-game run (2,600 emulated frames: SEGA screen,
+  intro, title, new game, opening dialogue, walking) matches on all 2,348
+  logical frames: every byte of RAM outside the sound driver, all of VRAM,
+  CRAM and VSRAM, and the stack pointer.
+- **Bugs it found and fixed**:
+  - VSRAM keeps the full 16-bit word as written; I had masked it to 11 bits.
+  - VDP status: the VInt-pending bit is already clear inside the handler; bits
+    15-10 are open bus ($EC00, the prefetched address word at the one read the
+    game stores).
+  - Sprite collision (bit 5) and overflow (bit 6) flags, set while drawing
+    and cleared when read.
+- **Known, accepted difference**: the sound driver's RAM drifts (from logical
+  frame 397 in this run). On the original, lag VInts land somewhere inside the
+  main code's work; the replay delivers them at the start of it, so a sound
+  request can be consumed one interrupt earlier or later. It does not feed
+  back into game state here; the sound driver is verified against the VGM
+  rips in M5 instead.
 
 ## Open risks
 

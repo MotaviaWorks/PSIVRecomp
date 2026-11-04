@@ -49,6 +49,25 @@ build\native-Release\psiv_headless.exe --frames 1600 --press 250:S:4 --press 420
 
 `psiv_headless_trace` is the same with block tracing and return-address checks.
 
+### Checking against BizHawk
+
+The port is verified frame by frame against BizHawk (Genesis Plus GX core).
+`tools/bizhawk/record.lua` logs, at every frame where the game waits for
+vertical blank, the pad state, lag, stack pointer and SHA-256s of RAM, VRAM,
+CRAM and VSRAM; `psiv_headless --replay` plays the same input and stops at the
+first difference.
+
+```
+python tools/bizhawk/check.py                  # record the scripted new-game run, then replay it
+python tools/bizhawk/check.py --dump-at 858    # also dump both sides at that frame and diff the bytes
+```
+
+To use your own play as a test: in EmuHawk load the ROM, reboot the core,
+open Tools > Lua Console, open `tools/bizhawk/record_play.lua` and play. Then
+`python tools/bizhawk/check.py --trace build/bizhawk/play_<date>_<time>.trace`.
+EmuHawk's location defaults to `H:\Emulation\08 - Tools\BizHawk\EmuHawk.exe`
+(override with the `PSIV_BIZHAWK` environment variable).
+
 `prepare_rom.py` accepts raw and interleaved SMD dumps and refuses anything
 that isn't the USA ROM (SHA1 `bc7ff6d6a8408f38562bc610f24645cad6c42629`).
 `build_disasm.py` reassembles the disassembly with the bundled assembler on

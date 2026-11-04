@@ -23,6 +23,7 @@
 
 uint32_t frame_pixels[VDP_MAX_W * VDP_MAX_H];
 uint64_t frame_count;
+int frame_pending_lag;
 
 void frame_run(void) {
     static VdpLine line;
@@ -47,6 +48,28 @@ void frame_run(void) {
     vdp.line = h;
     if (vdp_vint_enabled()) m68k_interrupt(6, SPIN_PC);
     vdp.in_vblank = 0;
+
+    /* lag VInts scheduled by a reference replay: they belong at the start of
+     * the main code's next frame of work */
+    while (frame_pending_lag > 0) {
+        frame_pending_lag--;
+        frame_lag_vint();
+    }
+}
+
+int frame_vint_will_fire(void) {
+    return vdp_vint_enabled() && m68k.imask < 6;
+}
+
+void frame_lag_vint(void) {
+    /* a VInt the original takes while the game is still busy (VInt_Flag
+     * clear): the handler skips to VInt_Skip and only runs the sound driver */
+    uint8_t flag = m68k_ram[VINT_FLAG];
+    m68k_ram[VINT_FLAG] = 0;
+    vdp.in_vblank = 1;
+    if (frame_vint_will_fire()) m68k_interrupt(6, SPIN_PC);
+    vdp.in_vblank = 0;
+    m68k_ram[VINT_FLAG] = flag;
 }
 
 void psiv_wait_vblank(void) {

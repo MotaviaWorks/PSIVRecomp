@@ -8,6 +8,13 @@
  *     --press F:KEYS:N   hold KEYS from frame F for N frames; KEYS from
  *                        U D L R A B C S (S = Start). Repeatable.
  *     --shot F:PATH      save frame F as a PNG. Repeatable.
+ *     --replay TRACE     replay a BizHawk reference trace (tools/bizhawk/record.lua):
+ *                        its input and lag per logical frame, checking memory
+ *                        hashes; stops at the first difference and dumps the
+ *                        port's memory next to the trace
+ *     --keep-going       with --replay: count differing frames instead of stopping
+ *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
+ *                        (next to the trace, or build/bizhawk/port.*)
  *
  * Prints game-mode changes and, at the end, a RAM checksum. Built with
  * PSIV_TRACE it also prints the hottest code blocks.
@@ -15,6 +22,8 @@
 #include "bus.h"
 #include "frame.h"
 #include "m68k.h"
+#include "sha256.h"
+#include "vdp.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -125,8 +134,180 @@ static void report_hot(void) {
 }
 #endif
 
+/* ------------------------------------------------------------------ reference replay */
+static FILE *replay;
+static const char *replay_path;
+static uint64_t logical, dump_at, mismatched_frames;
+static int keep_going;
+
+/* memory regions serialized the way BizHawk's domains present them */
+static void region_bytes(int r, uint8_t *buf, size_t *len) {
+    switch (r) {
+    case 0: memcpy(buf, m68k_ram, 0x10000); *len = 0x10000; break;
+    case 1: memcpy(buf, vdp.vram, 0x10000); *len = 0x10000; break;
+    case 2:
+        for (int i = 0; i < 64; i++) { buf[i * 2] = (uint8_t)(vdp.cram[i] >> 8); buf[i * 2 + 1] = (uint8_t)vdp.cram[i]; }
+        *len = 128;
+        break;
+    case 3:
+        for (int i = 0; i < 40; i++) { buf[i * 2] = (uint8_t)(vdp.vsram[i] >> 8); buf[i * 2 + 1] = (uint8_t)vdp.vsram[i]; }
+        *len = 80;
+        break;
+    }
+}
+
+static void dump_state(const char *prefix) {
+    static const char *names[4] = {"ram", "vram", "cram", "vsram"};
+    static uint8_t buf[0x10000];
+    char path[512];
+    for (int r = 0; r < 4; r++) {
+        size_t n;
+        region_bytes(r, buf, &n);
+        snprintf(path, sizeof path, "%s.%s.bin", prefix, names[r]);
+        FILE *f = fopen(path, "wb");
+        if (f) { fwrite(buf, 1, n, f); fclose(f); }
+    }
+    printf("dumped %s.{ram,vram,cram,vsram}.bin\n", prefix);
+}
+
+static void dump_prefix(char *out, size_t n, const char *tag) {
+    if (replay_path) {
+        const char *dot = strrchr(replay_path, '.');
+        size_t base = dot ? (size_t)(dot - replay_path) : strlen(replay_path);
+        snprintf(out, n, "%.*s.%s", (int)base, replay_path, tag);
+    } else {
+        snprintf(out, n, "build/bizhawk/%s", tag);
+    }
+}
+
+#define SOUND_LO 0x5000u          /* sound driver RAM, compared as a soft check */
+#define SOUND_HI 0x5600u
+static char cur_line[2048];
+static int have_cur, cur_lag_delivered;
+static uint64_t sound_mismatches, first_sound_mismatch;
+
+static int read_line(void) {
+    do {
+        if (!fgets(cur_line, sizeof cur_line, replay)) return 0;
+    } while (cur_line[0] == '#');
+    return 1;
+}
+
+/* returns 0 when the trace has ended */
+static int replay_step(void) {
+    char line[2048], *tok[40];
+    int nt = 0;
+    if (!have_cur) {
+        if (!read_line()) return 0;
+        have_cur = 1;
+        cur_lag_delivered = 0;
+    }
+    memcpy(line, cur_line, sizeof line);
+    for (char *t = strtok(line, " |\r\n"); t && nt < 40; t = strtok(NULL, " |\r\n")) tok[nt++] = t;
+    if (nt < 39) { fprintf(stderr, "bad trace line at logical frame %llu (need trace v3)\n", (unsigned long long)logical); exit(2); }
+    uint64_t n = strtoull(tok[0], NULL, 10);
+    int lag = atoi(tok[1]);
+    uint32_t sp = (uint32_t)strtoul(tok[3], NULL, 16);
+    char **hashes = tok + 4;
+    if (n != logical) { fprintf(stderr, "trace out of step: %llu vs %llu\n", (unsigned long long)n, (unsigned long long)logical); exit(2); }
+
+    /* normally this frame's lag VInts already ran right after the previous
+     * VInt (scheduled below); only the first line has nowhere earlier to go */
+    if (!cur_lag_delivered)
+        for (int i = 0; i < lag; i++) frame_lag_vint();
+    bus_pad[0] = (uint8_t)atoi(tok[2]);
+
+    /* look ahead: the next frame's lag runs at the start of its main-code work */
+    char hashes_copy[34][17], sound_want[17];
+    for (int i = 0; i < 34; i++) { strncpy(hashes_copy[i], hashes[i], 16); hashes_copy[i][16] = 0; }
+    strncpy(sound_want, hashes[34], 16);
+    sound_want[16] = 0;
+    have_cur = read_line();
+    if (have_cur) {
+        char peek[2048], *t1, *t2;
+        memcpy(peek, cur_line, sizeof peek);
+        t1 = strtok(peek, " |\r\n");
+        t2 = t1 ? strtok(NULL, " |\r\n") : NULL;
+        frame_pending_lag = t2 ? atoi(t2) : 0;
+        cur_lag_delivered = 1;
+    }
+
+    static uint8_t buf[0x10000];
+    static const char *names[4] = {"RAM", "VRAM", "CRAM", "VSRAM"};
+    int bad = 0;
+    char got[17];
+    if ((A(7) & 0xFFFF) != sp) {
+        printf("logical frame %llu (port frame %llu): MISMATCH\n  stack pointer  port $%04X  reference $%04X\n",
+               (unsigned long long)logical, (unsigned long long)frame_count, A(7) & 0xFFFF, sp);
+        bad = 1;
+    }
+    for (int r = 0; r < 4; r++) {
+        size_t len;
+        region_bytes(r, buf, &len);
+        int blocks = r < 2 ? 16 : 1;
+        for (int b = 0; b < blocks; b++) {
+            const char *want = hashes_copy[r == 0 ? b : r == 1 ? 16 + b : r == 2 ? 32 : 33];
+            size_t bl = blocks == 16 ? 0x1000 : len;
+            size_t lo = (size_t)b * bl, hi = lo + bl;
+            if (r == 0 && sp > lo && sp < hi) lo = sp;          /* live stack only */
+            if (r == 0 && lo == SOUND_LO) lo = SOUND_HI;         /* sound driver: soft check below */
+            sha256_hex16(buf + lo, hi - lo, got);
+            if (strcmp(got, want)) {
+                int quiet = keep_going && mismatched_frames >= 3;
+                if (!bad && !quiet) printf("logical frame %llu (port frame %llu): MISMATCH\n",
+                                           (unsigned long long)logical, (unsigned long long)frame_count);
+                if (!quiet) {
+                    printf("  %s", names[r]);
+                    if (blocks == 16) printf(" $%04X-$%04X", b * 0x1000, b * 0x1000 + 0xFFF);
+                    printf("  port %s  reference %s\n", got, want);
+                }
+                bad = 1;
+            }
+        }
+    }
+    sha256_hex16(m68k_ram + SOUND_LO, SOUND_HI - SOUND_LO, got);
+    if (strcmp(got, sound_want)) {
+        if (!sound_mismatches) first_sound_mismatch = logical;
+        sound_mismatches++;
+    }
+    if (bad && keep_going) {
+        mismatched_frames++;
+        return 1;
+    }
+    if (bad) {
+        char prefix[512], tag[64];
+        snprintf(tag, sizeof tag, "port%llu", (unsigned long long)logical);
+        dump_prefix(prefix, sizeof prefix, tag);
+        dump_state(prefix);
+        printf("re-record with PSIV_DUMP_AT = %llu for the reference side\n", (unsigned long long)logical);
+        exit(1);
+    }
+    return 1;
+}
+
 void platform_frame(const uint32_t *pixels, int width, int height) {
     uint64_t f = frame_count;
+    if (frame_vint_will_fire()) {
+        logical++;
+        if (dump_at && logical == dump_at) {
+            char prefix[512];
+            dump_prefix(prefix, sizeof prefix, "port");
+            dump_state(prefix);
+        }
+        if (replay && !replay_step()) {
+            if (sound_mismatches)
+                printf("sound driver RAM differed on %llu logical frames (first: %llu); "
+                       "checked properly against VGM rips in M5\n",
+                       (unsigned long long)sound_mismatches, (unsigned long long)first_sound_mismatch);
+            if (mismatched_frames)
+                printf("trace ended: %llu of %llu logical frames differ\n",
+                       (unsigned long long)mismatched_frames, (unsigned long long)(logical - 1));
+            else
+                printf("trace ended: all %llu logical frames match\n", (unsigned long long)(logical - 1));
+            report();
+            exit(0);
+        }
+    }
     uint16_t mode = (uint16_t)(m68k_ram[GAME_MODE] << 8 | m68k_ram[GAME_MODE + 1]);
     if (mode != last_mode) {
         printf("frame %llu: game mode %u\n", (unsigned long long)f, mode / 4);
@@ -137,10 +318,12 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
             save_png(shots[i].path, pixels, width, height);
             printf("frame %llu: saved %s (%dx%d)\n", (unsigned long long)f, shots[i].path, width, height);
         }
-    uint8_t keys = 0;
-    for (int i = 0; i < npress; i++)
-        if (f >= presses[i].frame && f < presses[i].frame + presses[i].len) keys |= presses[i].keys;
-    bus_pad[0] = keys;
+    if (!replay) {
+        uint8_t keys = 0;
+        for (int i = 0; i < npress; i++)
+            if (f >= presses[i].frame && f < presses[i].frame + presses[i].len) keys |= presses[i].keys;
+        bus_pad[0] = keys;
+    }
     if (f + 1 >= frame_limit) {
         report();
 #ifdef PSIV_TRACE
@@ -181,6 +364,15 @@ int main(int argc, char **argv) {
             shots[nshot].frame = strtoull(s, &e, 10);
             shots[nshot].path = *e == ':' ? e + 1 : "shot.png";
             nshot++;
+        } else if (!strcmp(argv[i], "--replay") && i + 1 < argc) {
+            replay_path = argv[++i];
+            replay = fopen(replay_path, "r");
+            if (!replay) { fprintf(stderr, "cannot open %s\n", replay_path); return 1; }
+            frame_limit = UINT64_MAX;
+        } else if (!strcmp(argv[i], "--dump-at") && i + 1 < argc) {
+            dump_at = strtoull(argv[++i], NULL, 10);
+        } else if (!strcmp(argv[i], "--keep-going")) {
+            keep_going = 1;
         } else {
             fprintf(stderr, "unknown option %s\n", argv[i]);
             return 2;

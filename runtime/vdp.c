@@ -33,7 +33,9 @@ static void target_write(uint16_t v) {
     switch (vdp.code & 0x0F) {
     case 0x1: vram_write(vdp.addr, v); break;
     case 0x3: vdp.cram[(vdp.addr >> 1) & 0x3F] = v & 0x0EEE; break;
-    case 0x5: if ((vdp.addr >> 1) < 40) vdp.vsram[vdp.addr >> 1] = v & 0x07FF; break;
+    /* VSRAM keeps the full word as written (Genesis Plus GX does too); only
+     * the low 10 bits matter when drawing */
+    case 0x5: if ((vdp.addr >> 1) < 40) vdp.vsram[vdp.addr >> 1] = v; break;
     default: break;              /* writes in a read mode are ignored */
     }
     vdp.addr = (uint16_t)(vdp.addr + vdp.reg[15]);
@@ -131,9 +133,14 @@ uint16_t vdp_read_data(void) {
 }
 
 uint16_t vdp_read_status(void) {
-    uint16_t s = 0x3400 | 0x0200;                 /* open bus bits, FIFO empty */
+    /* Bits 15-10 are open bus: whatever the 68000 last prefetched. The one read
+     * the game keeps (VInt: move.w (a6),($EF22).w) sees its own address word,
+     * $EF22, so $EC00. The VInt-pending bit (7) is already cleared by then:
+     * taking the interrupt acknowledges it. Bit 9 = FIFO empty. */
+    uint16_t s = 0xEC00 | 0x0200 | vdp.sprite_status;
     vdp.pending = 0;
-    if (vdp.in_vblank) s |= 0x0088;               /* in vblank, VInt happened */
+    vdp.sprite_status = 0;                        /* collision/overflow clear when read */
+    if (vdp.in_vblank) s |= 0x0008;
     else if (vdp.status_toggle ^= 1) s |= 0x0008; /* main code polling: let wait loops finish */
     return s;
 }
@@ -222,21 +229,23 @@ static void render_sprites(int y, uint8_t *out, int width) {
         int sx = ((s[6] << 8 | s[7]) & 0x1FF) - 128;
         link = s[3] & 0x7F;
         if (y >= sy && y < sy + vs * 8) {
-            if (++drawn > per_line) break;                    /* sprites-per-line limit */
+            if (++drawn > per_line) { vdp.sprite_status |= 0x40; break; }   /* per-line limit: overflow */
             if (sx == -128 && prev_on_line) masked = 1;       /* x=0 sprite masks the rest */
             prev_on_line = 1;
             int ty = y - sy;
             if (attr & 0x1000) ty = vs * 8 - 1 - ty;
             for (int cx = 0; cx < hs * 8; cx++) {
-                if (pixels++ >= max_px) break;
+                if (pixels++ >= max_px) { vdp.sprite_status |= 0x40; break; }
                 int x = sx + cx;
-                if (masked || x < 0 || x >= width || out[x]) continue;
+                if (masked || x < 0 || x >= width) continue;
                 int tx = (attr & 0x0800) ? hs * 8 - 1 - cx : cx;
                 /* sprite cells are stored column by column */
                 uint16_t tile = (uint16_t)((attr & 0x07FF) + (tx >> 3) * vs + (ty >> 3));
                 uint16_t e = (uint16_t)((attr & 0xE000) | (tile & 0x07FF));   /* flips already applied */
                 uint8_t p = tile_pixel(e, tx & 7, ty & 7);
-                if (p) out[x] = p;
+                if (!p) continue;
+                if (out[x]) vdp.sprite_status |= 0x20;            /* two opaque sprite pixels: collision */
+                else out[x] = p;
             }
         }
     } while (link && ++count < max_sprites);

@@ -14,6 +14,8 @@ endif()
 if(MSVC)
   # /bigobj: some generated files hold thousands of labels
   set(WARN /W3 /WX /bigobj /wd4102)
+  # portable C (fopen, strtok) rather than the MSVC-only _s variants
+  add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
   set(WARN -Wall -Werror -Wno-unused-label -Wno-unused-but-set-variable)
 endif()
@@ -31,13 +33,14 @@ target_compile_options(psiv_code_trace PRIVATE ${WARN})
 
 # Hardware: bus, VDP, frame loop (object files, so the code<->hardware calls link either way)
 set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/frame.c)
+set(TEST_SOURCES runtime/headless.c runtime/sha256.c)
 
 # Headless front end: scripted input, PNG screenshots
-add_executable(psiv_headless runtime/headless.c ${HW_SOURCES})
+add_executable(psiv_headless ${TEST_SOURCES} ${HW_SOURCES})
 target_link_libraries(psiv_headless PRIVATE psiv_code)
 target_compile_options(psiv_headless PRIVATE ${WARN})
 
-add_executable(psiv_headless_trace runtime/headless.c ${HW_SOURCES})
+add_executable(psiv_headless_trace ${TEST_SOURCES} ${HW_SOURCES})
 target_link_libraries(psiv_headless_trace PRIVATE psiv_code_trace)
 target_compile_options(psiv_headless_trace PRIVATE ${WARN})
 

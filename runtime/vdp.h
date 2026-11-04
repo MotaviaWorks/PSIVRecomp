@@ -32,6 +32,7 @@ typedef struct {
     int      line;               /* line being drawn (for the HV counter) */
     int      hint_counter;
     int      status_toggle;
+    uint16_t sprite_status;      /* $20 collision, $40 overflow: set while drawing, cleared on read */
 } Vdp;
 
 extern Vdp vdp;
