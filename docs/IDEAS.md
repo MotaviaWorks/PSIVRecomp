@@ -54,6 +54,20 @@ window tile, the cell is drawn from the game's own window-free copy of the
 battle map ($FF2540, which it uses to restore what a window covered), and
 the cursor sprites are left out; the remaining windows (enemy names,
 messages) are read back from their tiles and redrawn in the same style.
+- **The whole party while commands are chosen** (PsiLok, 2026-11-04; done): the
+  game clears everyone but the member choosing from plane A *and* from the
+  window-free map, and its command window covers part of that member (the
+  vertical cut PsiLok saw). Their art stays in VRAM (fighter +$E = its VRAM
+  address, +$C = x + 128; blocks of 6x6 cells, rows 15-20), so the port keeps
+  each member's name-table cells from frames where they stand in full and
+  draws them back; it holds them after the last command until the game draws
+  someone itself. Gold aura on the member choosing (their silhouette from the
+  frame, blurred, never over the party's own pixels; motes rising), cyan on an
+  ally target. Commands moved to a strip the dock opens under the party; lists
+  beside the party where they fit, else above everyone's heads.
+- **Next, if wanted:** during the party's own actions the game still hides
+  everyone but the actor (who appears as a sprite); the same mechanism could
+  keep the others standing.
 
 ## Public release (PsiLok, 2026-11-03)
 Players bring their own ROM; nothing from the game is in the repo or the

@@ -14,6 +14,13 @@
  * sprites. Other windows (enemy names, "AGILITY is UP!", the victory
  * messages) are read back from their tiles and redrawn in the same style.
  * Vehicle battles keep the original windows.
+ *
+ * While commands are chosen the game shows only the member choosing; here
+ * the whole party stays in the picture (their name-table cells, kept from
+ * frames where they stand in full, drawn back into plane A; their art never
+ * leaves VRAM), the member choosing has a gold aura (an ally being targeted
+ * a cyan one), and the commands sit in a strip the dock opens under the
+ * party, so no menu covers anyone.
  */
 #ifndef PSIV_BATTLEUI_H
 #define PSIV_BATTLEUI_H

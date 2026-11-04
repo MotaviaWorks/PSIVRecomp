@@ -94,7 +94,11 @@ original game, unchanged; **Enhanced** turns on the additions:
   (and each member's chosen action), the commands spelled out (Attack,
   Technique, Skill, Item, Defend) with a line on what each does, technique /
   skill / item lists with costs or uses left and a description of the one
-  highlighted, a marker and name over the enemy being targeted. The game
+  highlighted, a marker and name over the enemy being targeted. While
+  commands are chosen the whole party stays on screen (the original shows
+  only the member choosing), with a gold aura on whoever is choosing and a
+  cyan one on an ally being targeted; the commands sit in a strip under the
+  party and the lists beside or above it, so no menu covers anyone. The game
   still runs its own menus: the port mirrors their state from RAM, so the
   controls are the original ones. Names come from your ROM; the descriptions
   are the port's own (`runtime/battledesc.c`). Vehicle battles keep the

@@ -4,6 +4,7 @@
 #include "battleui.h"
 #include "battledesc.h"
 #include "depth.h"
+#include "frame.h"
 #include "hdtext.h"
 #include "m68k.h"
 #include "uikit.h"
@@ -11,6 +12,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* RAM ($FFxxxx); see the disassembly's ps4.constants.asm */
@@ -119,12 +121,15 @@ static void read_windows(void) {
         }
 }
 
+static void party_reset(void);
+static void party_frame(void);
+
 void battleui_frame(void) {
     active = 0;
     vdp_plane_a_override = NULL;
     vdp_sprite_hidden = NULL;
-    if (!enabled || !ui_ready()) return;
-    if (r16(GAME_MODE_INDEX) / 4 != MODE_BATTLE || r16(VEHICLE_INDEX) != 0) return;
+    if (!enabled || !ui_ready()) { party_reset(); return; }
+    if (r16(GAME_MODE_INDEX) / 4 != MODE_BATTLE || r16(VEHICLE_INDEX) != 0) { party_reset(); return; }
     if (!(vdp.reg[1] & 0x40) || (vdp.reg[16] & 3) != 1) return;    /* display on, 64-cell planes */
     active = 1;
     vx0 = vdp_view_x0;
@@ -165,6 +170,7 @@ void battleui_frame(void) {
         }
     }
     vdp_sprite_hidden = hidden;
+    party_frame();
 }
 
 /* ------------------------------------------------------------------ battle state */
@@ -198,6 +204,107 @@ static int nth_fighter(int first, int last, int n) {
     for (int k = first; k <= last; k++)
         if (r16(FIGHTERS + (unsigned)k * 0x40) && n-- == 0) return k;
     return -1;
+}
+
+/* ------------------------------------------------------------------ the party in the picture */
+/* While commands are chosen the game shows only the member choosing: it
+ * clears the others from plane A (and from the window-free copy of the map),
+ * and its command window covers part of the one it shows. Their art stays in
+ * VRAM, so the port keeps each member's cells from frames where they stand
+ * in full and draws the whole party back while commands are chosen. */
+#define PARTY_ROW0 4
+#define PARTY_ROWS 17                       /* rows 4-20: the battle area above the status window */
+typedef struct {
+    int valid, base, col0, x;               /* art (first tile), first column, centre (game x) */
+    uint16_t cell[PARTY_ROWS][6];           /* name-table entries; 0 = not theirs */
+} Member;
+static Member members[5];
+static int standing;                        /* members on screen at the last main menu */
+static int restore;                         /* the members drawn back this frame */
+
+/* their aura (see below): how strong, gold (0) or cyan (1); motes rising */
+static float aura_level[5], aura_mix[5];
+typedef struct { float x, y, vy, life, max_life, size, phase; } Mote;
+#define MAX_MOTES 40
+static Mote motes[MAX_MOTES];
+static int nmotes;
+static float mote_due;
+
+static int party_tile(uint16_t e) { int t = e & 0x7FF; return (e & 0x8000) && t >= 0x180 && t < 0x280; }
+
+/* command input: anything but the main menu and the battle playing out */
+static int choosing(int menu) { return menu != M_NONE && menu != M_MAIN; }
+
+static void party_reset(void) {
+    memset(members, 0, sizeof members);
+    standing = restore = 0;
+    memset(aura_level, 0, sizeof aura_level);
+    nmotes = 0;
+    mote_due = 0;
+}
+
+static void party_frame(void) {
+    int bases[5];
+    for (int k = 0; k < 5; k++)
+        bases[k] = fighter_char(k) >= 0 ? (int)(r16(FIGHTERS + (unsigned)k * 0x40 + 0x0E) >> 5) : -1;
+    int present = 0;
+    for (int k = 0; k < 5; k++) {
+        Member *m = &members[k];
+        if (bases[k] < 0) { m->valid = 0; continue; }
+        int x = (int)r16(FIGHTERS + (unsigned)k * 0x40 + 0x0C) - 128, col0 = (x - 24) >> 3;
+        int lo = bases[k], hi = lo + 0x30;          /* their tiles: up to the next member's */
+        for (int j = 0; j < 5; j++) if (bases[j] > lo && bases[j] < hi) hi = bases[j];
+        if (m->valid && (m->base != lo || m->col0 != col0)) m->valid = 0;
+        uint16_t now[PARTY_ROWS][6];
+        int any = 0;
+        for (int r = 0; r < PARTY_ROWS; r++)
+            for (int c = 0; c < 6; c++) {
+                uint16_t e = nt(PARTY_ROW0 + r, col0 + c);
+                int t = e & 0x7FF;
+                now[r][c] = e;
+                if (party_tile(e) && t >= lo && t < hi) any = 1;
+            }
+        if (!any) continue;
+        present |= 1 << k;
+        for (int r = 0; r < PARTY_ROWS; r++)            /* cells under a window keep what they had */
+            for (int c = 0; c < 6; c++) {
+                uint16_t e = now[r][c];
+                int t = e & 0x7FF;
+                if (party_tile(e) && t >= lo && t < hi) m->cell[r][c] = e;
+                else if (!m->valid || !ui_tile(e)) m->cell[r][c] = 0;
+            }
+        m->valid = 1; m->base = lo; m->col0 = col0; m->x = x;
+    }
+    int r2 = (int)(r16(BATTLE_ROUTINE_2) & 0x7FFF), menu = menu_of(r2);
+    if (menu == M_MAIN) standing = present;
+    /* after the last command the game clears the picture before it draws the
+     * party for the actions: they stay up until it draws someone itself */
+    static int hold;
+    if (choosing(menu)) { restore = standing; hold = 45; }
+    else if (menu == M_NONE && hold > 0 && !present) { restore = standing; hold--; }
+    else { restore = 0; hold = 0; }
+    {   /* PSIV_BUI_LOG=1: the party on screen as the battle state changes */
+        static int log_on = -1, last = -1;
+        if (log_on < 0) { const char *v = getenv("PSIV_BUI_LOG"); log_on = v && *v == '1'; }
+        int key = r2 << 16 | (int)r16(COMD_INPUT) << 8 | present << 4 | restore;
+        if (log_on && key != last)
+            printf("battleui: routine %02X fighter %u present %02X standing %02X restore %02X\n",
+                   r2, r16(COMD_INPUT), present, standing, restore);
+        last = key;
+    }
+    for (int k = 0; k < 5; k++) {
+        const Member *m = &members[k];
+        if (!(restore >> k & 1) || !m->valid) continue;
+        for (int r = 0; r < PARTY_ROWS; r++)
+            for (int c = 0; c < 6; c++) {
+                uint16_t e = m->cell[r][c];
+                int row = PARTY_ROW0 + r, col = m->col0 + c;
+                if (!e || col < 0 || col >= 64) continue;
+                uint16_t cur = nt(row, col);
+                if ((cur & 0x7FF) && !ui_tile(cur) && !party_tile(cur)) continue;   /* something else is there */
+                override[row * 64 + col] = e;
+            }
+    }
 }
 
 static const char *const COMMANDS[5] = {"Attack", "Technique", "Skill", "Item", "Defend"};
@@ -273,15 +380,218 @@ static int utf8(uint32_t cp, char *o) {
     return 3;
 }
 
-/* ------------------------------------------------------------------ the party bar */
 /* The party's battle art is cut off at y 168, the top of the game's status
- * window, which hid the edge. The bar sits on a dock across the whole view
- * from just above that line, so the party stands behind it as in the
+ * window, which hid the edge. The party bar sits on a dock across the whole
+ * view from just above that line, so the party stands behind it as in the
  * original, and a soft shadow above the dock lets them fade into it. */
 #define DOCK_Y    165.0f
 #define HUD_Y0    171.0f
 #define HUD_Y1    219.0f
+/* while commands are chosen the dock opens a strip for them under the party
+ * (so no menu covers anyone) and the cards move down to make room */
+#define STRIP_Y   167.5f
+#define STRIP_H   11.0f
+#define HUD_Y0_STRIP 180.0f
+#define HUD_Y1_STRIP 222.0f
+static float strip_in;            /* 0..1, eased */
 
+/* ------------------------------------------------------------------ the aura */
+/* The member choosing glows: a soft light around their figure as it is in
+ * the frame (after the depth camera), brightest at its outline, with motes
+ * drifting up from it. Drawn before the dock and never over a party member's
+ * own pixels, so it sits behind the party the way the party sits behind the
+ * dock. An ally being targeted glows cyan the same way. */
+#define AURA_PAD 12
+#define AURA_W   (48 + 2 * AURA_PAD)
+#define AURA_H   (PARTY_ROWS * 8 + 2 * AURA_PAD)
+static uint32_t mote_rng = 0x2545F491u;
+static float mrand(void) {                                     /* xorshift: 0..1 */
+    mote_rng ^= mote_rng << 13; mote_rng ^= mote_rng >> 17; mote_rng ^= mote_rng << 5;
+    return (float)(mote_rng & 0xFFFFFF) / 16777216.0f;
+}
+
+/* a box blur of radius r, in place (tmp: scratch of the same size) */
+static void box_blur(float *f, float *tmp, int w, int h, int r) {
+    float inv = 1.0f / (float)(2 * r + 1);
+    for (int y = 0; y < h; y++) {
+        const float *s = f + y * w;
+        float *d = tmp + y * w, acc = 0;
+        for (int x = 0; x <= r && x < w; x++) acc += s[x];
+        for (int x = 0; x < w; x++) {
+            d[x] = acc * inv;
+            if (x + r + 1 < w) acc += s[x + r + 1];
+            if (x - r >= 0) acc -= s[x - r];
+        }
+    }
+    for (int x = 0; x < w; x++) {
+        float acc = 0;
+        for (int y = 0; y <= r && y < h; y++) acc += tmp[y * w + x];
+        for (int y = 0; y < h; y++) {
+            f[y * w + x] = acc * inv;
+            if (y + r + 1 < h) acc += tmp[(y + r + 1) * w + x];
+            if (y - r >= 0) acc -= tmp[(y - r) * w + x];
+        }
+    }
+}
+
+static float field_at(const float *f, int w, int h, int x, int y) {
+    return x < 0 || y < 0 || x >= w || y >= h ? 0.0f : f[y * w + x];
+}
+
+static float bilinear(const float *f, int w, int h, float x, float y) {
+    x -= 0.5f; y -= 0.5f;
+    int x0 = (int)floorf(x), y0 = (int)floorf(y);
+    float fx = x - (float)x0, fy = y - (float)y0;
+    float a = field_at(f, w, h, x0, y0), b = field_at(f, w, h, x0 + 1, y0);
+    float c = field_at(f, w, h, x0, y0 + 1), d = field_at(f, w, h, x0 + 1, y0 + 1);
+    float top = a + (b - a) * fx;
+    return top + (c + (d - c) * fx - top) * fy;
+}
+
+static uint32_t mix_rgb(uint32_t a, uint32_t b, float t) {
+    uint32_t o = 0;
+    for (int sh = 0; sh <= 16; sh += 8) {
+        float ca = (float)(a >> sh & 255), cb = (float)(b >> sh & 255);
+        o |= (uint32_t)(ca + (cb - ca) * t + 0.5f) << sh;
+    }
+    return o;
+}
+
+static void add_light(uint32_t *p, uint32_t rgb, float a) {
+    if (a <= 0.0f) return;
+    int r = (int)(*p >> 16 & 255) + (int)((float)(rgb >> 16 & 255) * a);
+    int g = (int)(*p >> 8 & 255) + (int)((float)(rgb >> 8 & 255) * a);
+    int b = (int)(*p & 255) + (int)((float)(rgb & 255) * a);
+    *p = 0xFF000000u | (uint32_t)(r > 255 ? 255 : r) << 16 | (uint32_t)(g > 255 ? 255 : g) << 8
+       | (uint32_t)(b > 255 ? 255 : b);
+}
+
+/* where the party layer is in the output: output = (s * frame + b) * S (the
+ * depth camera's last frame; s = 1, b = 0 without it) */
+static void party_xform(float *s, float *bx, float *by) {
+    float ex, ey;
+    depth_to_screen(1, 0.0f, 0.0f, bx, by);
+    depth_to_screen(1, 1.0f, 1.0f, &ex, &ey);
+    *s = ex - *bx;
+    if (*s < 0.5f || *s > 2.0f) { *s = 1.0f; *bx = *by = 0.0f; }
+}
+
+static int party_px(const VdpLine *l, int x) {
+    uint8_t a = l->win_in[x] ? 0 : l->plane_a[x];
+    return a && (a & 0x80) && party_tile(l->plane_a_tile[x]);
+}
+
+/* k: the fighter; glow / rim: the light's colours; strength 0..1; t: seconds */
+static void draw_aura(int k, uint32_t glow_rgb, uint32_t rim_rgb, float strength, float t, int frame_w,
+                      int frame_h, int with_motes) {
+    const Member *m = &members[k];
+    if (!m->valid || strength <= 0.003f) return;
+    int r0 = PARTY_ROWS, r1 = -1;
+    for (int r = 0; r < PARTY_ROWS; r++)
+        for (int c = 0; c < 6; c++)
+            if (m->cell[r][c]) { if (r < r0) r0 = r; r1 = r; }
+    if (r1 < 0) return;
+    /* their pixels, and everyone's (the light never covers the party) */
+    static float glow[AURA_W * AURA_H], rim[AURA_W * AURA_H], tmp[AURA_W * AURA_H];
+    static uint8_t occ[AURA_W * AURA_H];
+    int fx0 = m->col0 * 8 + (int)OX - AURA_PAD, fy0 = (PARTY_ROW0 + r0) * 8 - AURA_PAD;
+    int rw = AURA_W, rh = (r1 - r0 + 1) * 8 + 2 * AURA_PAD;
+    int any = 0;
+    for (int y = 0; y < rh; y++)
+        for (int x = 0; x < rw; x++) {
+            int fx = fx0 + x, fy = fy0 + y, i = y * rw + x, p = 0;
+            if (fx >= 0 && fy >= 0 && fx < frame_w && fy < frame_h) p = party_px(&frame_lines[fy], fx);
+            occ[i] = (uint8_t)p;
+            glow[i] = rim[i] = p && x >= AURA_PAD && x < AURA_PAD + 48 ? 1.0f : 0.0f;
+            any |= p;
+        }
+    if (!any) return;
+    for (int i = 0; i < 3; i++) box_blur(glow, tmp, rw, rh, 4);
+    box_blur(rim, tmp, rw, rh, 1);
+    /* the halo shimmers, a slow pattern flowing upward */
+    for (int y = 0; y < rh; y++)
+        for (int x = 0; x < rw; x++) {
+            float w = sinf((float)x * 0.35f + t * 1.3f);
+            glow[y * rw + x] *= 0.78f + 0.22f * sinf((float)y * 0.45f + t * 5.0f + 1.7f * w);
+        }
+
+    float s, bx, by;
+    party_xform(&s, &bx, &by);
+    int X0 = (int)floorf(((float)fx0 * s + bx) * S), Y0 = (int)floorf(((float)fy0 * s + by) * S);
+    int X1 = (int)ceilf(((float)(fx0 + rw) * s + bx) * S), Y1 = (int)ceilf(((float)(fy0 + rh) * s + by) * S);
+    if (X0 < cv.x0) X0 = cv.x0;
+    if (Y0 < cv.y0) Y0 = cv.y0;
+    if (X1 > cv.x1) X1 = cv.x1;
+    if (Y1 > cv.y1) Y1 = cv.y1;
+    float a = strength * fade;
+    for (int Y = Y0; Y < Y1; Y++) {
+        float ly = (((float)Y + 0.5f) / S - by) / s - (float)fy0;
+        int iy = (int)floorf(ly);
+        uint32_t *row = cv.px + (size_t)Y * (size_t)cv.stride;
+        for (int X = X0; X < X1; X++) {
+            float lx = (((float)X + 0.5f) / S - bx) / s - (float)fx0;
+            int ix = (int)floorf(lx);
+            if (ix >= 0 && iy >= 0 && ix < rw && iy < rh && occ[iy * rw + ix]) continue;
+            float g = bilinear(glow, rw, rh, lx, ly), e = bilinear(rim, rw, rh, lx, ly);
+            if (g <= 0.002f && e <= 0.002f) continue;
+            g = fminf(1.0f, g * 2.4f);
+            e = fminf(1.0f, e * 2.4f);
+            add_light(&row[X], glow_rgb, a * 0.6f * g * sqrtf(g));
+            add_light(&row[X], rim_rgb, a * 0.4f * e);
+        }
+    }
+
+    if (!with_motes) return;
+    /* motes: born just outside the figure (above the dock) */
+    mote_due += 12.0f * strength / 60.0f;
+    while (mote_due >= 1.0f && nmotes < MAX_MOTES) {
+        mote_due -= 1.0f;
+        for (int tries = 0; tries < 24; tries++) {
+            int x = AURA_PAD - 2 + (int)(mrand() * 52.0f), y = (int)(mrand() * (float)rh * 0.7f);
+            if (fy0 + y > (int)DOCK_Y - 8) continue;
+            int i = y * rw + x;
+            if (x < 0 || x >= rw || occ[i] || rim[i] < 0.15f) continue;
+            Mote *q = &motes[nmotes++];
+            q->x = (float)(fx0 + x) + mrand();
+            q->y = (float)(fy0 + y) + mrand();
+            q->vy = -(14.0f + 10.0f * mrand());
+            q->life = q->max_life = 1.2f + 0.8f * mrand();
+            q->size = 0.8f + 0.6f * mrand();
+            q->phase = mrand() * 6.2831853f;
+            break;
+        }
+    }
+    if (mote_due > 1.0f) mote_due = 1.0f;
+}
+
+/* the motes drift up and fade, whoever they came from */
+static void draw_motes(uint32_t rgb) {
+    const float dt = 1.0f / 60.0f;
+    float s, bx, by;
+    party_xform(&s, &bx, &by);
+    for (int i = 0; i < nmotes;) {
+        Mote *q = &motes[i];
+        q->life -= dt;
+        if (q->life <= 0.0f) { motes[i] = motes[--nmotes]; continue; }
+        q->y += q->vy * dt;
+        q->phase += dt * 3.1f;
+        float age = 1.0f - q->life / q->max_life;             /* 0 -> 1 */
+        float alpha = (age < 0.2f ? age / 0.2f : 1.0f) * (1.0f - age) * fade;
+        float mx = (q->x + 1.4f * sinf(q->phase)) * s + bx, my = q->y * s + by;
+        float R = q->size * S * 1.6f;
+        int x0 = (int)(mx * S - R), x1 = (int)(mx * S + R) + 1, y0 = (int)(my * S - R), y1 = (int)(my * S + R) + 1;
+        for (int Y = y0 < cv.y0 ? cv.y0 : y0; Y < y1 && Y < cv.y1; Y++)
+            for (int X = x0 < cv.x0 ? cv.x0 : x0; X < x1 && X < cv.x1; X++) {
+                float dx = ((float)X + 0.5f - mx * S) / R, dy = ((float)Y + 0.5f - my * S) / R, d2 = dx * dx + dy * dy;
+                if (d2 >= 1.0f) continue;
+                float f = (1.0f - d2) * (1.0f - d2);
+                add_light(&cv.px[(size_t)Y * (size_t)cv.stride + (size_t)X], rgb, alpha * f * 0.9f);
+            }
+        i++;
+    }
+}
+
+/* ------------------------------------------------------------------ the party bar */
 typedef struct { float x0, x1; int id; } Card;
 static Card cards[5];
 static int ncards;
@@ -308,11 +618,6 @@ static void card_layout(int view_w) {
         cards[k].id = ids[k];
     }
     ncards = n;
-}
-
-static int card_of(int id) {
-    for (int k = 0; k < ncards; k++) if (cards[k].id == id) return k;
-    return -1;
 }
 
 static void command_tag(int fighter, char *out, size_t n, uint32_t *color) {
@@ -346,11 +651,13 @@ static void draw_hud(int acting, int target_id, int show_commands, int frame, fl
         unsigned hp = r16(base + 0x0E), mhp = r16(base + 0x10), tp = r16(base + 0x12), mtp = r16(base + 0x14);
         unsigned status = r8(base + 0x16);
         int dead = (status & 0x44) != 0, me = id == acting, aimed = id == target_id;
-        float x0 = cards[k].x0, x1 = cards[k].x1, y0 = HUD_Y0 - (me ? 2.0f : 0.0f), y1 = HUD_Y1 - (me ? 2.0f : 0.0f);
+        float lift = me ? 2.0f * (1.0f - strip_in) : 0.0f;
+        float x0 = cards[k].x0, x1 = cards[k].x1;
+        float y0 = HUD_Y0 + (HUD_Y0_STRIP - HUD_Y0) * strip_in - lift, y1 = HUD_Y1 + (HUD_Y1_STRIP - HUD_Y1) * strip_in - lift;
         float cw = x1 - x0;
         /* card */
         if (me || aimed) {
-            float pulse = aimed ? 0.55f + 0.45f * sinf((float)frame * 0.25f) : 1.0f;
+            float pulse = aimed ? 0.8f + 0.2f * sinf((float)frame * 0.25f) : 1.0f;
             uint32_t c = aimed ? 0x7FE0FF : 0xF2C84B;
             ui_round_frame(&cv, SX(x0) - 1.25f * S, SY(y0) - 1.25f * S, SX(x1) + 1.25f * S, SY(y1) + 1.25f * S,
                            5.25f * S, 1.6f * S, c, AL(200 * pulse * a));
@@ -401,16 +708,22 @@ static void draw_hud(int acting, int target_id, int show_commands, int frame, fl
 
 /* ------------------------------------------------------------------ menus */
 static float menu_alpha;          /* fades a menu in */
-static float actor_sx = 160.0f;   /* where the character choosing stands, game x */
-static float hl_x, hl_y, hl_w;    /* the highlight, eased towards the cursor */
-static int hl_snap = 1;
+static float actor_sx = 160.0f;   /* where the character choosing stands on screen, game x */
 
+/* a highlight eased towards the cursor: one for the open menu, one for the
+ * command strip (which stays up under a list) */
+typedef struct { float x, y, w; int snap; } Glide;
+static Glide hl_menu = {0, 0, 0, 1}, hl_strip = {0, 0, 0, 1};
+
+static void highlight_on(Glide *g, float x0, float y0, float x1, float y1, float alpha) {
+    if (g->snap) { g->x = x0; g->y = y0; g->w = x1 - x0; g->snap = 0; }
+    g->x += (x0 - g->x) * 0.45f;
+    g->y += (y0 - g->y) * 0.45f;
+    g->w += (x1 - x0 - g->w) * 0.45f;
+    pill(g->x, g->y, g->x + g->w, g->y + (y1 - y0), 0xFFE08A, 0xF0A83C, alpha);
+}
 static void highlight(float x0, float y0, float x1, float y1, float alpha) {
-    if (hl_snap) { hl_x = x0; hl_y = y0; hl_w = x1 - x0; hl_snap = 0; }
-    hl_x += (x0 - hl_x) * 0.45f;
-    hl_y += (y0 - hl_y) * 0.45f;
-    hl_w += (x1 - x0 - hl_w) * 0.45f;
-    pill(hl_x, hl_y, hl_x + hl_w, hl_y + (y1 - y0), 0xFFE08A, 0xF0A83C, alpha);
+    highlight_on(&hl_menu, x0, y0, x1, y1, alpha);
 }
 
 static void draw_main(float alpha) {
@@ -428,57 +741,74 @@ static void draw_main(float alpha) {
     }
 }
 
-/* the command bar over a card; `chosen` >= 0 dims the rest (picking a target) */
-static void draw_commands(int fighter, float cx, int chosen, const char *prompt, float alpha) {
+/* where the party stands (game x, y), from the members drawn this frame,
+ * with a margin for the depth camera's drift: menus are placed by it and
+ * stay put while the camera moves; 0 if none */
+static float party_l, party_r, party_top;
+static int party_span(void) {
+    int any = 0;
+    party_l = 1e9f; party_r = -1e9f; party_top = 1e9f;
+    for (int k = 0; k < 5; k++) {
+        const Member *m = &members[k];
+        if (!m->valid || !(restore >> k & 1)) continue;
+        for (int r = 0; r < PARTY_ROWS; r++)
+            for (int c = 0; c < 6; c++) {
+                if (!m->cell[r][c]) continue;
+                party_l = fminf(party_l, (float)((m->col0 + c) * 8) - 3.0f);
+                party_r = fmaxf(party_r, (float)((m->col0 + c) * 8 + 8) + 3.0f);
+                party_top = fminf(party_top, (float)((PARTY_ROW0 + r) * 8) - 3.0f);
+                any = 1;
+            }
+    }
+    return any;
+}
+
+/* the commands, in the strip the dock opens under the party, centred under
+ * the member choosing; what the highlighted one does beside them. `chosen`
+ * >= 0: one is picked (a list or a target is open), the rest dim */
+static void draw_commands(int fighter, int chosen, const char *prompt, float alpha) {
     int cur = chosen >= 0 ? chosen : (int)r16(COMD_INDEX + (unsigned)fighter * 2) % 5;
-    float cap = 4.6f, padx = 5.0f, gap = 3.0f, h = 12.0f, y0 = 148.0f;    /* clear of the dock */
+    float cap = 4.4f, padx = 5.0f, gap = 2.0f, h = STRIP_H, y0 = STRIP_Y;
     float wsum = 0, w[5];
     for (int i = 0; i < 5; i++) { w[i] = width(COMMANDS[i], cap) + 2 * padx; wsum += w[i]; }
     wsum += 4 * gap;
     float lo = -OX + 4.0f, hi = (float)(cv.x1 / S) - OX - 4.0f;
-    /* beside the character choosing where it fits; else (4:3, someone in
-     * the middle) on the dock's edge over their card, where it only covers
-     * their waist, with what it does beside them */
-    float x, right = actor_sx + 24.0f, left = actor_sx - 24.0f;
-    int beside = 1;
-    if (actor_sx <= 160.0f && right + wsum <= hi) x = right;
-    else if (left - wsum >= lo) x = left - wsum;
-    else if (right + wsum <= hi) x = right;
-    else {
-        beside = 0;
-        y0 = DOCK_Y - h + 2.0f;
-        x = cx - wsum / 2.0f;
-        if (x < lo) x = lo;
-        if (x + wsum > hi) x = hi - wsum;
-    }
-    panel(x - 3.0f, y0 - 3.0f, x + wsum + 3.0f, y0 + h + 3.0f, alpha);
+    float x = actor_sx - wsum / 2.0f;
+    if (x < lo + 2.0f) x = lo + 2.0f;
+    if (x + wsum > hi - 2.0f) x = hi - 2.0f - wsum;
+    ui_round_rect_v(&cv, SX(x - 2.0f), SY(y0 - 0.5f), SX(x + wsum + 2.0f), SY(y0 + h + 0.5f), (h + 1.0f) * S / 2,
+                    0x26346A, 0x18214A, AL(235 * alpha));
+    ui_round_frame(&cv, SX(x - 2.0f) - 1, SY(y0 - 0.5f) - 1, SX(x + wsum + 2.0f) + 1, SY(y0 + h + 0.5f) + 1,
+                   (h + 1.0f) * S / 2 + 1, fmaxf(1.0f, S * 0.4f), 0x6F8FE0, AL(110 * alpha));
     float bx = x;
     for (int i = 0; i < 5; i++) {
         int on = i == cur;
-        if (on) highlight(bx, y0, bx + w[i], y0 + h, alpha);
-        text_center(bx + w[i] / 2.0f, y0 + 8.4f, cap, COMMANDS[i],
+        if (on) highlight_on(&hl_strip, bx, y0 + 0.5f, bx + w[i], y0 + h - 0.5f, alpha);
+        text_center(bx + w[i] / 2.0f, y0 + 7.6f, cap, COMMANDS[i],
                     on ? 0x1A1406 : chosen >= 0 ? 0x6F7FA8 : 0xFFFFFF, alpha);
         bx += w[i] + gap;
     }
-    /* what it does, above the bar (or beside the character, clear of them) */
+    /* what it does (or what to pick), on the side with more room: one line,
+     * or two smaller ones */
     const char *line = prompt ? prompt : COMMAND_HELP[cur];
-    float lw = width(line, 3.8f) + 12.0f, lx = x + wsum / 2.0f - lw / 2.0f, ly = y0 - 16.0f;
-    if (!beside) {
-        if (left - lw >= lo) lx = left - lw;
-        else if (right + lw <= hi) lx = right;
-        ly = y0 - 15.0f;
+    uint32_t col = prompt ? 0xFFE08A : 0xD8E2FF;
+    float room_l = x - 6.0f - lo, room_r = hi - (x + wsum + 6.0f);
+    int right = room_r >= room_l;
+    float room = right ? room_r : room_l;
+    float one = width(line, 3.8f);
+    if (one <= room) {
+        float lx = right ? x + wsum + 6.0f : x - 6.0f - one;
+        text(lx, y0 + 7.4f, 3.8f, line, col, alpha);
+    } else if (room >= 36.0f) {
+        float lw = fminf(room, one * 0.62f + 8.0f), lx = right ? x + wsum + 6.0f : x - 6.0f - lw;
+        ui_text_wrap(&cv, SX(lx), SY(y0 + 4.6f), lw * S, 4.6f * S, 2, 3.4f * S, line, col, AL(255 * alpha));
     }
-    if (lx < lo) lx = lo;
-    if (lx + lw > hi) lx = hi - lw;
-    panel(lx, ly, lx + lw, ly + 11.0f, alpha * 0.92f);
-    text_center(lx + lw / 2.0f, ly + 7.7f, 3.8f, line, prompt ? 0xFFE08A : 0xD8E2FF, alpha);
 }
 
 typedef struct { char name[24]; char cost[12]; int usable; const char *desc; } Entry;
 
 /* a list in pages of four: the pages side by side, as many as fit */
-static void draw_list(const char *title, const char *info, const Entry *e, int count, int cur, float cx,
-                      float alpha) {
+static void draw_list(const char *title, const char *info, const Entry *e, int count, int cur, float alpha) {
     int pages = (count + 3) / 4;
     if (pages < 1) pages = 1;
     int cols = pages > 3 ? 3 : pages;
@@ -488,15 +818,19 @@ static void draw_list(const char *title, const char *info, const Entry *e, int c
     float colw = 66.0f, row = 10.5f, cap = 4.6f;
     float w = 10.0f + (float)cols * colw, h = 14.0f + 4.0f * row + 18.0f;
     float lo = -OX + 4.0f, hi = (float)(cv.x1 / S) - OX - 4.0f;
-    /* beside the character choosing, so they stay in view; above their card
-     * when neither side has room */
-    float x0, y1 = DOCK_Y - 4.0f, right = actor_sx + 26.0f, left = actor_sx - 26.0f;
-    if (actor_sx <= 160.0f && right + w <= hi) x0 = right;
-    else if (left - w >= lo) x0 = left - w;
-    else if (right + w <= hi) x0 = right;
+    /* beside the party where there is room, on the side of the member
+     * choosing, so it covers no one; else above everyone's heads */
+    float x0, y1;
+    int have = party_span();
+    float lx0 = party_l - 2.0f - w, rx0 = party_r + 2.0f, mid = (party_l + party_r) / 2.0f;
+    /* the member in the middle: the side with more room */
+    int near_left = actor_sx < mid - 4.0f || (actor_sx <= mid + 4.0f && lx0 - lo >= hi - (rx0 + w));
+    int fit_l = have && lx0 >= lo, fit_r = have && rx0 + w <= hi;
+    if (fit_l && (near_left || !fit_r)) { x0 = lx0; y1 = DOCK_Y - 3.0f; }
+    else if (fit_r) { x0 = rx0; y1 = DOCK_Y - 3.0f; }
     else {
-        x0 = cx - w / 2.0f;
-        y1 = 150.0f;
+        x0 = actor_sx - w / 2.0f;
+        y1 = (have ? party_top : 117.0f) - 1.0f;
         if (x0 < lo) x0 = lo;
         if (x0 + w > hi) x0 = hi - w;
     }
@@ -527,7 +861,7 @@ static void draw_list(const char *title, const char *info, const Entry *e, int c
 
 static Entry entries[ITEM_SLOTS];
 
-static void draw_techs(int fighter, int id, float cx, float alpha) {
+static void draw_techs(int fighter, int id, float alpha) {
     int n = 0;
     for (int i = 0; i < 16; i++) {
         unsigned b = r8(TECH_LIST + (unsigned)i), t = b & 0x7F;
@@ -545,10 +879,10 @@ static void draw_techs(int fighter, int id, float cx, float alpha) {
         unsigned base = CHAR_STATS + (unsigned)id * 0x80;
         snprintf(info, sizeof info, "TP %u/%u", r16(base + 0x12), r16(base + 0x14));
     }
-    draw_list("Techniques", info, entries, n, (int)r16(TECH_INDEX + (unsigned)fighter * 2) & 15, cx, alpha);
+    draw_list("Techniques", info, entries, n, (int)r16(TECH_INDEX + (unsigned)fighter * 2) & 15, alpha);
 }
 
-static void draw_skills(int fighter, float cx, float alpha) {
+static void draw_skills(int fighter, float alpha) {
     int n = 0;
     for (int i = 0; i < 8; i++) {
         unsigned b = r8(SKILL_LIST + (unsigned)i * 2), uses = r8(SKILL_LIST + (unsigned)i * 2 + 1), s = b & 0x7F;
@@ -561,10 +895,10 @@ static void draw_skills(int fighter, float cx, float alpha) {
         e->desc = battledesc_skill((int)s);
         n = i + 1;
     }
-    draw_list("Skills", "uses left", entries, n, (int)r16(SKILL_INDEX + (unsigned)fighter * 2) & 7, cx, alpha);
+    draw_list("Skills", "uses left", entries, n, (int)r16(SKILL_INDEX + (unsigned)fighter * 2) & 7, alpha);
 }
 
-static void draw_items(int fighter, int id, float cx, float alpha) {
+static void draw_items(int fighter, int id, float alpha) {
     int n = 0, equipped = 0;
     if (id >= 0)                                     /* the list starts with what they wear (stats +$4C) */
         for (int k = 0; k < 4; k++) equipped += r8(CHAR_STATS + (unsigned)id * 0x80 + 0x4C + (unsigned)k) != 0;
@@ -582,7 +916,7 @@ static void draw_items(int fighter, int id, float cx, float alpha) {
     int cur = (int)r16(ITEM_INDEX + (unsigned)fighter * 2);
     char info[24];
     snprintf(info, sizeof info, "page %d/%d", cur / 4 + 1, (n + 3) / 4 > 0 ? (n + 3) / 4 : 1);
-    draw_list("Items", info, entries, n, cur, cx, alpha);
+    draw_list("Items", info, entries, n, cur, alpha);
 }
 
 /* a chevron over what the game's cursor pointed at */
@@ -668,7 +1002,10 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     int fighter = (int)r16(COMD_INPUT), acting = menu != M_NONE ? fighter_char(fighter) : -1;
     if (fighter > 4) acting = -1;
     int key = menu * 8 + fighter;
-    if (key != last_key) { menu_alpha = 0; hl_snap = 1; last_key = key; }
+    if (key != last_key) {
+        if (key % 8 != last_key % 8 || last_key < 0) hl_strip.snap = 1;        /* another member */
+        menu_alpha = 0; hl_menu.snap = 1; last_key = key;
+    }
     menu_alpha = fminf(1.0f, menu_alpha + 0.25f);
 
     card_layout(view_w);
@@ -678,11 +1015,35 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
         if (t >= 0 && t < ncards) target_id = cards[t].id;
     }
 
-    /* the commands chosen this round, on the cards: not over the results */
-    int tags = !((r2 >= 0x1E && r2 <= 0x26) || r2 == 0x2D || r2 == 0x2F);
     /* the party bar fades in once the game has set up the fighters */
     static float hud_in;
     hud_in = ncards ? fminf(1.0f, hud_in + 0.1f) : 0.0f;
+
+    /* the aura: gold on the member choosing, cyan on an ally being targeted */
+    {
+        int actor_k = choosing(menu) && fighter < 5 && (restore >> fighter & 1) ? fighter : -1, target_k = -1;
+        for (int k = 0; k < 5 && target_id >= 0; k++)
+            if (fighter_char(k) == target_id && (restore >> k & 1)) target_k = k;
+        float t = (float)frame / 60.0f;
+        float gold_pulse = 0.84f + 0.16f * sinf(t * 6.2831853f / 1.6f);
+        float cyan_pulse = 0.82f + 0.18f * sinf((float)frame * 0.25f);
+        for (int k = 0; k < 5; k++) {
+            /* while an ally is picked, the one choosing steps back a little */
+            float goal = k == target_k ? 1.0f : k == actor_k ? (target_k >= 0 ? 0.45f : 1.0f) : 0.0f;
+            aura_level[k] += (goal - aura_level[k]) * 0.16f;
+            if (goal > 0.0f) aura_mix[k] += ((k == target_k ? 1.0f : 0.0f) - aura_mix[k]) * 0.25f;
+            if (aura_level[k] < 0.004f) continue;
+            float mx = aura_mix[k];
+            uint32_t glow = mix_rgb(0xF0A040, 0x3FA8F0, mx), rim = mix_rgb(0xFFE08A, 0x9FEAFF, mx);
+            float pulse = gold_pulse + (cyan_pulse - gold_pulse) * mx;
+            draw_aura(k, glow, rim, aura_level[k] * pulse * hud_in, t, view_w, h, mx < 0.5f);
+        }
+        draw_motes(0xFFE08A);
+    }
+
+    /* the commands chosen this round, on the cards: not over the results */
+    int tags = !((r2 >= 0x1E && r2 <= 0x26) || r2 == 0x2D || r2 == 0x2F);
+    strip_in += ((acting >= 0 && choosing(menu) ? 1.0f : 0.0f) - strip_in) * 0.22f;
     if (ncards) draw_hud(acting, target_id, tags, frame, hud_in);
 
     /* other windows: enemy names, messages, results */
@@ -693,30 +1054,43 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
         draw_window(w, w->y < 4, 1.0f);
     }
 
+    /* the commands, in the dock's strip for as long as they are chosen; a
+     * list or a target over it, the command that opened it highlighted */
     if (acting >= 0) actor_sx = (float)r16(FIGHTERS + (unsigned)fighter * 0x40 + 0x0C) - 128.0f;
-    int ci = acting >= 0 ? card_of(acting) : -1;
-    float cx = ci >= 0 ? (cards[ci].x0 + cards[ci].x1) / 2.0f : 160.0f;
+    int chosen = -1;
+    const char *prompt = NULL;
+    char pbuf[48];
+    unsigned cmd = r8(COMMAND_DATA + (unsigned)(fighter < 5 ? fighter : 0) * 4);
+    switch (menu) {
+    case M_TECH: chosen = 1; prompt = "Choose a technique"; break;
+    case M_SKILL: chosen = 2; prompt = "Choose a skill"; break;
+    case M_ITEM: chosen = 3; prompt = "Choose an item"; break;
+    case M_TARGET_ENEMY: case M_TARGET_ALLY:
+        chosen = cmd >= 1 && cmd <= 5 ? (int)cmd - 1 : 0;
+        prompt = "Choose a target";
+        if (menu == M_TARGET_ALLY && target_id >= 0) {
+            snprintf(pbuf, sizeof pbuf, "Target: %s", UI_CHAR_NAMES[target_id]);
+            prompt = pbuf;
+        }
+        break;
+    default: break;
+    }
+    if (acting >= 0 && choosing(menu) && strip_in > 0.01f) draw_commands(fighter, chosen, prompt, strip_in * hud_in);
+
     switch (menu) {
     case M_MAIN: draw_main(menu_alpha); break;
-    case M_COMMAND: draw_commands(fighter, cx, -1, NULL, menu_alpha); break;
-    case M_TECH: draw_techs(fighter, acting, cx, menu_alpha); break;
-    case M_SKILL: draw_skills(fighter, cx, menu_alpha); break;
-    case M_ITEM: draw_items(fighter, acting, cx, menu_alpha); break;
-    case M_TARGET_ENEMY: case M_TARGET_ALLY: {
-        unsigned cmd = r8(COMMAND_DATA + (unsigned)fighter * 4);
+    case M_TECH: draw_techs(fighter, acting, menu_alpha); break;
+    case M_SKILL: draw_skills(fighter, menu_alpha); break;
+    case M_ITEM: draw_items(fighter, acting, menu_alpha); break;
+    case M_TARGET_ENEMY: {
         char name[32] = "";
-        if (menu == M_TARGET_ENEMY) {
-            int f = nth_fighter(5, 10, (int)r16(ENEMY_INDEX));
-            if (f >= 0) {
-                uint32_t st = ui_ram32(FIGHTERS + (unsigned)f * 0x40 + 4) & 0xFFFF;
-                if (st >= ENEMY_STATS && st < ENEMY_STATS + 0x200)
-                    ui_decode_name(&m68k_ram[st], 14, name, (int)sizeof name);
-            }
+        int f = nth_fighter(5, 10, (int)r16(ENEMY_INDEX));
+        if (f >= 0) {
+            uint32_t st = ui_ram32(FIGHTERS + (unsigned)f * 0x40 + 4) & 0xFFFF;
+            if (st >= ENEMY_STATS && st < ENEMY_STATS + 0x200)
+                ui_decode_name(&m68k_ram[st], 14, name, (int)sizeof name);
         }
-        char prompt[48] = "Choose a target";
-        if (menu == M_TARGET_ALLY && target_id >= 0) snprintf(prompt, sizeof prompt, "Target: %s", UI_CHAR_NAMES[target_id]);
-        draw_commands(fighter, cx, cmd >= 1 && cmd <= 5 ? (int)cmd - 1 : 0, prompt, menu_alpha);
-        if (menu == M_TARGET_ENEMY) draw_target(name, 0, frame, menu_alpha);
+        draw_target(name, 0, frame, menu_alpha);
         break;
     }
     default: break;
