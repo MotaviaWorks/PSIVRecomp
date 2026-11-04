@@ -58,6 +58,10 @@ original game, unchanged; **Enhanced** turns on the additions:
   technique sprites light the scene in their colours, sparks and a flash
   where hits land, embers rising from fire, a lens flare at bright moments.
 
+- **Sound effects** (modern / original): your own samples instead of chosen
+  sounds, mapped by sound ID in `sfx/sfx.ini` (a file, or a folder played at
+  random). The samples themselves stay out of git.
+
 Planned (see `docs/IDEAS.md`): modern text, 16:9 widescreen.
 
 ### Headless runs
