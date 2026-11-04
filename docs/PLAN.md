@@ -99,7 +99,7 @@ or cycle counting are needed.
 | M4 | Reference harness | BizHawk recordings replay in the port with matching state through the intro — **done 2026-11-03**: 2,348/2,348 frames identical through the first field scene |
 | M5 | Sound | Z80 + YM2612 + PSG; music and effects match — **done 2026-11-03**: all 52 music IDs identical to BizHawk on every 68000 sound write |
 | M6 | Playable | Saves, controller support, scaling/fullscreen; full playthrough matches the reference — **done 2026-11-03**: playable and smooth (PsiLok's verdict: "almost just like the emulator"); a recorded 24,635-frame session with 7 battles identical to BizHawk, saves identical; more coverage comes from further recorded sessions |
-| M7 | Enhancements | Features from [IDEAS.md](IDEAS.md) |
+| M7 | Enhancements | Features from [IDEAS.md](IDEAS.md) — in progress: battle depth, fog and effects, the Esc menu (Classic/Enhanced), sound replacement, 16:9, modern text, side panels and modern battle menus done (v1); generated sound effects for public builds next |
 
 ### M1 results
 

@@ -15,6 +15,7 @@
  *      the sound driver, and clears VInt_Flag so the spin exits)
  */
 #include "frame.h"
+#include "battleui.h"
 #include "bus.h"
 #include "m68k.h"
 #include "sfx.h"
@@ -61,6 +62,7 @@ void frame_run(void) {
     vdp_view_w = wide ? mw + 2 * m : mw;
     int w = vdp_view_w;
     int counter = vdp.reg[10];
+    battleui_frame();                  /* modern battle menus: the game's windows left out of the picture */
 
     vdp.in_vblank = 0;
     for (int y = 0; y < h; y++) {

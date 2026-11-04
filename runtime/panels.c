@@ -3,8 +3,7 @@
  */
 #include "panels.h"
 #include "hdtext.h"
-#include "m68k.h"
-#include "romart.h"
+#include "uikit.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -17,63 +16,16 @@
 #define MONEY             0xF438u     /* Current_Money, long */
 #define CHAR_STATS        0xF500u     /* Character_Stats + id * $80 */
 #define LEVEL_TABLES      0x4074u     /* CharLevelTablePtrs (ROM): per id, initial level + table */
-#define ITEM_NAMES        0x2AAFB4u   /* InventoryNames (ROM): $FE-terminated, window charset */
-#define ITEM_NAMES_END    0x2ABA70u
 
-static const char *NAMES[11] = {"Chaz", "Alys", "Hahn", "Rune", "Gryz", "Rika", "Demi", "Wren", "Raja", "Kyra", "Seth"};
-
-typedef struct { int w, h; uint8_t *rgba; } Image;
-static Image portraits[11];
-static char item_names[256][24];
-static int items_ready;
-
-static unsigned ram8(unsigned a) { return m68k_ram[a & 0xFFFF]; }
-static unsigned ram16(unsigned a) { return ram8(a) << 8 | ram8(a + 1); }
-static uint32_t ram32(unsigned a) { return (uint32_t)ram16(a) << 16 | ram16(a + 2); }
-static uint32_t rom32(uint32_t a) {
-    return a + 3 < m68k_rom_size ? (uint32_t)m68k_rom[a] << 24 | (uint32_t)m68k_rom[a + 1] << 16 |
-                                   (uint32_t)m68k_rom[a + 2] << 8 | m68k_rom[a + 3] : 0;
-}
-static unsigned rom16(uint32_t a) { return a + 1 < m68k_rom_size ? (unsigned)(m68k_rom[a] << 8 | m68k_rom[a + 1]) : 0; }
+#define ram8  ui_ram8
+#define ram16 ui_ram16
+#define ram32 ui_ram32
+#define rom16 ui_rom16
+#define rom32 ui_rom32
+#define NAMES UI_CHAR_NAMES
 
 /* the party's dialogue portraits, from the player's ROM */
-int panels_init(void) {
-    int n = 0;
-    for (int i = 0; i < 11; i++) {
-        if (portraits[i].rgba) { n++; continue; }
-        uint8_t *px = malloc(ROMART_PORTRAIT * ROMART_PORTRAIT * 4);
-        if (px && romart_portrait(i, px)) {
-            portraits[i].w = portraits[i].h = ROMART_PORTRAIT;
-            portraits[i].rgba = px;
-            n++;
-        } else {
-            free(px);
-        }
-    }
-    return n;
-}
-
-/* item names from the ROM, decoded from the window charset and title-cased */
-static void load_item_names(void) {
-    if (items_ready || !m68k_rom || m68k_rom_size < ITEM_NAMES_END) return;
-    uint32_t a = ITEM_NAMES;
-    for (int id = 1; id < 256 && a < ITEM_NAMES_END; id++) {
-        char *s = item_names[id];
-        int n = 0, up = 1;
-        while (a < ITEM_NAMES_END && m68k_rom[a] != 0xFE) {
-            unsigned c = m68k_rom[a++];
-            char ch = c >= 1 && c <= 26 ? (char)('A' + c - 1) : c >= 57 && c <= 82 ? (char)('a' + c - 57)
-                    : c >= 27 && c <= 36 ? (char)('0' + c - 27) : c == 0x31 ? '-' : c == 0x32 ? '!'
-                    : c == 0x33 ? '?' : c == 0x34 ? ':' : c == 0x53 ? '.' : c == 0x55 ? ',' : ' ';
-            if (ch >= 'A' && ch <= 'Z' && !up) ch = (char)(ch - 'A' + 'a');   /* "HUNT-KNIFE" -> "Hunt-Knife" */
-            up = ch == ' ' || ch == '-';
-            if (n < (int)sizeof item_names[0] - 1) s[n++] = ch;
-        }
-        s[n] = 0;
-        a++;                                                     /* past $FE */
-    }
-    items_ready = 1;
-}
+int panels_init(void) { return ui_portraits_init(); }
 
 int panels_field(void) {
     int mode = (int)ram16(GAME_MODE_INDEX) / 4;
@@ -81,77 +33,19 @@ int panels_field(void) {
 }
 
 /* ------------------------------------------------------------------ drawing */
-typedef struct { uint32_t *px; int stride, x0, y0, x1, y1; } Canvas;   /* clip box */
+typedef UiCanvas Canvas;
 
-static void blend(uint32_t *d, uint32_t c, int a) {
-    if (a <= 0) return;
-    if (a >= 255) { *d = 0xFF000000u | (c & 0xFFFFFF); return; }
-    int r = (int)(*d >> 16 & 255), g = (int)(*d >> 8 & 255), b = (int)(*d & 255);
-    r += ((int)(c >> 16 & 255) - r) * a / 255;
-    g += ((int)(c >> 8 & 255) - g) * a / 255;
-    b += ((int)(c & 255) - b) * a / 255;
-    *d = 0xFF000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
-}
-
-/* a rounded rectangle, anti-aliased corners */
 static void round_rect(const Canvas *cv, float x0, float y0, float x1, float y1, float r, uint32_t c, int alpha) {
-    int ix0 = (int)floorf(x0), iy0 = (int)floorf(y0), ix1 = (int)ceilf(x1), iy1 = (int)ceilf(y1);
-    if (ix0 < cv->x0) ix0 = cv->x0;
-    if (iy0 < cv->y0) iy0 = cv->y0;
-    if (ix1 > cv->x1) ix1 = cv->x1;
-    if (iy1 > cv->y1) iy1 = cv->y1;
-    for (int y = iy0; y < iy1; y++)
-        for (int x = ix0; x < ix1; x++) {
-            float px = (float)x + 0.5f, py = (float)y + 0.5f;
-            float dx = px < x0 + r ? x0 + r - px : px > x1 - r ? px - (x1 - r) : 0;
-            float dy = py < y0 + r ? y0 + r - py : py > y1 - r ? py - (y1 - r) : 0;
-            float cover = 1.0f;
-            if (dx > 0 && dy > 0) cover = r + 0.5f - sqrtf(dx * dx + dy * dy);
-            else if (px < x0 || px > x1 || py < y0 || py > y1) cover = 0;
-            if (cover <= 0) continue;
-            if (cover > 1) cover = 1;
-            blend(&cv->px[(size_t)y * (size_t)cv->stride + (size_t)x], c, (int)((float)alpha * cover));
-        }
+    ui_round_rect(cv, x0, y0, x1, y1, r, c, alpha);
 }
-
-/* a portrait, scaled (bilinear) into a rounded square; dead = grey and dim */
-static void draw_image(const Canvas *cv, const Image *im, float x0, float y0, float size, int dead) {
-    int ix0 = (int)x0, iy0 = (int)y0, n = (int)size;
-    float r = size * 0.16f;
-    for (int y = 0; y < n; y++)
-        for (int x = 0; x < n; x++) {
-            int X = ix0 + x, Y = iy0 + y;
-            if (X < cv->x0 || X >= cv->x1 || Y < cv->y0 || Y >= cv->y1) continue;
-            float px = (float)x + 0.5f, py = (float)y + 0.5f;
-            float dx = px < r ? r - px : px > size - r ? px - (size - r) : 0;
-            float dy = py < r ? r - py : py > size - r ? py - (size - r) : 0;
-            float cover = dx > 0 && dy > 0 ? r + 0.5f - sqrtf(dx * dx + dy * dy) : 1.0f;
-            if (cover <= 0) continue;
-            int uu = (int)(px / size * (float)im->w), vv = (int)(py / size * (float)im->h);   /* pixel art: nearest */
-            uu = uu >= im->w ? im->w - 1 : uu;
-            vv = vv >= im->h ? im->h - 1 : vv;
-            const uint8_t *p = &im->rgba[((size_t)vv * (size_t)im->w + (size_t)uu) * 4];
-            float acc[4] = {(float)p[0], (float)p[1], (float)p[2], (float)p[3] / 255.0f};
-            if (acc[3] <= 0.001f) continue;
-            float rr = acc[0], gg = acc[1], bb = acc[2];
-            if (dead) { float l = (rr * 0.3f + gg * 0.59f + bb * 0.11f) * 0.55f; rr = gg = bb = l; }
-            uint32_t c = (uint32_t)rr << 16 | (uint32_t)gg << 8 | (uint32_t)bb;
-            blend(&cv->px[(size_t)Y * (size_t)cv->stride + (size_t)X], c, (int)(acc[3] * (cover > 1 ? 1 : cover) * 255.0f));
-        }
-}
-
 static void text(const Canvas *cv, float x, float base, float cap, const char *s, uint32_t c) {
-    hdtext_string(cv->px, cv->stride, cv->x0, cv->y0, cv->x1, cv->y1, x, base, cap, s, c);
+    ui_text(cv, x, base, cap, s, c, 255);
 }
 static void text_right(const Canvas *cv, float x_right, float base, float cap, const char *s, uint32_t c) {
-    text(cv, x_right - hdtext_string_width(s, cap), base, cap, s, c);
+    ui_text_right(cv, x_right, base, cap, s, c, 255);
 }
-
 static void bar(const Canvas *cv, float x0, float y0, float x1, float h, float frac, uint32_t c) {
-    if (frac < 0) frac = 0;
-    if (frac > 1) frac = 1;
-    round_rect(cv, x0, y0, x1, y0 + h, h / 2, 0x05080F, 230);
-    if (frac > 0) round_rect(cv, x0, y0, x0 + (x1 - x0) * frac, y0 + h, h / 2, c, 255);
+    ui_bar(cv, x0, y0, x1, h, frac, c, 255);
 }
 
 static void panel_background(const Canvas *cv, int inner_x) {
@@ -161,7 +55,7 @@ static void panel_background(const Canvas *cv, int inner_x) {
         for (int x = cv->x0; x < cv->x1; x++) cv->px[(size_t)y * (size_t)cv->stride + (size_t)x] = 0xFF000000u | c;
     }
     for (int y = cv->y0; y < cv->y1; y++)                       /* a line along the game view */
-        blend(&cv->px[(size_t)y * (size_t)cv->stride + (size_t)inner_x], 0x3A5BB0, 150);
+        ui_blend(&cv->px[(size_t)y * (size_t)cv->stride + (size_t)inner_x], 0x3A5BB0, 150);
 }
 
 static void money_string(uint32_t v, char *out, size_t n) {   /* 12,345 */
@@ -176,7 +70,6 @@ static void money_string(uint32_t v, char *out, size_t n) {   /* 12,345 */
 }
 
 void panels_draw(uint32_t *out, int stride, int S, int margin, int view_w, int h) {
-    load_item_names();
     float P = (float)(margin * S), H = (float)(h * S), pad = P * 0.07f;
     Canvas left = {out, stride, 0, 0, margin * S, h * S};
     Canvas right = {out, stride, (margin + view_w) * S, 0, (2 * margin + view_w) * S, h * S};
@@ -220,9 +113,9 @@ void panels_draw(uint32_t *out, int stride, int S, int margin, int view_w, int h
         float ip = pad * 0.7f, room = fminf((cx1 - cx0) * 0.5f, card_h * 0.42f), ps;
         ps = room >= 96.0f ? 96.0f : room >= 46.0f ? 48.0f : room;
         float px = cx0 + ip, py = cy0 + ip;
-        if (portraits[ids[k]].rgba) {
+        if (ui_portrait(ids[k])) {
             round_rect(&left, px, py, px + ps, py + ps, ps * 0.16f, 0x1C2C5E, 255);
-            draw_image(&left, &portraits[ids[k]], px, py, ps, dead);
+            ui_image(&left, ui_portrait(ids[k]), px, py, ps, dead, 255);
         } else {                                                                     /* no portrait: initial */
             round_rect(&left, px, py, px + ps, py + ps, ps * 0.16f, 0x2A3F7A, 255);
             char ini[2] = {NAMES[ids[k]][0], 0};
@@ -306,7 +199,7 @@ void panels_draw(uint32_t *out, int stride, int S, int margin, int view_w, int h
             text(&right, rx0 + pad * 0.7f, y + line * 0.8f, item_cap, more, 0x9FB4E8);
             break;
         }
-        const char *nm = items_ready && item_names[id][0] ? item_names[id] : "?";
+        const char *nm = ui_item_name((int)id)[0] ? ui_item_name((int)id) : "?";
         text(&right, rx0 + pad * 0.7f, y + line * 0.8f, item_cap, nm, 0xF0F3FF);
         y += line;
         shown++;

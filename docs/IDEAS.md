@@ -44,12 +44,16 @@ more map: each member's HP/TP, status, EXP, the inventory. Read from the
 party's RAM (stats, items) and drawn with the modern-text renderer; an
 option next to plain widescreen.
 
-## Modern battle UI (PsiLok, 2026-11-03)
+## Modern battle UI (PsiLok, 2026-11-03) -- v1 in progress (`runtime/battleui.c`)
 An Enhanced option replacing the game's battle windows: full action names
 (Attack, Technique, Skill, Item, Defend), technique and skill names with
 short descriptions (our own wording), ROM portraits, HP/TP bars. It mirrors
 the game's own menu state from RAM (the game still handles input and the
-battle), and the depth compositor hides the original windows.
+battle). The windows are hidden in the renderer: wherever plane A holds a
+window tile, the cell is drawn from the game's own window-free copy of the
+battle map ($FF2540, which it uses to restore what a window covered), and
+the cursor sprites are left out; the remaining windows (enemy names,
+messages) are read back from their tiles and redrawn in the same style.
 
 ## Public release (PsiLok, 2026-11-03)
 Players bring their own ROM; nothing from the game is in the repo or the
@@ -91,6 +95,23 @@ Action Replay codes.
 - **Needs:** the runtime owns all memory, so RAM cheats are a frame hook and
   ROM patches are a byte overlay. Game Genie/PAR codes decode to these.
 - **UI:** an overlay menu (settings and cheats together).
+
+## Generated sound effects for the public build (PsiLok, 2026-11-03)
+The Splice samples stay local (`sfx/` + `sfx.ini` is a personal override);
+a release needs effects of its own. Plan, best fit first:
+- **Synthesized in the port** (the default pack): each effect a short recipe
+  rendered at startup -- filtered-noise whooshes with a swept band-pass
+  (swords), a whoosh with a ~14 Hz wobble and a doppler arc panned across the
+  stereo field (boomerang), modal "ring" partials (metal), pitch-dropping sine
+  thumps plus a noise crack (hits), crackle through resonant filters (fire),
+  shimmering arpeggios (healing), short blips (menus), a synthetic reverb.
+  Nothing to ship but code; deterministic, so the replays stay checkable.
+- **Remastered originals** (an option): the game's own FM effect, with a
+  modern layer added at runtime (sub-bass on hits, a transient, stereo room).
+- **AI-generated** (later, only for what synthesis does badly, e.g. monster
+  voices): a text-to-audio model on Hermes, best takes curated and shipped as
+  our own files -- the model download needs PsiLok's approval and its licence
+  checked for the outputs.
 
 ## Modern music and samples
 Swap the sound bank for something more modern, as an option next to the

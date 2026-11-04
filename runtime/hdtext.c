@@ -181,12 +181,13 @@ static void blit(const VdpLine *lines, int h, uint32_t *out, int stride, int sca
                  float base_y, uint32_t fg, int cx0, int cy0, int cx1, int cy1) {
     int ox = (int)lrintf(pen_x) + g->xoff, oy = (int)lrintf(base_y) + g->yoff;
     int fr = (int)(fg >> 16 & 255), fgc = (int)(fg >> 8 & 255), fb = (int)(fg & 255);
+    int fa = fg >> 24 ? (int)(fg >> 24) : 255;                   /* top byte: opacity (0 = opaque) */
     for (int y = 0; y < g->h; y++) {
         int Y = oy + y;
         if (Y < cy0 || Y >= cy1 || (lines && Y / scale >= h)) continue;
         const VdpLine *l = lines ? &lines[Y / scale] : NULL;
         for (int x = 0; x < g->w; x++) {
-            int X = ox + x, a = g->bmp[y * g->w + x];
+            int X = ox + x, a = g->bmp[y * g->w + x] * fa / 255;
             if (!a || X < cx0 || X >= cx1 || (l && (l->sprite[X / scale] & 0x80))) continue;
             uint32_t *d = &out[(size_t)Y * (size_t)stride + (size_t)X];
             int r = (int)(*d >> 16 & 255), gg = (int)(*d >> 8 & 255), b = (int)(*d & 255);
@@ -312,6 +313,11 @@ void hdtext_upscale(const uint32_t *src, int src_stride, int w, int h, uint32_t 
 
 /* ------------------------------------------------------------------ strings (panels) */
 int hdtext_font_ready(void) { return loaded; }
+
+uint32_t hdtext_win_char(int code) {
+    if (!win_char[1]) build_tables();                       /* before the font loads */
+    return code >= 0 && code < 128 ? win_char[code] : 0;
+}
 
 static uint32_t next_codepoint(const char **p) {
     const unsigned char *s = (const unsigned char *)*p;

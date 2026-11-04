@@ -440,8 +440,21 @@ static void fx_draw(uint32_t *out, int stride, int w, int h, int scale, float ca
     }
 }
 
+/* the camera of the last composed frame, for overlays drawn over it */
+static int cam_valid;
+static float cam_last_x, cam_last_y, cam_last_zoom, cam_last_w, cam_last_h;
+
+void depth_to_screen(int party, float x, float y, float *ox, float *oy) {
+    if (!cam_valid) { *ox = x; *oy = y; return; }
+    float f = party ? F_PARTY : F_ENEMY, s = 1.0f + f * (cam_last_zoom - 1.0f);
+    float cx = cam_last_w / 2.0f, cy = party ? (float)PARTY_FEET_Y : cam_last_h / 2.0f;
+    *ox = cx + (x - f * cam_last_x - cx) * s;
+    *oy = cy + (y - (party ? 0.0f : f * cam_last_y) - cy) * s;
+}
+
 int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_stride, int scale) {
     const float dt = 1.0f / 59.92f;
+    cam_valid = 0;
     uint16_t mode = (uint16_t)(m68k_ram[GAME_MODE_INDEX] << 8 | m68k_ram[GAME_MODE_INDEX + 1]);
 
     float k = 1.0f - expf(-dt / 0.3f);                    /* level changes ease over ~0.3 s */
@@ -582,6 +595,9 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     float cam_x = (dx + pan_x + sh * sinf(shake_t * two_pi * 17.0f)) * e;
     float cam_y = (dy + pan_y + sh * 0.5f * cosf(shake_t * two_pi * 13.0f)) * e;
     float zoom = 1.0f + zoom_extra * e;
+    cam_valid = 1;
+    cam_last_x = cam_x; cam_last_y = cam_y; cam_last_zoom = zoom;
+    cam_last_w = (float)w; cam_last_h = (float)h;
 
     uint32_t pal[128];
     for (int i = 0; i < 64; i++) pal[i] = pal[i + 64] = vdp_color(i);

@@ -45,6 +45,7 @@
 #include "depth.h"
 #include "hdtext.h"
 #include "panels.h"
+#include "battleui.h"
 #include "sfx.h"
 #include "frame.h"
 #include "m68k.h"
@@ -485,6 +486,40 @@ typedef struct { uint64_t frame; const char *prefix; } LayerDump;
 static LayerDump layer_dumps[16];
 static int nlayer_dumps;
 
+/* --ramlog ADDR[.b|.w|.l],...: print these RAM values (hex, $FFxxxx) on each
+ * logical frame where one of them changes */
+static uint32_t ramlog_addr[32], ramlog_last[32];
+static char ramlog_size[32];
+static int ramlog_n, ramlog_primed;
+
+static uint32_t ramlog_read(int i) {
+    uint32_t a = ramlog_addr[i] & 0xFFFF;
+    const uint8_t *r = m68k_ram;
+    switch (ramlog_size[i]) {
+    case 'b': return r[a];
+    case 'l': return (uint32_t)r[a] << 24 | r[a + 1] << 16 | r[a + 2] << 8 | r[a + 3];
+    default:  return (uint32_t)(r[a] << 8 | r[a + 1]);
+    }
+}
+
+static void ramlog_frame(uint64_t when) {
+    int changed = !ramlog_primed;
+    uint32_t v[32];
+    for (int i = 0; i < ramlog_n; i++) {
+        v[i] = ramlog_read(i);
+        if (v[i] != ramlog_last[i]) changed = 1;
+    }
+    ramlog_primed = 1;
+    if (!changed) return;
+    printf("ram %llu:", (unsigned long long)when);
+    for (int i = 0; i < ramlog_n; i++) {
+        int w = ramlog_size[i] == 'b' ? 2 : ramlog_size[i] == 'l' ? 8 : 4;
+        printf(" %04X=%0*X%s", ramlog_addr[i] & 0xFFFF, w, v[i], v[i] != ramlog_last[i] ? "*" : "");
+        ramlog_last[i] = v[i];
+    }
+    printf("\n");
+}
+
 static void dump_layers(const char *prefix, uint64_t when, int w, int h) {
     static uint32_t img[VDP_MAX_W * VDP_MAX_H];
     static const char *names[5] = {"b", "a", "w", "s", "top"};
@@ -575,6 +610,7 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
 #endif
         for (int i = 0; i < nwhere; i++)
             if (where_at[i] == logical) print_where(logical);
+        if (ramlog_n) ramlog_frame(logical);
         if (dump_at && logical == dump_at) {
             char prefix[512];
             dump_prefix(prefix, sizeof prefix, "port");
@@ -623,6 +659,11 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
             if (hdtext_enabled() && hdtext_has_text(frame_lines, width, height)) {
                 if (!hires) hdtext_upscale(pixels, VDP_MAX_W, width, height, depth_buf, width * hs, hs);
                 hdtext_draw(frame_lines, width, height, depth_buf, width * hs, hs);
+                hires = 1;
+            }
+            if (battleui_active()) {                       /* modern battle menus */
+                if (!hires) hdtext_upscale(pixels, VDP_MAX_W, width, height, depth_buf, width * hs, hs);
+                battleui_draw(depth_buf, width * hs, hs, width, height);
                 hires = 1;
             }
         }
@@ -788,6 +829,8 @@ int main(int argc, char **argv) {
             if (text_scale < 1) text_scale = 1;
             if (text_scale > 4) text_scale = 4;
             hdtext_set_enabled(hdtext_init(font));
+        } else if (!strcmp(argv[i], "--battle-ui")) {
+            battleui_set_enabled(1);                       /* modern battle menus (needs --text FONT) */
         } else if (!strcmp(argv[i], "--panels")) {
             panels_on = 1;                                 /* with --wide: side panels in exploration */
             frame_wide_field = 0;
@@ -804,6 +847,14 @@ int main(int argc, char **argv) {
             layer_dumps[nlayer_dumps].frame = strtoull(argv[++i], &e, 10);
             layer_dumps[nlayer_dumps].prefix = *e == ':' ? e + 1 : "layers";
             nlayer_dumps++;
+        } else if (!strcmp(argv[i], "--ramlog") && i + 1 < argc) {
+            for (char *s = argv[++i]; *s && ramlog_n < 32; ) {   /* hex ADDR[.b|.w|.l],... */
+                ramlog_addr[ramlog_n] = (uint32_t)strtoul(s, &s, 16);
+                ramlog_size[ramlog_n] = 'w';
+                if (*s == '.' && s[1]) { ramlog_size[ramlog_n] = s[1]; s += 2; }
+                ramlog_n++;
+                if (*s == ',') s++; else break;
+            }
         } else if (!strcmp(argv[i], "--watch") && i + 1 < argc) {
             char *s = argv[++i];                               /* N:PC,PC,... (hex PCs) */
             watch_frame = strtoull(s, &s, 10);
@@ -838,7 +889,7 @@ int main(int argc, char **argv) {
     uint32_t n = (uint32_t)fread(rom, 1, sizeof rom, f);
     fclose(f);
     bus_init(rom, n);
-    if (panels_on) printf("side panels: %d portraits from the ROM\n", panels_init());
+    if (panels_on || battleui_enabled()) printf("portraits: %d from the ROM\n", panels_init());
     if (sram_in) {
         FILE *sf = fopen(sram_in, "rb");
         if (!sf) { fprintf(stderr, "cannot open %s\n", sram_in); return 1; }

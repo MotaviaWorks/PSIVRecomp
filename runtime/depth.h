@@ -47,4 +47,9 @@ const char *depth_fx_name(int level);
  * returns 1. Otherwise returns 0: show the normal frame. */
 int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_stride, int scale);
 
+/* where a point of the enemy layer (party = 0) or the party layer (party = 1)
+ * appeared in the last composed frame, in game pixels of the view; the point
+ * itself when the last frame was not composed */
+void depth_to_screen(int party, float x, float y, float *ox, float *oy);
+
 #endif

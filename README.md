@@ -82,7 +82,18 @@ original game, unchanged; **Enhanced** turns on the additions:
   inventory. Portraits, item names and level tables come from your ROM at
   startup; nothing from the game ships with the port.
 
-Planned (see `docs/IDEAS.md`): a modern battle UI.
+- **Battle menus** (modern / original): the battle windows replaced by menus
+  drawn at full resolution -- a party bar with portraits and HP / TP bars
+  (and each member's chosen action), the commands spelled out (Attack,
+  Technique, Skill, Item, Defend) with a line on what each does, technique /
+  skill / item lists with costs or uses left and a description of the one
+  highlighted, a marker and name over the enemy being targeted. The game
+  still runs its own menus: the port mirrors their state from RAM, so the
+  controls are the original ones. Names come from your ROM; the descriptions
+  are the port's own (`runtime/battledesc.c`). Vehicle battles keep the
+  original windows. Needs the modern-text font.
+
+Planned (see `docs/IDEAS.md`): generated sound effects for public builds.
 
 ### Headless runs
 

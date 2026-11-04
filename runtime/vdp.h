@@ -83,6 +83,15 @@ typedef struct {
     uint8_t backdrop;            /* palette index */
 } VdpLine;
 
+/* Presentation overrides (never game state): the port's modern battle menus
+ * draw over the game's own windows, which are hidden by drawing other plane A
+ * name-table entries in their cells (64 x 32 cells, row-major, 0xFFFF = the
+ * name table's own) and leaving out the menu cursor sprites (one flag per
+ * sprite-table entry). Sprites are still evaluated, so the overflow and
+ * collision flags the game reads stay as the hardware sets them. NULL = off. */
+extern const uint16_t *vdp_plane_a_override;
+extern const uint8_t *vdp_sprite_hidden;
+
 void vdp_render_line(int y, VdpLine *out);
 /* mix a line's layers into 0xAARRGGBB pixels */
 void vdp_compose_line(const VdpLine *l, uint32_t *dst, int width);

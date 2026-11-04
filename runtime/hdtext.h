@@ -38,6 +38,9 @@ int   hdtext_font_ready(void);
 float hdtext_string(uint32_t *out, int stride, int clip_x0, int clip_y0, int clip_x1, int clip_y1,
                     float x, float baseline, float cap_px, const char *text, uint32_t color);
 float hdtext_string_width(const char *text, float cap_px);
+/* the window charset: code -> Unicode (0 = not a character); the color's top
+ * byte, when not 0, is the text's opacity */
+uint32_t hdtext_win_char(int code);
 
 /* nearest-neighbour upscale of a frame (src_stride pixels per row) */
 void hdtext_upscale(const uint32_t *src, int src_stride, int w, int h, uint32_t *out, int out_stride, int scale);

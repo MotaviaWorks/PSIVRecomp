@@ -21,6 +21,7 @@
 #include "depth.h"
 #include "hdtext.h"
 #include "panels.h"
+#include "battleui.h"
 #include "sfx.h"
 #include "diag.h"
 #include "frame.h"
@@ -110,6 +111,7 @@ static Setting settings[] = {
     {"enhance.text", "modern", "text: modern = redrawn with the font below at full resolution; original = the game's pixel font"},
     {"enhance.text_font", "C:/Windows/Fonts/segoeui.ttf", "TrueType/OpenType font for modern text"},
     {"enhance.sfx", "modern", "sound effects: modern = your samples, mapped in sfx/sfx.ini; original = the game's own"},
+    {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
     {"enhance.battle_fx", "1", "attack and technique effects light the scene; sparks, flashes, embers, lens flares: 0 off, 1 subtle, 2 full"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
     {"keys.down", "Down", ""},
@@ -450,6 +452,11 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
                 hdtext_draw(frame_lines, w, h, depth_pixels, stride, ds);
                 depth_shown = 1;
             }
+            if (battleui_active()) {                     /* modern battle menus */
+                if (!depth_shown) hdtext_upscale(pixels, VDP_MAX_W, w, h, depth_pixels, stride, ds);
+                battleui_draw(depth_pixels, stride, ds, w, h);
+                depth_shown = 1;
+            }
         }
         if (depth_shown) {
             if (fw * ds != depth_tex_w || h * ds != depth_tex_h) {
@@ -559,6 +566,7 @@ static void apply_enhancements(void) {
     depth_set_fx(classic_mode() ? 0 : setting_int("enhance.battle_fx"));
     sfx_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.sfx"), "original") != 0);
     hdtext_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.text"), "original") != 0);
+    battleui_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_ui"), "original") != 0);
 }
 
 static void apply_video(void) {
@@ -594,6 +602,7 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Sound effects", "enhance.sfx", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Battle menus", "enhance.battle_ui", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Widescreen", "video.widescreen", {"0", "1", "2"}, {"Off", "More map", "Side panels"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Aspect", "video.aspect", {"square", "4:3"}, {"Square pixels", "4:3 TV"}, 0, 0, 0, 0, NULL, apply_enhancements},
     {"Pixels", "video.filter", {"nearest", "linear"}, {"Sharp", "Smooth"}, 0, 0, 0, 0, NULL, apply_video},
