@@ -20,6 +20,7 @@
 #include "bus.h"
 #include "depth.h"
 #include "hdtext.h"
+#include "panels.h"
 #include "sfx.h"
 #include "diag.h"
 #include "frame.h"
@@ -99,7 +100,7 @@ static Setting settings[] = {
     {"video.scale", "3", "window size at start, in multiples of the game's resolution"},
     {"video.fullscreen", "0", "1 = start fullscreen (F11 toggles)"},
     {"video.integer_scaling", "1", "1 = whole-number scaling only (sharpest)"},
-    {"video.widescreen", "1", "16:9 widescreen in the field and in battles (other screens keep their shape): 0 off, 1 on"},
+    {"video.widescreen", "1", "16:9 widescreen (other screens keep their shape): 0 off, 1 more map in exploration, 2 side panels with the party in exploration; battles are wide either way"},
     {"video.aspect", "square", "square = square pixels; 4:3 = the console's TV shape (pixels a bit narrower)"},
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed"},
     {"audio.volume", "100", "0-200 percent"},
@@ -415,12 +416,18 @@ static SDL_ScaleMode scale_mode(void) {
 
 /* compose = 0 when re-showing the same frame (paused): the depth camera
  * doesn't advance and the last image is shown again */
+static int panels_on;                  /* widescreen with side panels in exploration */
+
 static void present(const uint32_t *pixels, int w, int h, int compose) {
     int ow, oh;
     SDL_GetRenderOutputSize(renderer, &ow, &oh);
-    /* pixel aspect: square, or the 4:3 TV shape (320x224 pixels are ~0.93 wide) */
-    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / ((float)w / (float)h);
-    float sw = (float)w * par, sh = (float)h;
+    /* side panels: exploration keeps its 320 view, the margins show the party */
+    int pm = panels_on && frame_wide_margin > 0 && w == 320 && panels_field() ? frame_wide_margin : 0;
+    int fw = w + 2 * pm;                                 /* the picture's width in game pixels */
+    /* pixel aspect: square, or the 4:3 TV shape (the mode's 320x224 pixels
+     * are ~0.93 wide), whatever the picture's width */
+    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / ((float)vdp_width() / (float)h);
+    float sw = (float)fw * par, sh = (float)h;
     float s = fminf((float)ow / sw, (float)oh / sh);
     if (setting_int("video.integer_scaling") && s >= 1.0f) s = floorf(s);
     SDL_FRect dst = {((float)ow - sw * s) / 2, ((float)oh - sh * s) / 2, sw * s, sh * s};
@@ -429,22 +436,31 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
         int ds = (int)ceilf(s);                          /* compose at about the display scale */
         if (ds < 1) ds = 1;
         if (ds > 4) ds = 4;
-        depth_shown = depth_compose(frame_lines, w, h, depth_pixels, w * ds, ds);
-        if (hdtext_enabled() && hdtext_has_text(frame_lines, w, h)) {        /* modern text */
-            if (!depth_shown) hdtext_upscale(pixels, VDP_MAX_W, w, h, depth_pixels, w * ds, ds);
-            hdtext_draw(frame_lines, w, h, depth_pixels, w * ds, ds);
+        int stride = fw * ds;
+        if (pm) {                                        /* the game in the middle, panels around it */
+            uint32_t *mid = depth_pixels + (size_t)pm * (size_t)ds;
+            hdtext_upscale(pixels, VDP_MAX_W, w, h, mid, stride, ds);
+            if (hdtext_enabled() && hdtext_has_text(frame_lines, w, h)) hdtext_draw(frame_lines, w, h, mid, stride, ds);
+            panels_draw(depth_pixels, stride, ds, pm, w, h);
             depth_shown = 1;
+        } else {
+            depth_shown = depth_compose(frame_lines, w, h, depth_pixels, stride, ds);
+            if (hdtext_enabled() && hdtext_has_text(frame_lines, w, h)) {    /* modern text */
+                if (!depth_shown) hdtext_upscale(pixels, VDP_MAX_W, w, h, depth_pixels, stride, ds);
+                hdtext_draw(frame_lines, w, h, depth_pixels, stride, ds);
+                depth_shown = 1;
+            }
         }
         if (depth_shown) {
-            if (w * ds != depth_tex_w || h * ds != depth_tex_h) {
+            if (fw * ds != depth_tex_w || h * ds != depth_tex_h) {
                 if (depth_texture) SDL_DestroyTexture(depth_texture);
                 depth_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
-                                                  w * ds, h * ds);
+                                                  fw * ds, h * ds);
                 SDL_SetTextureScaleMode(depth_texture, scale_mode());
-                depth_tex_w = w * ds;
+                depth_tex_w = fw * ds;
                 depth_tex_h = h * ds;
             }
-            SDL_UpdateTexture(depth_texture, NULL, depth_pixels, w * ds * 4);
+            SDL_UpdateTexture(depth_texture, NULL, depth_pixels, stride * 4);
         }
     }
     if (!depth_shown) {
@@ -536,6 +552,8 @@ static void fit_window(void) {
 static void apply_enhancements(void) {
     int m = wide_margin();
     if (m != frame_wide_margin) { frame_wide_margin = m; fit_window(); }
+    panels_on = m > 0 && setting_int("video.widescreen") == 2;
+    frame_wide_field = !panels_on;
     depth_set_level(classic_mode() ? 0 : setting_int("enhance.battle_depth"));
     depth_set_fog(classic_mode() ? 0 : setting_int("enhance.battle_fog"));
     depth_set_fx(classic_mode() ? 0 : setting_int("enhance.battle_fx"));
@@ -576,7 +594,7 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Sound effects", "enhance.sfx", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Widescreen", "video.widescreen", {"0", "1"}, {"Off", "16:9"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Widescreen", "video.widescreen", {"0", "1", "2"}, {"Off", "More map", "Side panels"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Aspect", "video.aspect", {"square", "4:3"}, {"Square pixels", "4:3 TV"}, 0, 0, 0, 0, NULL, apply_enhancements},
     {"Pixels", "video.filter", {"nearest", "linear"}, {"Sharp", "Smooth"}, 0, 0, 0, 0, NULL, apply_video},
     {"Integer scaling", "video.integer_scaling", {"1", "0"}, {"On", "Off"}, 0, 0, 0, 0, NULL, NULL},
@@ -894,6 +912,7 @@ int main(int argc, char **argv) {
 
     bus_init(rom, rom_size);
     sram_load();
+    SDL_Log("side panels: %d portraits from the ROM", panels_init());
     next_deadline = SDL_GetTicksNS();
     SDL_DetachThread(SDL_CreateThread(watchdog, "psiv-watchdog", NULL));
 

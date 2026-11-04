@@ -44,6 +44,7 @@
 #include "diag.h"
 #include "depth.h"
 #include "hdtext.h"
+#include "panels.h"
 #include "sfx.h"
 #include "frame.h"
 #include "m68k.h"
@@ -142,7 +143,7 @@ static void save_png(const char *path, const uint32_t *px, int w, int h) {
 
 /* --depth L[:S]: battle depth at level L; screenshots of battle frames show
  * it, composed at S times the game's resolution (default 2) */
-static int depth_scale, depth_active, text_scale = 3;
+static int depth_scale, depth_active, text_scale = 3, panels_on, out_w;
 static uint64_t shot_from, shot_to;              /* --shot-range F1-F2 */
 static uint32_t depth_buf[VDP_MAX_W * 4 * VDP_MAX_H * 4];
 
@@ -607,15 +608,27 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
     /* battle depth and modern text: shots show what the player sees */
     int hs = depth_scale ? depth_scale : text_scale;
     if (fresh) {
-        int hires = depth_scale ? depth_compose(frame_lines, width, height, depth_buf, width * hs, hs) : 0;
-        if (hdtext_enabled() && hdtext_has_text(frame_lines, width, height)) {
-            if (!hires) hdtext_upscale(pixels, VDP_MAX_W, width, height, depth_buf, width * hs, hs);
-            hdtext_draw(frame_lines, width, height, depth_buf, width * hs, hs);
+        int pm = panels_on && frame_wide_margin > 0 && width == 320 && panels_field() ? frame_wide_margin : 0;
+        int hires = 0;
+        out_w = width + 2 * pm;
+        if (pm) {                                          /* side panels around the 320 view */
+            uint32_t *mid = depth_buf + (size_t)pm * (size_t)hs;
+            hdtext_upscale(pixels, VDP_MAX_W, width, height, mid, out_w * hs, hs);
+            if (hdtext_enabled() && hdtext_has_text(frame_lines, width, height))
+                hdtext_draw(frame_lines, width, height, mid, out_w * hs, hs);
+            panels_draw(depth_buf, out_w * hs, hs, pm, width, height);
             hires = 1;
+        } else {
+            hires = depth_scale ? depth_compose(frame_lines, width, height, depth_buf, width * hs, hs) : 0;
+            if (hdtext_enabled() && hdtext_has_text(frame_lines, width, height)) {
+                if (!hires) hdtext_upscale(pixels, VDP_MAX_W, width, height, depth_buf, width * hs, hs);
+                hdtext_draw(frame_lines, width, height, depth_buf, width * hs, hs);
+                hires = 1;
+            }
         }
         depth_active = hires;
     }
-    int sw = depth_active ? width * hs : width, sh = depth_active ? height * hs : height;
+    int sw = depth_active ? out_w * hs : width, sh = depth_active ? height * hs : height;
     for (int i = 0; i < nshot && fresh; i++)
         if (shots[i].frame == when) {
             if (depth_active) save_png_stride(shots[i].path, depth_buf, sw, sh, sw);
@@ -775,6 +788,9 @@ int main(int argc, char **argv) {
             if (text_scale < 1) text_scale = 1;
             if (text_scale > 4) text_scale = 4;
             hdtext_set_enabled(hdtext_init(font));
+        } else if (!strcmp(argv[i], "--panels")) {
+            panels_on = 1;                                 /* with --wide: side panels in exploration */
+            frame_wide_field = 0;
         } else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
             frame_wide_margin = atoi(argv[++i]);           /* widescreen: pixels beyond each side */
         } else if (!strcmp(argv[i], "--fog") && i + 1 < argc) {
@@ -822,6 +838,7 @@ int main(int argc, char **argv) {
     uint32_t n = (uint32_t)fread(rom, 1, sizeof rom, f);
     fclose(f);
     bus_init(rom, n);
+    if (panels_on) printf("side panels: %d portraits from the ROM\n", panels_init());
     if (sram_in) {
         FILE *sf = fopen(sram_in, "rb");
         if (!sf) { fprintf(stderr, "cannot open %s\n", sram_in); return 1; }

@@ -76,7 +76,13 @@ original game, unchanged; **Enhanced** turns on the additions:
   dialogue font, read from the ROM), so the game itself is untouched.
   Needs `third_party/stb/stb_truetype.h` (public domain).
 
-Planned (see `docs/IDEAS.md`): side panels with party info in widescreen.
+- **Side panels** (Widescreen: Side panels): in exploration the game keeps its
+  original view and the 16:9 margins show the party -- a card per member
+  (portrait, level, HP / TP / EXP bars, status) and meseta with the
+  inventory. Portraits, item names and level tables come from your ROM at
+  startup; nothing from the game ships with the port.
+
+Planned (see `docs/IDEAS.md`): a modern battle UI.
 
 ### Headless runs
 

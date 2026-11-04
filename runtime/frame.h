@@ -15,6 +15,9 @@ extern VdpLine frame_lines[VDP_MAX_H];
  * game allows it (field, battles); 0 = off. platform_frame then gets the
  * wider frame (width 320 + 2 * margin). Set by the front end. */
 extern int frame_wide_margin;
+/* 0 = with widescreen on, exploration keeps its 320 view (the margins are
+ * side panels, drawn by the front end); battles stay wide */
+extern int frame_wide_field;
 
 /* Called once per frame after rendering, before the game's VInt runs: show
  * the frame, read input into bus_pad[], pace to 60 Hz. Implemented by the

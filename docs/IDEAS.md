@@ -38,11 +38,27 @@ An overlay menu on Esc (quitting moves into it): resume, settings, quit.
 - **Needs:** an overlay renderer with its own font (SDL3's built-in debug
   font to start, a proper font later) and saving to `psiv.ini`.
 
-## Widescreen side panels (PsiLok, 2026-11-03)
+## Widescreen side panels (PsiLok, 2026-11-03) -- v1 done
 In exploration, use the 16:9 margins as frames with party info instead of
 more map: each member's HP/TP, status, EXP, the inventory. Read from the
 party's RAM (stats, items) and drawn with the modern-text renderer; an
 option next to plain widescreen.
+
+## Modern battle UI (PsiLok, 2026-11-03)
+An Enhanced option replacing the game's battle windows: full action names
+(Attack, Technique, Skill, Item, Defend), technique and skill names with
+short descriptions (our own wording), ROM portraits, HP/TP bars. It mirrors
+the game's own menu state from RAM (the game still handles input and the
+battle), and the depth compositor hides the original windows.
+
+## Public release (PsiLok, 2026-11-03)
+Players bring their own ROM; nothing from the game is in the repo or the
+release. All art and text the enhancements show is read from the ROM at
+runtime (romart.c). Not shippable: the character art in characters/ and the
+Splice samples (sfx/; their licence forbids redistributing the samples);
+Segoe UI (Microsoft) -- bundle an open-licence font instead. The executable
+contains code translated from the game: safest is publishing the source and
+build scripts so players build the port from their own ROM.
 
 ## Ideas from Gen1Recomp
 Its options and modules map onto this port: `Tilt` (an HD-2D diorama

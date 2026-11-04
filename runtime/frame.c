@@ -31,6 +31,7 @@ uint64_t frame_count;
 int frame_pending_lag;
 VdpLine frame_lines[VDP_MAX_H];
 int frame_wide_margin;
+int frame_wide_field = 1;          /* 0: the field keeps its 320 view (side panels) */
 
 /* Widescreen draws in the field and in battles (and the fades into them):
  * the planes hold more of the map than the 320-pixel view, and battles get
@@ -39,7 +40,8 @@ int frame_wide_margin;
 #define GAME_MODE_INDEX 0xEF00u
 static int wide_allowed(void) {
     int mode = (m68k_ram[GAME_MODE_INDEX] << 8 | m68k_ram[GAME_MODE_INDEX + 1]) / 4;
-    return mode >= 2 && mode <= 5;      /* LoadFieldMap, Field, LoadBattle, Battle */
+    if (mode == 2 || mode == 3) return frame_wide_field;   /* LoadFieldMap, Field */
+    return mode == 4 || mode == 5;                          /* LoadBattle, Battle */
 }
 
 /* Widescreen and objects (see IMM_OVERRIDES in tools/emit.py): the game's

@@ -183,11 +183,11 @@ static void blit(const VdpLine *lines, int h, uint32_t *out, int stride, int sca
     int fr = (int)(fg >> 16 & 255), fgc = (int)(fg >> 8 & 255), fb = (int)(fg & 255);
     for (int y = 0; y < g->h; y++) {
         int Y = oy + y;
-        if (Y < cy0 || Y >= cy1 || Y / scale >= h) continue;
-        const VdpLine *l = &lines[Y / scale];
+        if (Y < cy0 || Y >= cy1 || (lines && Y / scale >= h)) continue;
+        const VdpLine *l = lines ? &lines[Y / scale] : NULL;
         for (int x = 0; x < g->w; x++) {
             int X = ox + x, a = g->bmp[y * g->w + x];
-            if (!a || X < cx0 || X >= cx1 || (l->sprite[X / scale] & 0x80)) continue;
+            if (!a || X < cx0 || X >= cx1 || (l && (l->sprite[X / scale] & 0x80))) continue;
             uint32_t *d = &out[(size_t)Y * (size_t)stride + (size_t)X];
             int r = (int)(*d >> 16 & 255), gg = (int)(*d >> 8 & 255), b = (int)(*d & 255);
             r += (fr - r) * a / 255; gg += (fgc - gg) * a / 255; b += (fb - b) * a / 255;
@@ -308,4 +308,53 @@ void hdtext_upscale(const uint32_t *src, int src_stride, int w, int h, uint32_t 
         for (int k = 1; k < scale; k++)
             memcpy(d + (size_t)k * (size_t)out_stride, d, (size_t)(w * scale) * sizeof(uint32_t));
     }
+}
+
+/* ------------------------------------------------------------------ strings (panels) */
+int hdtext_font_ready(void) { return loaded; }
+
+static uint32_t next_codepoint(const char **p) {
+    const unsigned char *s = (const unsigned char *)*p;
+    uint32_t c = *s++;
+    if (c >= 0xC0 && (*s & 0xC0) == 0x80) {                  /* 2- and 3-byte UTF-8 */
+        if (c < 0xE0) { c = (c & 0x1F) << 6 | (*s++ & 0x3F); }
+        else if ((s[1] & 0xC0) == 0x80) { c = (c & 0x0F) << 12 | (uint32_t)(s[0] & 0x3F) << 6 | (s[1] & 0x3F); s += 2; }
+    }
+    *p = (const char *)s;
+    return c;
+}
+
+float hdtext_string_width(const char *text, float cap_px) {
+    if (!loaded) return 0;
+    float sc = cap_px / cap_units, w = 0;
+    uint32_t prev = 0;
+    for (const char *p = text; *p;) {
+        uint32_t c = next_codepoint(&p);
+        int adv, lsb;
+        stbtt_GetCodepointHMetrics(&font, (int)c, &adv, &lsb);
+        if (prev) w += (float)stbtt_GetCodepointKernAdvance(&font, (int)prev, (int)c) * sc;
+        w += (float)adv * sc;
+        prev = c;
+    }
+    return w;
+}
+
+float hdtext_string(uint32_t *out, int stride, int cx0, int cy0, int cx1, int cy1, float x, float baseline,
+                    float cap_px, const char *text, uint32_t color) {
+    if (!loaded) return 0;
+    float sc = cap_px / cap_units, pen = x;
+    uint32_t prev = 0;
+    for (const char *p = text; *p;) {
+        uint32_t c = next_codepoint(&p);
+        if (prev) pen += (float)stbtt_GetCodepointKernAdvance(&font, (int)prev, (int)c) * sc;
+        if (c != ' ') {
+            const Glyph *g = glyph(c, sc);
+            if (g) blit(NULL, 0, out, stride, 1, g, pen, baseline, color, cx0, cy0, cx1, cy1);
+        }
+        int adv, lsb;
+        stbtt_GetCodepointHMetrics(&font, (int)c, &adv, &lsb);
+        pen += (float)adv * sc;
+        prev = c;
+    }
+    return pen - x;
 }

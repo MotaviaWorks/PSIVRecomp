@@ -52,7 +52,8 @@ endif()
 set_source_files_properties(runtime/hdtext.c PROPERTIES INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/third_party/stb)
 
 # Hardware: bus, VDP, sound, frame loop (object files, so the code<->hardware calls link either way)
-set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/sound.c runtime/frame.c runtime/depth.c runtime/sfx.c runtime/hdtext.c)
+set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/sound.c runtime/frame.c runtime/depth.c runtime/sfx.c runtime/hdtext.c
+               runtime/romart.c runtime/panels.c)
 set(TEST_SOURCES runtime/headless.c runtime/sha256.c)
 
 # Headless front end: scripted input, PNG screenshots
