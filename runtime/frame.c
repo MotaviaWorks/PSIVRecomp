@@ -21,6 +21,7 @@
 #include "rumble.h"
 #include "sfx.h"
 #include "sound.h"
+#include "widemap.h"
 
 #include <string.h>
 
@@ -47,12 +48,17 @@ static int wide_allowed(void) {
 }
 
 /* Widescreen and objects (see IMM_OVERRIDES in tools/emit.py): the game's
- * sprite builders drop pieces at screen x 320 or beyond. While frames are
- * drawn wide they keep them out to x 383, as long as the sprite table has
- * room (d6 is the next entry); otherwise the original limit applies. */
+ * sprite builders keep a piece if its x + 128 - base is below the limit:
+ * screen x -63 to 319. While frames are drawn wide they keep x -96 to 383
+ * (x + 128 from $20 to $1FF, the VDP's 9 bits), as long as the sprite table
+ * has room (d6 is the next entry). */
+uint32_t psiv_sprite_xbase(void) {
+    return vdp_view_x0 >= 0 ? 0x41 : 0x20;
+}
+
 uint32_t psiv_sprite_xlimit(uint32_t d6) {
     if (vdp_view_x0 >= 0) return 0x17F;
-    return (d6 & 0xFF) < 80 ? 0x1BF : 0;
+    return (d6 & 0xFF) < 80 ? 0x1E0 : 0;
 }
 
 void frame_run(void) {
@@ -63,6 +69,7 @@ void frame_run(void) {
     vdp_view_w = wide ? mw + 2 * m : mw;
     int w = vdp_view_w;
     int counter = vdp.reg[10];
+    widemap_frame(wide);               /* field margins drawn from the map in RAM */
     battleui_frame();                  /* modern battle menus: the game's windows left out of the picture */
 
     vdp.in_vblank = 0;

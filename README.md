@@ -232,11 +232,15 @@ original game, unchanged; **Enhanced** turns on the additions:
   WAV files; `--sfx-synth` / `--sfx DIR` play them in headless runs.
 
 - **16:9 widescreen** (on / off; 400 pixels wide, 424 with the 4:3 TV
-  shape): the field and battles show more to the left and right. Field
-  margins come straight from the game's planes, which hold more of the map
-  than the original view; objects are no longer dropped at the old right
-  edge; battle backgrounds are mirrored outward. The title, intro and other
-  screens built for 320 pixels keep their shape.
+  shape): the field and battles show more to the left and right. The game
+  only keeps what a 320-pixel screen needs in video memory, so the field's
+  margins are drawn from the map it keeps in RAM instead (`runtime/widemap.c`:
+  checked against the screen every frame, the planes' own content when they
+  disagree, the edge chunks repeated past a map's edge); objects are no
+  longer dropped near the old edges; battle backgrounds are mirrored outward.
+  The title, intro and other screens built for 320 pixels keep their shape.
+  `psiv_headless --wide-plain` shows the margins the old way, for comparison;
+  `PSIV_WIDEMAP_LOG=1` logs how the screen and the map agree.
 
 - **Text** (modern / original): dialogue, menus and battle windows redrawn
   with a TrueType font (`enhance.text_font`, Segoe UI by default) at full

@@ -202,13 +202,28 @@ text), `PaletteFX`/`Pipelines` (colour modes, filters), a mod system with
 profiles (hooks, asset swaps -- music replacement fits there), rulesets
 (faithful vs. quality-of-life), a save converter and save editor.
 
-## Widescreen -- v1 done (2026-11-03)
+## Widescreen -- v1 done (2026-11-03); margins from the map (2026-11-05)
 Show more of the world to the left and right instead of a 320-pixel window.
 - **Needs:** a renderer that can draw past 320 px. The VDP's planes are 512 px
   wide or more, so field maps often already have the tiles; where they don't,
   the map loader has to fill the extra columns.
 - **Hooks:** sprite culling and camera clamping (the game skips objects outside
   320 px), and window/menu positions so the UI stays centred.
+- **v2 (PsiLok, 2026-11-05: "tiles, NPCs and other objects ... spawn from the
+  right of the screen or produce inaccurate visuals"):** the planes did NOT
+  hold the margins reliably. RefreshTilesAsYouMove draws a chunk column 14
+  chunks ahead when moving right but just in time when moving left, and chunk
+  rows 16 chunks across from the camera's chunk, so the left margin held stale
+  strips (8-112 of its 196 cells in PsiLok's session) and at a map's edge the
+  margins showed the map's other side (the plane wraps). The right margin was
+  always right. `runtime/widemap.c` now draws the field's margins from the
+  layout + chunk table in RAM, after checking the screen agrees (windows' tiles
+  left out; the table is only taken from RAM when it agrees too: the game puts
+  it back ~5 frames after a window's save pointer drops). Past a map's edge:
+  its edge chunks repeated. The sprite builders keep pieces from x -96 (was
+  -63). Objects the game creates just off the 4:3 screen (scripted walk-ins)
+  still appear in the margins as they're created; none in PsiLok's session.
+  **Next if wanted:** fade such objects in; side-panel mode unchanged.
 
 ## Full text UI -- v1 done (2026-11-03): modern font in place; re-layout still open
 Dialogue, menus and battle text drawn with a modern font at native resolution,

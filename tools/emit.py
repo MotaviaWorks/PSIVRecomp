@@ -45,18 +45,24 @@ HOOKS = [
 # give the original value unless an enhancement is on, so the faithful port
 # is unchanged.
 #
-# Widescreen: the sprite builders drop each sprite piece whose x (VDP
-# coordinates) minus $41 is $17F or more, i.e. anything at screen x 320 or
-# beyond. With widescreen on, psiv_sprite_xlimit() lets pieces through out to
-# x 383 (the VDP's limit), while the sprite table has room (80 entries).
+# Widescreen: the sprite builders keep a sprite piece only if its x (VDP
+# coordinates) minus $41 is below $17F, i.e. screen x -63 to 319. With
+# widescreen on, psiv_sprite_xbase() and psiv_sprite_xlimit() let pieces
+# through from x -96 (wide enough for the left margin) out to x 383 (the
+# VDP's limit), while the sprite table has room (80 entries).
+SPRITE_XBASE = "psiv_sprite_xbase()"
 SPRITE_XLIMIT = "psiv_sprite_xlimit(D(6))"
 IMM_OVERRIDES = [
+    ("Battle_FillSpriteAttributes", 0x64, "subi.w\t#$41, d4", SPRITE_XBASE),
     ("Battle_FillSpriteAttributes", 0x68, "cmpi.w\t#$17F, d4", SPRITE_XLIMIT),
+    ("Field_FillSpriteAttributes", 0x64, "subi.w\t#$41, d4", SPRITE_XBASE),
     ("Field_FillSpriteAttributes", 0x68, "cmpi.w\t#$17F, d4", SPRITE_XLIMIT),
+    ("loc_44BE0", 0x62, "subi.w\t#$41, d4", SPRITE_XBASE),
     ("loc_44BE0", 0x66, "cmpi.w\t#$17F, d4", SPRITE_XLIMIT),
+    ("loc_44D02", 0x08, "subi.w\t#$41, d4", SPRITE_XBASE),
     ("loc_44D02", 0x0C, "cmpi.w\t#$17F, d4", SPRITE_XLIMIT),
 ]
-OVERRIDE_PROTOTYPES = ["uint32_t psiv_sprite_xlimit(uint32_t d6);"]
+OVERRIDE_PROTOTYPES = ["uint32_t psiv_sprite_xbase(void);", "uint32_t psiv_sprite_xlimit(uint32_t d6);"]
 
 X, N, Z, V, C = 16, 8, 4, 2, 1
 NZVC, ALL = N | Z | V | C, 31

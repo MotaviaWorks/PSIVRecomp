@@ -59,6 +59,7 @@
 #include "music.h"
 #include "fpview.h"
 #include "walkto.h"
+#include "widemap.h"
 #include "rumble.h"
 #include "sfx.h"
 #include "frame.h"
@@ -900,6 +901,10 @@ int main(int argc, char **argv) {
             frame_wide_field = 0;
         } else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
             frame_wide_margin = atoi(argv[++i]);           /* widescreen: pixels beyond each side */
+        } else if (!strcmp(argv[i], "--wide-plain")) {
+            widemap_set_enabled(0);                        /* field margins straight from the planes */
+        } else if (!strcmp(argv[i], "--wide-edge") && i + 1 < argc) {
+            widemap_set_edge(atoi(argv[++i]));             /* beyond a map's edge: 0 backdrop, 1 edge repeated */
         } else if (!strcmp(argv[i], "--fog") && i + 1 < argc) {
             depth_set_fog(atoi(argv[++i]));                /* battle fog level (with --depth) */
         } else if (!strcmp(argv[i], "--shot-range") && i + 1 < argc) {

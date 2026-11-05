@@ -197,9 +197,42 @@ const uint8_t *vdp_sprite_hidden;
 const uint8_t *vdp_plane_a_flags;
 const uint8_t *vdp_tile_shadow;
 const int16_t *vdp_sprite_dx;
+int (*vdp_margin_entry)(int plane, int x, int y, int px, int py);
 
 static int plane_cells(int bits) {
     return bits == 0 ? 32 : bits == 1 ? 64 : bits == 3 ? 128 : 32;
+}
+
+static uint32_t plane_base(int plane) {
+    return plane == 0 ? (uint32_t)(vdp.reg[2] & 0x38) << 10 : (uint32_t)(vdp.reg[4] & 7) << 13;
+}
+
+int vdp_plane_cells(int *wcells, int *hcells) {
+    *wcells = plane_cells(vdp.reg[16] & 3);
+    *hcells = plane_cells(vdp.reg[16] >> 4 & 3);
+    return (int)plane_base(0);
+}
+
+/* the horizontal scroll of a plane on line y: full screen, per 8-line cell, or per line */
+static int plane_hscroll(int plane, int y) {
+    uint32_t hs = (uint32_t)(vdp.reg[13] & 0x3F) << 10;
+    int hmode = vdp.reg[11] & 3;
+    uint32_t hrow = hmode == 3 ? (uint32_t)y : hmode == 2 ? (uint32_t)(y & ~7) : 0;
+    uint32_t ha = (hs + hrow * 4 + (uint32_t)plane * 2) & 0xFFFF;
+    return (vdp.vram[ha] << 8 | vdp.vram[ha + 1]) & 0x3FF;
+}
+
+/* the vertical scroll of a plane at screen x: full screen, or per 2-cell column */
+static int plane_vscroll(int plane, int x, int mode_w) {
+    int col = 0;
+    if (vdp.reg[11] >> 2 & 1) col = x < 0 ? 0 : x >= mode_w ? mode_w / 16 - 1 : x / 16;
+    return vdp.vsram[(col * 2 + plane) % 40] & 0x3FF;
+}
+
+void vdp_plane_xy(int plane, int x, int y, int *px, int *py) {
+    int pw = plane_cells(vdp.reg[16] & 3) * 8, ph = plane_cells(vdp.reg[16] >> 4 & 3) * 8;
+    *px = (x - plane_hscroll(plane, y)) & (pw - 1);
+    *py = (y + plane_vscroll(plane, x, vdp_width())) & (ph - 1);
 }
 
 /* pixel of a tile in `vram`: entry = name-table word, tx/ty = pixel inside the 8x8 cell */
@@ -220,28 +253,36 @@ static uint16_t nt_entry(uint32_t base, int cx, int cy, int wcells) {
     return (uint16_t)(vdp.vram[a] << 8 | vdp.vram[a + 1]);
 }
 
+uint16_t vdp_plane_entry(int plane, int px, int py) {
+    int wcells = plane_cells(vdp.reg[16] & 3);
+    return nt_entry(plane_base(plane), px >> 3, py >> 3, wcells);
+}
+
 /* each renderer draws screen columns x0 .. x0+width-1 into out[0..width-1];
  * mode_w is the mode's own width (320 or 256): widescreen draws beyond it */
 static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, uint8_t *txy, uint8_t *under,
                          int x0, int width, int mode_w) {
     int wcells = plane_cells(vdp.reg[16] & 3), hcells = plane_cells(vdp.reg[16] >> 4 & 3);
-    uint32_t base = plane == 0 ? (uint32_t)(vdp.reg[2] & 0x38) << 10 : (uint32_t)(vdp.reg[4] & 7) << 13;
-    /* horizontal scroll: full screen, per 8-line cell, or per line */
-    uint32_t hs = (uint32_t)(vdp.reg[13] & 0x3F) << 10;
-    int hmode = vdp.reg[11] & 3;
-    uint32_t hrow = hmode == 3 ? (uint32_t)y : hmode == 2 ? (uint32_t)(y & ~7) : 0;
-    uint32_t ha = (hs + hrow * 4 + (uint32_t)plane * 2) & 0xFFFF;
-    int hscroll = (vdp.vram[ha] << 8 | vdp.vram[ha + 1]) & 0x3FF;
-    int vmode = vdp.reg[11] >> 2 & 1;
+    uint32_t base = plane_base(plane);
+    int hscroll = plane_hscroll(plane, y);
     int pw = wcells * 8, ph = hcells * 8;
     for (int i = 0; i < width; i++) {
         int x = x0 + i;
-        int col = 0;                              /* per 2-cell column vertical scroll */
-        if (vmode) col = x < 0 ? 0 : x >= mode_w ? mode_w / 16 - 1 : x / 16;
-        int vscroll = vdp.vsram[(col * 2 + plane) % 40] & 0x3FF;
+        int vscroll = plane_vscroll(plane, x, mode_w);
         int px = (x - hscroll) & (pw - 1);
         int py = (y + vscroll) & (ph - 1);
         uint16_t e = nt_entry(base, px >> 3, py >> 3, wcells);
+        if ((unsigned)x >= (unsigned)mode_w && vdp_margin_entry) {   /* widescreen margins (widemap.c) */
+            int m = vdp_margin_entry(plane, x, y, px, py);
+            if (m == -2) {
+                out[i] = 0;
+                if (entries) entries[i] = 0;
+                if (txy) txy[i] = (uint8_t)((px & 7) | (py & 7) << 3);
+                if (under) under[i] = 0;
+                continue;
+            }
+            if (m >= 0) e = (uint16_t)m;
+        }
         const uint8_t *src = vdp.vram;
         uint8_t below = 0;
         if (plane == 0 && vdp_plane_a_override && wcells == 64 && py < 256) {

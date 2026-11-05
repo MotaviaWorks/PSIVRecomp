@@ -102,6 +102,18 @@ extern const uint8_t *vdp_tile_shadow;
  * sprites are evaluated where the game put them, so the status flags it
  * reads are unchanged). NULL = off. */
 extern const int16_t *vdp_sprite_dx;
+/* Widescreen margins: for each plane pixel drawn beyond the mode's width,
+ * the name-table word to draw there instead of the plane's own (plane 0 = A,
+ * 1 = B; x, y on the screen, px, py the pixel in the plane it falls on).
+ * Returns -1 for the plane's own word, -2 for nothing (transparent).
+ * NULL = off. */
+extern int (*vdp_margin_entry)(int plane, int x, int y, int px, int py);
+
+/* Where screen pixel (x, y) falls in plane 0 (A) or 1 (B), scroll included,
+ * as the line renderer finds it; and the name-table word at a plane pixel. */
+void     vdp_plane_xy(int plane, int x, int y, int *px, int *py);
+uint16_t vdp_plane_entry(int plane, int px, int py);
+int      vdp_plane_cells(int *wcells, int *hcells);   /* the planes' size; returns the base of plane A */
 
 void vdp_render_line(int y, VdpLine *out);
 /* mix a line's layers into 0xAARRGGBB pixels */
