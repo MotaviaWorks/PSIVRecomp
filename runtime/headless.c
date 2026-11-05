@@ -22,7 +22,8 @@
  *     --layers F:PREFIX  frame F's layers as PNGs, plane A's tiles and the sprite
  *                        table as text (for working out what the game draws where)
  *     --sram FILE        battery save to load before power-on (8 KB, the odd
- *                        bytes of $200001-$203FFF, as saves/psiv.srm)
+ *                        bytes of $200001-$203FFF, as saves/psiv.srm; or an
+ *                        emulator's .srm: BizHawk, Gens, Kega Fusion)
  *     --sram-out FILE    write the battery save when the run ends
  *     --where L,L,...    print the 68000 call chain at these logical frames
  *     --replay TRACE     replay a BizHawk reference trace (tools/bizhawk/record.lua):
@@ -906,9 +907,11 @@ int main(int argc, char **argv) {
     if (sram_in) {
         FILE *sf = fopen(sram_in, "rb");
         if (!sf) { fprintf(stderr, "cannot open %s\n", sram_in); return 1; }
-        size_t got = fread(bus_sram, 1, sizeof bus_sram, sf);
+        static uint8_t buf[2 * BUS_SRAM_SIZE];
+        size_t got = fread(buf, 1, sizeof buf, sf);
         fclose(sf);
-        printf("loaded save %s (%u bytes)\n", sram_in, (unsigned)got);
+        int format = bus_sram_import(buf, got);
+        printf("loaded save %s (%u bytes, %s layout)\n", sram_in, (unsigned)got, bus_sram_format_name(format));
     }
 
     m68k.s = 1;

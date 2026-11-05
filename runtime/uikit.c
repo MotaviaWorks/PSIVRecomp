@@ -263,6 +263,29 @@ float ui_text_center(const UiCanvas *cv, float x_mid, float base, float cap, con
     return ui_text(cv, x_mid - ui_text_width(s, cap) / 2, base, cap, s, c, alpha);
 }
 
+int ui_text_lines(float width, float cap, const char *s) {
+    char line[256];
+    int lines = 0;
+    while (*s) {
+        while (*s == ' ') s++;
+        int best = 0, i = 0;
+        for (;;) {
+            while (s[i] && s[i] != ' ') i++;
+            if (i >= (int)sizeof line) break;
+            memcpy(line, s, (size_t)i);
+            line[i] = 0;
+            if (best && ui_text_width(line, cap) > width) break;
+            best = i;
+            if (!s[i]) break;
+            i++;
+        }
+        if (!best) break;
+        lines++;
+        s += best;
+    }
+    return lines;
+}
+
 int ui_text_wrap(const UiCanvas *cv, float x, float base, float width, float line_h, int max_lines,
                  float cap, const char *s, uint32_t c, int alpha) {
     char line[256];

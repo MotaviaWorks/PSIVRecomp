@@ -78,9 +78,26 @@ messages) are read back from their tiles and redrawn in the same style.
   cells in palette 2, damage box = tiles $5E4+ inside their block), and the
   sprites on them follow, weighted by height so a bolt from the enemy bends
   to them (vdp_sprite_dx, display only). Messages that would cover the party
-  go to the top; party cards are ordered by fighter +$13 (place in the line,
-  set from the first frame, even in an ambush). An ambush still shows the
-  original view until the first main menu (nobody to copy yet).
+  go to the top; party cards follow the order the party stands in (each
+  one's x at the menus). An ambush still shows the original view until the
+  first main menu (nobody to copy yet).
+- **Tried across the whole game** (PsiLok's fan saves, 2026-11-04): 44 saves
+  from chapters 1-6 (Gens .srm: every byte of $200000-$201FFF, slot 1),
+  loaded as they are (bus_sram_import; `psiv --save FILE`). All 44 Continue
+  into the field; 43 reach a random battle by walking back and forth (the
+  one atop Soldier's Cave has none), several after placing the party a few
+  steps off the town tile it was saved on (slot checksum: 16-bit sum of the
+  $A00 bytes). `tools/battle_probe.py` shot every party's commands, lists
+  and a round of attacks, which found: (1) fighter +$13 is the character's
+  ID + 1, not the place in line -- it matched only for Chaz, Alys, Hahn;
+  the cards now sort by x. (2) Kyra's throw (and a caster's) is drawn in
+  the middle of the line with her x unchanged, over Chaz, so she stood twice
+  and he vanished; a member not in the columns of their x is now looked for
+  by their tiles (matched against the copy from the menus) and moved back
+  like one the game moved. (3) Long skill descriptions were cut at two
+  lines; the list grows to the longest (up to four). Six of those battles
+  (saves 8, 16, 21, 25, 41, 44: every playable character, Motavia,
+  Dezolis, Rykros) match BizHawk frame for frame, battery saves too.
 
 ## Public release (PsiLok, 2026-11-03)
 Players bring their own ROM; nothing from the game is in the repo or the

@@ -34,6 +34,44 @@ static int sram_index(uint32_t a) {
     return (int)((a - 0x200001) >> 1);
 }
 
+/* the game's mark at $200005: "PHANTASY STAR 4" on the odd bytes */
+static const char PS4_MARK[] = "PHANTASY STAR 4";
+
+int bus_sram_import(const uint8_t *data, size_t n) {
+    memset(bus_sram, 0, sizeof bus_sram);
+    int every_byte = n == 2 * BUS_SRAM_SIZE;            /* 16 KB: BizHawk's image */
+    if (!every_byte && n >= 2 + 2 * sizeof PS4_MARK && memcmp(data + 2, PS4_MARK, sizeof PS4_MARK - 1)) {
+        int marked = 1;                                 /* the mark on every other byte: Gens' 8 KB */
+        for (size_t i = 0; i < sizeof PS4_MARK - 1 && marked; i++)
+            marked = data[5 + 2 * i] == (uint8_t)PS4_MARK[i] && data[4 + 2 * i] == 0;
+        if (marked) {
+            for (size_t i = 0; i < n / 2 && i < BUS_SRAM_SIZE; i++) bus_sram[i] = data[2 * i + 1];
+            return SRAM_EVERY_BYTE_8K;
+        }
+    }
+    if (every_byte) {
+        for (size_t i = 0; i < BUS_SRAM_SIZE; i++) bus_sram[i] = data[2 * i + 1];
+        return SRAM_EVERY_BYTE_16K;
+    }
+    memcpy(bus_sram, data, n < BUS_SRAM_SIZE ? n : BUS_SRAM_SIZE);
+    return SRAM_PORT;
+}
+
+size_t bus_sram_export(int format, uint8_t *out) {
+    if (format == SRAM_PORT) { memcpy(out, bus_sram, BUS_SRAM_SIZE); return BUS_SRAM_SIZE; }
+    size_t n = format == SRAM_EVERY_BYTE_16K ? 2 * BUS_SRAM_SIZE : BUS_SRAM_SIZE;
+    for (size_t i = 0; i < n / 2; i++) {
+        out[2 * i] = format == SRAM_EVERY_BYTE_16K ? 0xFF : 0x00;   /* the unused even bytes, as each keeps them */
+        out[2 * i + 1] = bus_sram[i];
+    }
+    return n;
+}
+
+const char *bus_sram_format_name(int format) {
+    return format == SRAM_EVERY_BYTE_16K ? "every byte, 16 KB (BizHawk)"
+         : format == SRAM_EVERY_BYTE_8K ? "every byte, 8 KB (Gens, Kega Fusion)" : "the port's";
+}
+
 /* ------------------------------------------------------------------ pads */
 uint8_t bus_pad[2];
 static uint8_t pad_th[2] = {0x40, 0x40};

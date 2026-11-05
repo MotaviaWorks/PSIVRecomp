@@ -34,3 +34,8 @@ portraits/
 
 # Save files you collect for testing (third-party saves, never committed)
 imported saves/
+
+# Your own collections for soundtrack ideas (other games' ROMs: never committed)
+custom soundtrack ideas/
+*.smc
+*.sfc

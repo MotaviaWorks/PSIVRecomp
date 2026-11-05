@@ -2,14 +2,16 @@
  * SDL3 front end: window, input, audio, 60 Hz pacing, battery saves,
  * settings, crash and hang reports.
  *
- *   psiv [--rom PATH]
+ *   psiv [--rom PATH] [--save FILE]
  *
  * Files live in the "home" folder: the folder holding psiv.exe, or the
  * project root when running a development build from build/native-*. There:
  *   psiv.ini         settings (written with defaults on first run)
  *   rom/psiv.bin     the ROM; if missing, a file dialog asks for your dump
  *                    (.smd or raw), checks it and writes this file
- *   saves/psiv.srm   battery save (the cartridge's 8 KB)
+ *   saves/psiv.srm   battery save (the cartridge's 8 KB); --save FILE plays
+ *                    another, an emulator's .srm too (BizHawk, Gens, Kega
+ *                    Fusion: written back in its own layout)
  *   screenshots/     F12
  *   psiv-crash.txt   written if the game hits an error or stops responding
  *
@@ -232,27 +234,38 @@ static uint8_t read_input(void) {
 }
 
 /* ------------------------------------------------------------------ battery save */
-static void sram_path(char *out, size_t n) { path_in_home(out, n, "saves/psiv.srm"); }
+static const char *save_arg;                /* --save FILE: this battery save instead of saves/psiv.srm */
+static int sram_format = SRAM_PORT;         /* the file's own layout, kept when it's written back */
+
+static void sram_path(char *out, size_t n) {
+    if (save_arg) snprintf(out, n, "%s", save_arg);
+    else path_in_home(out, n, "saves/psiv.srm");
+}
 
 static void sram_load(void) {
     char p[1100];
     sram_path(p, sizeof p);
     FILE *f = fopen(p, "rb");
     if (!f) return;
-    size_t n = fread(bus_sram, 1, sizeof bus_sram, f);
+    static uint8_t buf[2 * BUS_SRAM_SIZE];
+    size_t n = fread(buf, 1, sizeof buf, f);
     fclose(f);
-    SDL_Log("loaded %s (%u bytes)", p, (unsigned)n);
+    sram_format = bus_sram_import(buf, n);
+    SDL_Log("loaded %s (%u bytes, %s layout)", p, (unsigned)n, bus_sram_format_name(sram_format));
 }
 
 static void sram_flush(void) {
     if (!bus_sram_dirty) return;
     char p[1100], dir[1100];
-    path_in_home(dir, sizeof dir, "saves");
-    SDL_CreateDirectory(dir);
+    if (!save_arg) {
+        path_in_home(dir, sizeof dir, "saves");
+        SDL_CreateDirectory(dir);
+    }
     sram_path(p, sizeof p);
     FILE *f = fopen(p, "wb");
     if (!f) { SDL_Log("cannot write %s", p); return; }
-    fwrite(bus_sram, 1, sizeof bus_sram, f);
+    static uint8_t buf[2 * BUS_SRAM_SIZE];
+    fwrite(buf, 1, bus_sram_export(sram_format, buf), f);
     fclose(f);
     bus_sram_dirty = 0;
 }
@@ -863,6 +876,7 @@ int main(int argc, char **argv) {
     const char *rom_arg = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--rom") && i + 1 < argc) rom_arg = argv[++i];
+        else if (!strcmp(argv[i], "--save") && i + 1 < argc) save_arg = argv[++i];
         /* testing: --menu F[:settings] opens the system menu at frame F;
          * --capture F:FILE.bmp saves the rendered window at frame F and exits
          * (run with SDL_VIDEO_DRIVER=offscreen to keep it off the screen) */

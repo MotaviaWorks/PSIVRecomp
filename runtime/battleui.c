@@ -237,6 +237,7 @@ typedef struct {
     uint16_t cell[PARTY_ROWS][6];           /* name-table entries; 0 = not theirs */
 } Member;
 static Member members[5];
+static int home_x[5];                       /* each one's place (fighter +$C) as they stand at the menus */
 static int standing;                        /* members on screen at the last main menu */
 static int restore;                         /* the members drawn back this frame */
 static int shown;                           /* the members in the picture this frame (theirs or the game's) */
@@ -256,6 +257,7 @@ static int choosing(int menu) { return menu != M_NONE && menu != M_MAIN; }
 
 static void party_reset(void) {
     memset(members, 0, sizeof members);
+    memset(home_x, 0, sizeof home_x);
     standing = restore = shown = 0;
     memset(aura_level, 0, sizeof aura_level);
     nmotes = 0;
@@ -285,6 +287,24 @@ static int member_top(const Member *m) {
     return 0;
 }
 
+/* Where the game draws a member when not in the columns of their x: an
+ * archer (Kyra's throw) or a caster is drawn in the middle of the line with
+ * the x left as it was. Their tiles, wherever they are, matched against the
+ * picture kept at the menus (an action's frames go into the member's own
+ * VRAM, under the same name-table entries); -1 if not found. */
+static int find_member(const Member *m, int lo, int hi) {
+    if (!m->valid) return -1;
+    for (int r = 0; r < PARTY_ROWS; r++)
+        for (int col = 0; col < 64; col++) {
+            uint16_t e = nt(PARTY_ROW0 + r, col);
+            int t = e & 0x7FF;
+            if (!party_tile(e) || t < lo || t >= hi) continue;
+            for (int c = 0; c < 6; c++)
+                if (m->cell[r][c] && (m->cell[r][c] & 0x7FF) == t) return col - c;
+        }
+    return -1;
+}
+
 static void party_frame(void) {
     int r2 = (int)(r16(BATTLE_ROUTINE_2) & 0x7FFF), menu = menu_of(r2);
     int results = (r2 >= 0x1E && r2 <= 0x26) || (r2 >= 0x2D && r2 <= 0x2F);
@@ -306,16 +326,21 @@ static void party_frame(void) {
         int lo = bases[k], hi = lo + 0x30;          /* their tiles: up to the next member's */
         for (int j = 0; j < 5; j++) if (bases[j] > lo && bases[j] < hi) hi = bases[j];
         if (m->valid && (m->base != lo || (keep && m->col0 != col0))) m->valid = 0;
-        now_col[k] = col0;
         uint16_t now[PARTY_ROWS][6];
         int any = 0;
-        for (int r = 0; r < PARTY_ROWS; r++)
-            for (int c = 0; c < 6; c++) {
-                uint16_t e = nt(PARTY_ROW0 + r, col0 + c);
-                int t = e & 0x7FF;
-                now[r][c] = e;
-                if (party_tile(e) && t >= lo && t < hi) any = 1;
+        for (int pass = 0; pass < 2 && !any; pass++) {
+            if (pass) {                               /* not there: drawn elsewhere? */
+                if (keep || (col0 = find_member(m, lo, hi)) < 0) break;
             }
+            for (int r = 0; r < PARTY_ROWS; r++)
+                for (int c = 0; c < 6; c++) {
+                    uint16_t e = nt(PARTY_ROW0 + r, col0 + c);
+                    int t = e & 0x7FF;
+                    now[r][c] = e;
+                    if (party_tile(e) && t >= lo && t < hi) any = 1;
+                }
+        }
+        now_col[k] = col0;
         if (!any) continue;
         present |= 1 << k;
         if (m->valid && col0 != m->col0) moved |= 1 << k;   /* stood in front of the action */
@@ -330,6 +355,7 @@ static void party_frame(void) {
                 } else if (!m->valid || !ui_tile(e)) m->cell[r][c] = 0;
             }
         m->valid = 1; m->base = lo; m->col0 = col0; m->x = x;
+        home_x[k] = x + 128;
     }
     if (menu == M_MAIN) standing = present;
     else if (!keep) standing |= present & alive;     /* e.g. revived, and drawn by the game */
@@ -723,11 +749,11 @@ static void card_layout(int view_w) {
     for (int k = 0; k < 5; k++) {
         int id = fighter_char(k);
         if (id < 0) continue;
-        /* by their place in the line (fighter +$13, 1 = left), set from the
-         * battle's first frame; their x is not (and the game moves the one
-         * in front of the action now and then) */
-        int x = (int)r8(FIGHTERS + (unsigned)k * 0x40 + 0x13), j = n++;
-        if (!x) x = 0x100 + (members[k].valid ? members[k].x : (int)r16(FIGHTERS + (unsigned)k * 0x40 + 0x0C));
+        /* by their place in the line, left to right: where they stand at the
+         * menus (the game moves the one in front of the action now and then,
+         * never there), or before the first menu where they are. (Fighter
+         * +$13 is not the place: it is the character's ID + 1.) */
+        int x = home_x[k] ? home_x[k] : (int)r16(FIGHTERS + (unsigned)k * 0x40 + 0x0C), j = n++;
         while (j > 0 && xs[j - 1] > x) { ids[j] = ids[j - 1]; xs[j] = xs[j - 1]; j--; }
         ids[j] = id;
         xs[j] = x;
@@ -940,7 +966,17 @@ static void draw_list(const char *title, const char *info, const Entry *e, int c
     if (first > pages - cols) first = pages - cols;
     if (first < 0) first = 0;
     float colw = 66.0f, row = 10.5f, cap = 4.6f;
-    float w = 10.0f + (float)cols * colw, h = 14.0f + 4.0f * row + 18.0f;
+    float w = 10.0f + (float)cols * colw;
+    /* room for the list's longest description, whole (two lines at least,
+     * four at most), so the panel keeps its size as the cursor moves */
+    int dl = 2;
+    for (int i = 0; i < count; i++)
+        if (e[i].name[0] && e[i].desc && *e[i].desc) {
+            int l = ui_text_lines((w - 12.0f) * S, 3.7f * S, e[i].desc);
+            if (l > dl) dl = l;
+        }
+    if (dl > 4) dl = 4;
+    float h = 14.0f + 4.0f * row + 18.0f + (float)(dl - 2) * 5.2f;
     float lo = -OX + 4.0f, hi = (float)(cv.x1 / S) - OX - 4.0f;
     /* beside the party where there is room, on the side of the member
      * choosing, so it covers no one; else above everyone's heads */
@@ -979,8 +1015,8 @@ static void draw_list(const char *title, const char *info, const Entry *e, int c
     /* what the highlighted one does */
     const char *d = cur >= 0 && cur < count ? e[cur].desc : NULL;
     if (d && *d)
-        ui_text_wrap(&cv, SX(x0 + 6.0f), SY(y1 - 10.0f), (w - 12.0f) * S, 5.2f * S, 2, 3.7f * S, d, 0xD8E2FF,
-                     AL(255 * alpha));
+        ui_text_wrap(&cv, SX(x0 + 6.0f), SY(y1 - 10.0f - (float)(dl - 2) * 5.2f), (w - 12.0f) * S, 5.2f * S, dl,
+                     3.7f * S, d, 0xD8E2FF, AL(255 * alpha));
 }
 
 static Entry entries[ITEM_SLOTS];

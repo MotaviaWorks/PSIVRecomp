@@ -43,7 +43,9 @@ The PSG is implemented in `runtime/sound.c`.
 
 Hold Tab to fast-forward, F10 pause, F11 fullscreen, F12 screenshot
 (`screenshots/`). **Esc** (or the pad's Back/Select) opens the system menu:
-resume, settings, quit. Battery saves go to `saves/psiv.srm`.
+resume, settings, quit. Battery saves go to `saves/psiv.srm`;
+`psiv --save FILE` plays another, an emulator's `.srm` too (BizHawk, Gens,
+Kega Fusion), written back in its own layout.
 
 ### Enhancements
 
@@ -122,8 +124,9 @@ original game, unchanged; **Enhanced** turns on the additions:
   party stays on screen in their places all battle long (the original shows
   only the member choosing, the one acting, or the one an enemy attacks,
   moved in front of it): an attacker's place empties while they strike, an
-  enemy's attack lands on its target where they stand, a caster casts from
-  their own place, and the game's messages move to the top of the screen.
+  enemy's attack lands on its target where they stand, a caster casts and
+  an archer throws from their own place, and the game's messages move to the
+  top of the screen. The cards run in the order the party stands.
   Whoever is choosing has a gold aura, an ally being targeted a cyan one;
   the commands sit in a strip under the party and the lists beside or above
   it, so no menu covers anyone. The game
@@ -193,6 +196,14 @@ new moves off a movie and takes screenshots, for authoring.
   frames); `battle1.movie` is its first 4,900 frames, up to the first battle.
   Both start from the save that session began with (`tools/movies/saves/battle1-start.srm`,
   kept locally, not in git)
+
+`check.py --movie M --sram FILE` starts both sides from a battery save of
+your own, in any layout the port reads. `tools/battle_probe.py FOLDER` takes
+a folder of saves (from anywhere in the game: keep collected saves out of
+git, `imported saves/` is ignored), Continues each, walks until a random
+battle and screenshots the battle menus: the commands, the technique and
+skill lists, and a round of attacks. Its movies replay in `check.py`
+(`--list` shows each save's world, place and party).
 
 ### Checking the sound
 

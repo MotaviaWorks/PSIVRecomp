@@ -53,6 +53,17 @@ def from_bizhawk_sram(image: bytes) -> bytes:
     return bytes(image[1::2][:SRAM_SIZE])
 
 
+def port_sram(b: bytes) -> bytes:
+    """A battery save in any layout the port reads (runtime/bus.c,
+    bus_sram_import) -> the port's 8 KB: BizHawk's 16 KB of every byte, Gens /
+    Kega Fusion's 8 KB of every byte of $200000-$201FFF, or the port's own."""
+    if len(b) == 2 * SRAM_SIZE:
+        return from_bizhawk_sram(b)
+    if b[2:17] != b"PHANTASY STAR 4" and b[5:35:2] == b"PHANTASY STAR 4":
+        return bytes(b[1::2]).ljust(SRAM_SIZE, b"\0")
+    return bytes(b[:SRAM_SIZE]).ljust(SRAM_SIZE, b"\0")
+
+
 def record(scenario: str, dump_at: int | None, movie: Path | None = None,
            sram_in: Path | None = None, play: bool = False) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
@@ -88,7 +99,7 @@ def record(scenario: str, dump_at: int | None, movie: Path | None = None,
         # start from the given save, or an empty one -- never from whatever
         # BizHawk's own save file happens to hold
         image = OUT / f"{name}.bizhawk-in.sram"
-        image.write_bytes(to_bizhawk_sram(sram_in.read_bytes() if sram_in else bytes(SRAM_SIZE)))
+        image.write_bytes(to_bizhawk_sram(port_sram(sram_in.read_bytes()) if sram_in else bytes(SRAM_SIZE)))
         env["PSIV_SRAM_IN"] = str(image)
     err = OUT / "error.txt"
     err.unlink(missing_ok=True)
@@ -120,8 +131,8 @@ def main() -> int:
     ap.add_argument("--trace", help="replay this trace instead of recording one")
     ap.add_argument("--scenario", default="newgame", help="tools/bizhawk/<scenario>.lua to record")
     ap.add_argument("--movie", help="record this input movie (by logical frame) instead of a scenario")
-    ap.add_argument("--sram", help="battery save to start from (port format, 8 KB); default: the "
-                                   "movie's '# from-save: NAME' line, if any")
+    ap.add_argument("--sram", help="battery save to start from (the port's, BizHawk's or Gens / Kega "
+                                   "Fusion's .srm); default: the movie's '# from-save: NAME' line, if any")
     ap.add_argument("--dump-at", type=int, help="dump raw memory at this logical frame on both sides")
     args = ap.parse_args()
 

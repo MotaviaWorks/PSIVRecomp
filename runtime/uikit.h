@@ -36,6 +36,7 @@ float ui_text_width(const char *s, float cap);
 /* word-wrapped into lines of at most `width`; returns the number of lines drawn */
 int   ui_text_wrap(const UiCanvas *cv, float x, float baseline, float width, float line_h, int max_lines,
                    float cap, const char *s, uint32_t rgb, int alpha);
+int   ui_text_lines(float width, float cap, const char *s);   /* the lines it takes, wrapped so */
 int   ui_ready(void);                    /* the font is loaded */
 
 /* the game's data */
