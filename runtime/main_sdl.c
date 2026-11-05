@@ -18,6 +18,8 @@
  * Default keys: arrows = D-pad, Z/X/C = A/B/C, Enter = Start, Tab (hold) =
  * fast forward, F10 = pause, F11 = fullscreen, F12 = screenshot, Esc = quit.
  * Gamepads: D-pad or left stick; x/a/b (west/south/east) = A/B/C; start.
+ * Mouse: click on the field to walk there (a person or a chest: walk up to
+ * it and press C); right click stops. With text up, click = C, right = B.
  */
 #include "bus.h"
 #include "depth.h"
@@ -27,6 +29,7 @@
 #include "algol.h"
 #include "music.h"
 #include "fpview.h"
+#include "walkto.h"
 #include "sfx.h"
 #include "diag.h"
 #include "frame.h"
@@ -118,6 +121,7 @@ static Setting settings[] = {
     {"enhance.sfx", "modern", "sound effects: modern = the port's own, synthesized; custom = your samples, mapped in sfx/sfx.ini (the rest modern); original = the game's own"},
     {"enhance.music", "original", "music: algol = the port's modern sound chip plays the game's music (new instruments, drums and reverb); original = the YM2612 and PSG"},
     {"enhance.first_person", "off", "dungeons: first_person = seen from the leader's eyes, like Phantasy Star I's mazes (up walks forward, left / right turn); off = the game's own view"},
+    {"enhance.click_walk", "on", "mouse: on = a click on the field walks the party there (a person or a chest: up to it, then C to talk or open); right click stops; with text up a click is C, a right click B; off = the mouse does nothing"},
     {"enhance.custom_music", "on", "your music: on = audio files in the music folder play in place of the game's songs (music/8F.wav, or named in music/music.ini; see runtime/music.h); off = the game's"},
     {"enhance.music_bank", "", "with Algol: a SNES game you own whose instruments play the music instead of Algol's (the path to its ROM, e.g. Lufia II); empty = Algol's own"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
@@ -420,6 +424,10 @@ static void screenshot_any(const uint32_t *pixels, int w, int h, int stride) {
 static uint64_t test_menu_frame, test_capture_frame;
 static int test_menu_settings;
 static const char *test_capture_path;
+static struct { uint64_t frame, len; uint8_t keys; } test_keys[32];   /* --test-keys */
+static int n_test_keys;
+static uint64_t test_click_frame;                                     /* --test-click */
+static float test_click_x, test_click_y;
 static void quit(int code);
 
 /* the system menu (below) draws over the frame while it's open */
@@ -440,6 +448,33 @@ static SDL_ScaleMode scale_mode(void) {
  * doesn't advance and the last image is shown again */
 static int panels_on;                  /* widescreen with side panels in exploration */
 
+/* where the last picture went in the window (render coordinates), for clicks */
+static SDL_FRect pic_dst;
+static int pic_fw, pic_w, pic_h, pic_pm;
+
+/* click to walk: a marker where the party is going */
+static void draw_walk_marker(const SDL_FRect *dst, int fw, int pm, int w, int h) {
+    float fx, fy;
+    int wx, wy, sx, sy;
+    if (!walkto_active()) return;
+    if (fpview_active()) {
+        if (!walkto_target(&wx, &wy) || !fpview_project((float)wx, (float)wy, w, h, &fx, &fy)) return;
+    } else {
+        if (!walkto_target_screen(&sx, &sy)) return;
+        fx = (float)(sx - vdp_view_x0);
+        fy = (float)sy;
+    }
+    float kx = dst->w / (float)fw, ky = dst->h / (float)h;
+    float X = dst->x + (fx + (float)pm) * kx, Y = dst->y + fy * ky;
+    if (X < dst->x || Y < dst->y || X > dst->x + dst->w || Y > dst->y + dst->h) return;
+    for (int k = 0; k < 2; k++) {                          /* a diamond, breathing */
+        float r = (5.0f + 1.5f * sinf((float)frame_count * 0.2f) - (float)k) * ky;
+        SDL_FPoint p[5] = {{X, Y - r}, {X + r, Y}, {X, Y + r}, {X - r, Y}, {X, Y - r}};
+        SDL_SetRenderDrawColor(renderer, k ? 0x60 : 0xFF, k ? 0x40 : 0xE0, k ? 0x00 : 0x40, 255);
+        SDL_RenderLines(renderer, p, 5);
+    }
+}
+
 static void present(const uint32_t *pixels, int w, int h, int compose) {
     int ow, oh;
     SDL_GetRenderOutputSize(renderer, &ow, &oh);
@@ -453,6 +488,11 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     float s = fminf((float)ow / sw, (float)oh / sh);
     if (setting_int("video.integer_scaling") && s >= 1.0f) s = floorf(s);
     SDL_FRect dst = {((float)ow - sw * s) / 2, ((float)oh - sh * s) / 2, sw * s, sh * s};
+    pic_dst = dst;
+    pic_fw = fw;
+    pic_w = w;
+    pic_h = h;
+    pic_pm = pm;
 
     if (compose) {
         int ds = (int)ceilf(s);                          /* compose at about the display scale */
@@ -504,6 +544,7 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     SDL_RenderTexture(renderer, depth_shown ? depth_texture : texture, NULL, &dst);
+    draw_walk_marker(&dst, fw, pm, w, h);
     if (menu_is_open()) menu_draw();
     if (test_capture_path && frame_count >= test_capture_frame) {
         SDL_Surface *shot = SDL_RenderReadPixels(renderer, NULL);
@@ -592,6 +633,7 @@ static void apply_enhancements(void) {
     battleui_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_ui"), "original") != 0);
     algol_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.music"), "algol"));
     fpview_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.first_person"), "first_person"));
+    walkto_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.click_walk"), "off") != 0);
     /* your own music files (music.h), from the music folder */
     {
         char dir[1100];
@@ -644,6 +686,7 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Music", "enhance.music", {"original", "algol"}, {"Original chip", "Algol (modern)"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Dungeons", "enhance.first_person", {"off", "first_person"}, {"Top-down", "First person"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Mouse", "enhance.click_walk", {"on", "off"}, {"Click to walk", "Off"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Your music", "enhance.custom_music", {"on", "off"}, {"On (music folder)", "Off"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Sound effects", "enhance.sfx", {"modern", "custom", "original"}, {"Modern", "Your samples", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
@@ -854,6 +897,26 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
                        b == pad_of[IN_C] || b == pad_of[IN_START], b == pad_of[IN_B]);
             break;
         }
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: {                /* click to walk (walkto.h) */
+            if (menu_is_open() || paused || !walkto_enabled()) break;
+            if (e.button.button == SDL_BUTTON_RIGHT) {     /* stop walking; with text up, B */
+                if (!walkto_active()) walkto_click_button(1);
+                walkto_cancel();
+                break;
+            }
+            if (e.button.button != SDL_BUTTON_LEFT || pic_dst.w <= 0) break;
+            if (walkto_click_button(0)) break;             /* text up: C, next */
+            float rx, ry;
+            SDL_RenderCoordinatesFromWindow(renderer, e.button.x, e.button.y, &rx, &ry);
+            float gx = (rx - pic_dst.x) / pic_dst.w * (float)pic_fw - (float)pic_pm;   /* the game's frame pixels */
+            float gy = (ry - pic_dst.y) / pic_dst.h * (float)pic_h;
+            if (gx < 0 || gy < 0 || gx >= (float)pic_w || gy >= (float)pic_h) break;   /* off the picture, or a panel */
+            int cx, cy, slot;
+            if (fpview_active()) {
+                if (fpview_pick(gx, gy, pic_w, pic_h, &cx, &cy, &slot)) walkto_go(cx, cy, slot);
+            } else walkto_click_screen((int)gx + vdp_view_x0, (int)gy);
+            break;
+        }
         case SDL_EVENT_GAMEPAD_ADDED:
             if (!pad) pad = SDL_OpenGamepad(e.gdevice.which);
             break;
@@ -876,7 +939,22 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         handle_events(pixels, w, h);
         next_deadline = SDL_GetTicksNS();
     }
-    bus_pad[0] = fpview_remap_pad(read_input());      /* first person: the d-pad turns with the view */
+    uint8_t user = read_input();
+    for (int i = 0; i < n_test_keys; i++)                /* testing: scripted keys */
+        if (frame_count >= test_keys[i].frame && frame_count < test_keys[i].frame + test_keys[i].len) user |= test_keys[i].keys;
+    if (test_click_frame && frame_count == test_click_frame && pic_dst.w > 0) {   /* testing: a click on frame pixel X,Y */
+        SDL_Event c;
+        SDL_zero(c);
+        c.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        c.button.button = SDL_BUTTON_LEFT;
+        c.button.down = true;
+        c.button.windowID = SDL_GetWindowID(window);
+        SDL_RenderCoordinatesToWindow(renderer, pic_dst.x + (test_click_x + (float)pic_pm) * pic_dst.w / (float)pic_fw,
+                                      pic_dst.y + test_click_y * pic_dst.h / (float)pic_h, &c.button.x, &c.button.y);
+        SDL_PushEvent(&c);
+    }
+    bus_pad[0] = walkto_pad(user, fpview_remap_pad(user));   /* first person: the d-pad turns with the view;
+                                                                 a click's walk holds it while it runs */
     if (input_hold) {
         if (bus_pad[0]) bus_pad[0] = 0;
         else input_hold = 0;
@@ -905,7 +983,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--save") && i + 1 < argc) save_arg = argv[++i];
         /* testing: --menu F[:settings] opens the system menu at frame F;
          * --capture F:FILE.bmp saves the rendered window at frame F and exits
-         * (run with SDL_VIDEO_DRIVER=offscreen to keep it off the screen) */
+         * (run with SDL_VIDEO_DRIVER=offscreen to keep it off the screen);
+         * --test-keys F:KEYS:N,... holds keys by frame; --test-click F:X,Y
+         * clicks the frame's pixel (X, Y) through the window, as a mouse would */
         else if (!strcmp(argv[i], "--menu") && i + 1 < argc) {
             char *e;
             test_menu_frame = strtoull(argv[++i], &e, 10);
@@ -914,6 +994,28 @@ int main(int argc, char **argv) {
             char *e;
             test_capture_frame = strtoull(argv[++i], &e, 10);
             test_capture_path = *e == ':' ? e + 1 : "capture.bmp";
+        } else if (!strcmp(argv[i], "--test-keys") && i + 1 < argc) {
+            /* F:KEYS:N,... -- keys held from frame F for N frames (UDLRABCS) */
+            char *s = argv[++i];
+            while (*s && n_test_keys < 32) {
+                char *e;
+                test_keys[n_test_keys].frame = strtoull(s, &e, 10);
+                uint8_t k = 0;
+                if (*e == ':') e++;
+                for (; *e && *e != ':' && *e != ','; e++)
+                    k |= *e == 'U' ? PAD_UP : *e == 'D' ? PAD_DOWN : *e == 'L' ? PAD_LEFT : *e == 'R' ? PAD_RIGHT
+                       : *e == 'A' ? PAD_A : *e == 'B' ? PAD_B : *e == 'C' ? PAD_C : *e == 'S' ? PAD_START : 0;
+                test_keys[n_test_keys].keys = k;
+                test_keys[n_test_keys].len = *e == ':' ? strtoull(e + 1, &e, 10) : 1;
+                n_test_keys++;
+                s = *e == ',' ? e + 1 : e;
+            }
+        } else if (!strcmp(argv[i], "--test-click") && i + 1 < argc) {
+            /* F:X,Y -- a left click at frame F on the game's frame pixel (X, Y) */
+            char *e;
+            test_click_frame = strtoull(argv[++i], &e, 10);
+            if (*e == ':') test_click_x = strtof(e + 1, &e);
+            if (*e == ',') test_click_y = strtof(e + 1, &e);
         }
     }
 

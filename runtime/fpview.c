@@ -326,6 +326,8 @@ static uint32_t shade(uint32_t c, float k) {
 
 typedef struct { int x, y, w, h; uint16_t attr; uint32_t src; } Piece;   /* src: its tiles in ROM, or 0: VRAM */
 typedef struct { float px, py, dx, dy, plx, ply, horizon, proj; } View;
+static View last_view;                          /* the last view drawn, for clicks */
+static int last_rw, last_rh;
 #define ZW (VDP_MAX_W * 2)
 static float zpix[ZW * VDP_MAX_H * 2];          /* each pixel's depth (walls, props), for the billboards */
 
@@ -522,9 +524,13 @@ static uint32_t decal_rgb(int x, int y) {
     return 0;
 }
 
+static uint8_t opick[ZW * VDP_MAX_H * 2];       /* which object each pixel shows (slot + 1), for clicks */
+
 static void draw_billboards(uint32_t *out, int stride, int RW, int RH, const View *v) {
     static uint32_t img[OBJ_MAX * OBJ_MAX];
+    memset(opick, 0, (size_t)RW * (size_t)RH);
     for (int i = 0; i < nvis; i++) {
+        uint8_t who = (uint8_t)((vis[i].a - LEADER) / 0x40 + 1);
         Piece p[16];
         int n = obj_pieces(vis[i].a, obj_frame(vis[i].a, vis[i].rx, vis[i].ry), p, 16), x0, y0, iw, ih;
         if (!n || !obj_image(p, n, img, OBJ_MAX, &x0, &y0, &iw, &ih)) continue;
@@ -544,7 +550,10 @@ static void draw_billboards(uint32_t *out, int stride, int RW, int RH, const Vie
                 int sy = (int)(((float)r + 0.5f - top) / ppx);
                 if (sy < 0 || sy >= ih) continue;
                 uint32_t col = img[sy * iw + sx];
-                if (col) out[(size_t)r * (size_t)stride + (size_t)c] = shade(col, fog);
+                if (col) {
+                    out[(size_t)r * (size_t)stride + (size_t)c] = shade(col, fog);
+                    opick[r * RW + c] = who;
+                }
             }
         }
     }
@@ -742,6 +751,62 @@ static void render(uint32_t *out, int stride, int RW, int RH) {
         }
     }
     draw_billboards(out, stride, RW, RH, &view);
+    last_view = view;
+    last_rw = RW;
+    last_rh = RH;
+}
+
+/* ------------------------------------------------------------------ clicks */
+int fpview_pick(float fx, float fy, int w, int h, int *cx, int *cy, int *slot) {
+    if (!shown || !last_rw || w <= 0 || h <= 0) return 0;
+    int x = (int)(fx * (float)last_rw / (float)w), y = (int)(fy * (float)last_rh / (float)h);
+    if (x < 0 || y < 0 || x >= last_rw || y >= last_rh) return 0;
+    *slot = -1;
+    if (opick[y * last_rw + x]) {                                    /* someone, or a chest */
+        unsigned a = LEADER + (unsigned)(opick[y * last_rw + x] - 1) * 0x40;
+        *slot = (int)(opick[y * last_rw + x] - 1);
+        *cx = (int)r16(a + 0x30) >> 4;
+        *cy = ((int)r16(a + 0x34) + 16) >> 4;
+        return 1;
+    }
+    /* the floor under the click, or the cell before the wall the ray meets */
+    const View *v = &last_view;
+    float camx = 2.0f * ((float)x + 0.5f) / (float)last_rw - 1.0f;
+    float rdx = v->dx + v->plx * camx, rdy = v->dy + v->ply * camx;
+    float rd = (float)y + 0.5f > v->horizon ? EYE * v->proj / ((float)y + 0.5f - v->horizon) : 1e30f;
+    int mx = (int)floorf(v->px), my = (int)floorf(v->py), lx = mx, ly = my;
+    float ddx = rdx != 0.0f ? fabsf(1.0f / rdx) : 1e30f, ddy = rdy != 0.0f ? fabsf(1.0f / rdy) : 1e30f;
+    int sx = rdx < 0 ? -1 : 1, sy = rdy < 0 ? -1 : 1;
+    float stx = rdx < 0 ? (v->px - (float)mx) * ddx : ((float)mx + 1.0f - v->px) * ddx;
+    float sty = rdy < 0 ? (v->py - (float)my) * ddy : ((float)my + 1.0f - v->py) * ddy;
+    for (int i = 0; i < 96; i++) {
+        if ((stx < sty ? stx : sty) > rd) break;                     /* the clicked floor is in this cell */
+        if (stx < sty) { stx += ddx; mx += sx; }
+        else { sty += ddy; my += sy; }
+        if (solid(mx, my)) break;
+        lx = mx;
+        ly = my;
+    }
+    *cx = lx;
+    *cy = ly;
+    return 1;
+}
+
+int fpview_project(float wx, float wy, int w, int h, float *fx, float *fy) {
+    if (!shown || !last_rw) return 0;
+    const View *v = &last_view;
+    float rx = wx / 16.0f - v->px, ry = wy / 16.0f - v->py;
+    float mw = (float)(layer[walk].w * 2), mh = (float)(layer[walk].h * 2);
+    if (rx > mw * 0.5f) rx -= mw; else if (rx < -mw * 0.5f) rx += mw;
+    if (ry > mh * 0.5f) ry -= mh; else if (ry < -mh * 0.5f) ry += mh;
+    float inv = 1.0f / (v->plx * v->dy - v->dx * v->ply);
+    float ty = inv * (-v->ply * rx + v->plx * ry), tx = inv * (v->dy * rx - v->dx * ry);
+    if (ty < 0.3f) return 0;
+    float sx = (float)last_rw * 0.5f * (1.0f + tx / ty), sy = v->horizon + EYE * v->proj / ty;
+    if (sx < 0 || sx >= (float)last_rw || sy >= (float)last_rh) return 0;
+    *fx = sx * (float)w / (float)last_rw;
+    *fy = sy * (float)h / (float)last_rh;
+    return 1;
 }
 
 /* A battle that starts in a first-person dungeon is fought there: the view the

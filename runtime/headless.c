@@ -39,6 +39,8 @@
  *     --algol-bank ROM   with the instruments of a SNES game you own (snesbank.h)
  *     --custom-music DIR your own music files in place of the game's songs (music.h)
  *     --fpview S         first-person dungeons (fpview.h); shots at S x
+ *     --click F:X,Y      with --movie: a mouse click at logical frame F on frame
+ *                        pixel (X, Y) -- click to walk (walkto.h); repeatable
  *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
  *                        (next to the trace, or build/bizhawk/port.*)
  *
@@ -54,6 +56,7 @@
 #include "algol.h"
 #include "music.h"
 #include "fpview.h"
+#include "walkto.h"
 #include "sfx.h"
 #include "frame.h"
 #include "m68k.h"
@@ -72,6 +75,8 @@ typedef struct { uint64_t frame; const char *path; } Shot;
 static Press presses[256];
 static Shot shots[64];
 static int npress, nshot;
+static struct { uint64_t frame; int x, y; } clicks[16];   /* --click */
+static int nclick;
 static Press *movie;                 /* --movie: events by logical frame */
 static int nmovie;
 static uint64_t movie_end;           /* last logical frame the movie touches */
@@ -704,7 +709,17 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         if (trace_pad && (keys || bus_pad[0]))
             printf("logical %llu: pad %02X -> %02X; game Joypad_Held %02X Pressed %02X\n",
                    (unsigned long long)logical, bus_pad[0], keys, m68k_ram[0xEF02], m68k_ram[0xEF03]);
-        bus_pad[0] = keys;
+        for (int i = 0; i < nclick; i++)                   /* click to walk (walkto.h) */
+            if (clicks[i].frame == logical) {
+                int cx = -1, cy = -1, slot = -1, ok;
+                if (walkto_click_button(0)) ok = 2;        /* text up: C */
+                else if (fpview_active() && fpview_pick((float)clicks[i].x, (float)clicks[i].y, width, height, &cx, &cy, &slot))
+                    ok = walkto_go(cx, cy, slot);
+                else ok = walkto_click_screen(clicks[i].x + vdp_view_x0, clicks[i].y);
+                printf("logical %llu: click %d,%d (first person: cell %d,%d object %d): %s\n", (unsigned long long)logical,
+                       clicks[i].x, clicks[i].y, cx, cy, slot, ok == 2 ? "C (text up)" : ok ? "walking" : "nowhere to go");
+            }
+        bus_pad[0] = walkto_pad(keys, keys);
     }
     /* Sound_Index: a request only beats what is playing if its priority is at
      * least as high, so stop everything ($FE) first, then ask for the song */
@@ -825,6 +840,12 @@ int main(int argc, char **argv) {
             if (depth_scale > 4) depth_scale = 4;
         } else if (!strcmp(argv[i], "--algol")) {
             algol_set_enabled(1);                          /* the music on the modern chip */
+        } else if (!strcmp(argv[i], "--click") && i + 1 < argc && nclick < 16) {
+            char *e;
+            clicks[nclick].frame = strtoull(argv[++i], &e, 10);
+            if (*e == ':') clicks[nclick].x = (int)strtol(e + 1, &e, 10);
+            if (*e == ',') clicks[nclick].y = (int)strtol(e + 1, &e, 10);
+            nclick++;
         } else if (!strcmp(argv[i], "--fpview") && i + 1 < argc) {
             fpview_set_enabled(1);                         /* first-person dungeons (fpview.h) */
             fp_scale = atoi(argv[++i]);

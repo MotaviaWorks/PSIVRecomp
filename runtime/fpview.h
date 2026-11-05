@@ -33,6 +33,13 @@ int  fpview_in_battle(void);              /* a battle fought in the first-person
  * Returns 0 (nothing drawn) when not active. */
 int  fpview_compose(const VdpLine *lines, const uint32_t *game, int w, int h, uint32_t *out, int stride, int scale);
 
+/* A click at (fx, fy) on the view as last drawn (the game's w x h frame):
+ * the map cell of the floor there (or of the cell before the wall the click
+ * is on), or the object shown there (*slot >= 0, its cell). 0: not shown. */
+int  fpview_pick(float fx, float fy, int w, int h, int *cx, int *cy, int *slot);
+/* where world pixel (wx, wy) on the floor shows on that frame; 0: it doesn't */
+int  fpview_project(float wx, float wy, int w, int h, float *fx, float *fy);
+
 /* The pad as the player holds it -> as the game should see it (pad bits as
  * bus.h): directions turn relative to where the camera looks, each one kept
  * until it is let go, so holding "left" turns once and walks on. Menus and

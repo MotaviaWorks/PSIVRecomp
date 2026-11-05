@@ -119,6 +119,17 @@ original game, unchanged; **Enhanced** turns on the additions:
   (`PSIV_FPVIEW_ANYWHERE=1`: in towns too, for testing). Inspired by
   Gen1Recomp's 3D mode.
 
+- **Mouse** (click to walk / off): a click on the field sends the party
+  there, by the shortest way the game's own collision allows
+  (`runtime/walkto.c`): the d-pad is held a step at a time, as you would.
+  Click a person, a chest or a door to walk up to it, face it and press C
+  (talk, open, examine); click a wall, water or a mountain to get as near as
+  you can; click a cave or a town's entrance to go in. It works in first
+  person too (the floor or the person under the cursor). A marker shows
+  where you're going; your own keys take over at once, a right click stops.
+  While text is up, a click is C (next) and a right click B.
+  `psiv_headless --click F:X,Y` clicks frame pixel (X, Y) at logical frame F.
+
 - **Your music** (on / off): audio files of your own -- a remix, say -- play
   in place of the game's songs. Put WAVs (16/24-bit or float, any rate) in
   `music/` (git-ignored), named by the song's ID: `music/8F.wav` for Meet

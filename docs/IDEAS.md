@@ -335,6 +335,42 @@ first person, from the game's own tiles, and their battles fought there.
   instead of standing; turning in place (the game can't: a turn is a step);
   a minimap; ceilings from map art; a cheaper render mode.
 
+### Click to walk (PsiLok, 2026-11-04) -- v1 done (`runtime/walkto.c`)
+"Mouse click to direct the player to the location." The click becomes a map
+cell (the game's view: the walked layer's camera + the pixel, the frame's
+column offset by `vdp_view_x0` in widescreen; first person: `fpview_pick`,
+the floor under the click by inverting the floor projection, the cell before
+the wall it meets, or the billboard drawn there -- a per-pixel object id),
+and a BFS over the game's own collision finds the way:
+- **Collision:** GetChunkAndCollision, mirrored exactly: the walked layer's
+  layout with the *other* layer's row size as the stride (a quirk of the
+  game's; the sizes match in practice), outside on the planets the chunk row
+  & $1F (the world layout is a 32-row ring). On foot (TileCollNormalPtrs)
+  8 solid, 9 water, $A sand, $B ice block stop the party, $C is a counter;
+  1 changes the map (only taken when it was clicked: caves, towns, stairs).
+- **Objects:** FieldObj_DoObjCollision checks Field_Obj_Secondary ($FFC300,
+  52) with render flag bit 3, where each stands and where its step ends --
+  not outside on Motavia / Dezolis. The search treats them alike.
+- **Driving the pad:** the leader reads the pad only between steps
+  (FieldObj_Move), so the walk holds the direction of the next step while
+  one is under way, and lets go for the last. Off the path (a slide round a
+  corner, someone in the way for 40 frames) it searches again from where the
+  leader is. A clicked object: walk to its side, press towards it (bumping
+  turns the leader, FieldObj_Collided), then C for 3 frames.
+- **Ends:** any key or button of the player's, a window or an event, a
+  battle, a vehicle, another map; right click. With text up a click is C,
+  a right click B (clicking through a conversation).
+- **Checked:** temple: a cell 7 west (stops exactly on it); the chest from
+  behind the wall (35 cells round, faces it, "AERO-PRISM is procured!"); the
+  same chest clicked in first person; Tonoe: a Motavian, talk, two clicks
+  through the text; the overworld: a mountain (nearest cell), a cave entrance
+  (goes in); a key mid-walk stops it. The app itself (window -> frame
+  mapping, the marker) through `--test-keys` / `--test-click` with
+  SDL_VIDEO_DRIVER=offscreen, both views. Movies and the 24,635-frame
+  session are unchanged.
+- **Next:** vehicles (2x2 cells, their own collision tables); click to
+  choose in the camp menu and battles; drag to keep walking.
+
 ### Your own music (PsiLok, 2026-11-04) -- v1 done (`runtime/music.c`)
 PsiLok's Meet Them Head-On rearrangement as a bonus without shipping it (it is
 a derivative of Sega's composition): players put their own files in
