@@ -249,7 +249,10 @@ From Gen1Recomp's 3D mode and Phantasy Star I's mazes: the dungeons in
 first person, from the game's own tiles, and their battles fought there.
 - **The map, live from RAM:** Map_Layout_FG/BG ($FFA000/$FFB000, a byte per
   32x32 chunk, rows of Map_Row_Size+1), Chunk_Table ($FF6000, 4x4 name-table
-  words per chunk, bit 14 = collision); $FFEC24 picks the layer walked on.
+  words per chunk, bit 14 = collision; up to 256 chunks, so a big map's run
+  on past $7000 -- the disassembly's Text_Buffer -- and the Plate System
+  lost its end walls while only 128 were kept); $FFEC24 picks the layer
+  walked on.
   A 16x16 cell's collision is GetChunkAndCollision's (bit 14 of its four
   words; 8 solid). Every visible tile matched VRAM (1,120/1,120 per plane).
   The leader is Character_1 ($FFC000): x +$30, y +$34 (stands on y+16),
@@ -278,10 +281,34 @@ first person, from the game's own tiles, and their battles fought there.
   while a window is open. The headless and replays get the game's own input.
 - **Dungeon list:** by map name (FieldMapPtrs): caves, towers, forts, plants,
   mazes, the Air Castle, Kuran, Garuberk...; towns and houses excluded.
-- **Next:** sprites (people, chests, enemies on the map) as billboards from
-  the sprite table; plane-A props; doors that change on screen; turning in
-  place (the game can't: a turn is a step); a minimap; ceilings from map art;
-  a cheaper render mode.
+- **Objects (v2):** from Field_Objects_Memory ($FFC000, 64 x $40; the party
+  is the first five, left out), not the sprite table -- the game only builds
+  sprites for what is on its screen (Field_LoadSprites culls by y,
+  Field_FillSpriteAttributes by x), while every object keeps its world
+  position (+$30/+$34) and current frame (mappings +$C: count-1, a byte, then
+  6-byte pieces y / size / tile word / x / mirrored x). Art: art_tile (+$16)
+  in VRAM, or for objects that stream it (render flag bit 5: the party, some
+  NPCs) straight from ROM at art_ptr (+$18) + the piece's word x 32 -- an
+  object off screen hasn't had its art sent. Bit 1 = hidden, bit 0 = placed
+  on the screen; a window's arrow and the like are also caught by checking
+  the sprite position against FieldObj_CalcSpritePos (position + $80 - the
+  walked layer's camera and step). Standing on an open cell: a billboard at
+  1/24 cell per pixel (a person ~1.3 cells: the eye is 0.9, walls 2), its
+  feet on the floor, drawn after the walls with a per-column depth test.
+  On a solid cell: painted over the wall art it covers, at the game's own
+  scale (the Machine Center's elevator: 1,008 of its 1,024 pixels match the
+  wall under it while shut). People turn: FieldObj_Animate picks the frame
+  from a script per facing (mappings_addr +8, frame mappings_idx +$10), so
+  a person is shown with their facing turned by the angle from the camera
+  (whoever faces you shows their front). Only routines named as people in
+  FieldObjectsJmpTbl turn -- a chest's "facing" is open / shut, and its
+  table has just those two scripts. Checked: the temple's chest, the Plate
+  System's white chest ($1D4, the pedestal), Tonoe's Motavians from front
+  and back (`PSIV_FPVIEW_ANYWHERE`), the 24,635-frame session still matches.
+- **Next:** plane-A props; doors that change on screen; objects lying flat
+  (floor switches) painted onto the floor instead of standing; turning in
+  place (the game can't: a turn is a step); a minimap; ceilings from map
+  art; a cheaper render mode.
 
 ### Your own music (PsiLok, 2026-11-04) -- v1 done (`runtime/music.c`)
 PsiLok's Meet Them Head-On rearrangement as a bonus without shipping it (it is

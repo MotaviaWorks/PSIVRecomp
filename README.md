@@ -104,10 +104,15 @@ original game, unchanged; **Enhanced** turns on the additions:
   key keeps its direction); menus and dialogue are drawn on top and take the
   pad as usual. A battle that starts there is fought in that view: the
   corridor behind the enemies, the party seen through the battle menus.
-  Towns and the planets' surfaces keep the game's view. Not yet: people and
-  objects the game draws as sprites (or as plane-A props), doors that only
-  change on screen. `psiv_headless --fpview S` takes shots of it.
-  Inspired by Gen1Recomp's 3D mode.
+  People, chests and the game's other objects stand in the corridor as
+  pictures turned to you, drawn from the game's own object list and art,
+  near or far (the game itself only draws what is on its screen); people
+  show the side of them that faces you, and a thing set into a wall (the
+  Machine Center's elevator doors) is painted onto it.
+  Towns and the planets' surfaces keep the game's view. Not yet: props the
+  game draws on plane A, doors that only change on screen.
+  `psiv_headless --fpview S` takes shots of it (`PSIV_FPVIEW_ANYWHERE=1`:
+  in towns too, for testing). Inspired by Gen1Recomp's 3D mode.
 
 - **Your music** (on / off): audio files of your own -- a remix, say -- play
   in place of the game's songs. Put WAVs (16/24-bit or float, any rate) in
