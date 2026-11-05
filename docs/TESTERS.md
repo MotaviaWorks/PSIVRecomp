@@ -1,0 +1,104 @@
+PSIV Recomp: alpha
+==================
+
+A native port of Phantasy Star IV for Windows, Linux and Android. The game's
+68000 code is translated into C and runs directly on your machine, with
+optional extras: widescreen, modern text and battle menus, battle depth and
+effects, click/tap to walk.
+
+**It ships none of the game.** You supply your own ROM.
+
+
+Your ROM
+--------
+
+- **Phantasy Star IV (USA)**, the Mega Drive / Genesis cartridge.
+- Any of these work: a raw dump (`.bin`, `.md`, `.gen`), an `.smd` copier dump,
+  or the `.zip` it came in.
+- The first time you start the game it asks for the file. You can also put the
+  file into the game's folder before you start, and it gets picked up there.
+- It's checked (SHA-256 `511f35cc11f88316...`) and kept as `rom/psiv.bin`
+  next to your saves, so it's only asked for once.
+- Other releases (Japanese, Brazilian), hacks and translations are refused:
+  the port is built for that one cartridge's code.
+
+
+Installing
+----------
+
+**Windows (64-bit, Windows 10 or 11)**
+Unzip the folder somewhere you can write to, for example `Documents\PSIV Recomp`,
+then run `psiv.exe`. The alpha isn't code-signed, so SmartScreen may say
+"Windows protected your PC". Click **More info**, then **Run anyway**.
+
+**Linux, including the Steam Deck (x86-64)**
+Extract the archive and run `./psiv`. It needs glibc 2.35 or newer, so Ubuntu
+22.04+, Debian 12+, Fedora 36+, Arch, or an up-to-date Steam Deck.
+On a Steam Deck: in Desktop Mode, extract the archive and put your ROM in the
+folder. Start `psiv` once, then add it to Steam as a Non-Steam Game.
+
+**Android (64-bit ARM, Android 7 or newer)**
+Install the `.apk`; your browser or file manager will ask you to allow installs
+from it. On first start, pick your ROM in the file picker (the `.zip` is fine).
+Phones get an on-screen pad. Handhelds with built-in controls (Odin, Retroid and
+the like) start without one; touch the screen to bring it up.
+
+
+Controls
+--------
+
+| | |
+|---|---|
+| Keyboard | arrows = D-pad, Z / X / C = A / B / C, Enter = Start |
+| | Esc = menu, Tab (hold) = fast forward, F11 = fullscreen, F12 = screenshot |
+| Gamepad | D-pad or left stick; west / south / east buttons = A / B / C; Start |
+| | Select / Back = menu, right shoulder (hold) = fast forward |
+| Mouse | click to walk there; click a person or chest to walk up and talk or open it |
+| | click battle commands and targets; right click = back |
+| Touch | the on-screen pad; tap like a mouse click; the ≡ button = menu |
+| Android | Back = menu |
+
+Settings live in the menu (Esc, Select, Back or ≡). **Mode: Classic** switches
+every addition off and gives you the original game.
+
+
+Where things are kept
+---------------------
+
+- **Windows and Linux:** next to the program: `psiv.ini` (settings), `saves/`,
+  `screenshots/`, `psiv.log`. If that folder can't be written to, they go to
+  `%APPDATA%\PSIV Recomp` (Windows) or `~/.local/share/psiv-recomp` (Linux) instead.
+- **Android:** `Android/data/com.psilok.psiv/files` on the device's storage,
+  which you can reach over USB.
+- Saves are the cartridge's own battery saves, made the way the game makes them.
+  An emulator's `.srm` save of this game works too: put it in `saves/` as
+  `psiv.srm`.
+
+
+Reporting a problem
+-------------------
+
+Please send:
+- `psiv.log`, and `psiv-crash.txt` if there is one (both are in the folder above);
+- the version: the menu shows it bottom left;
+- your device or PC, and what you were doing;
+- your save (`saves/psiv.srm`) if the problem is somewhere in the game.
+
+
+Not in this alpha
+-----------------
+
+- macOS.
+- Save states: the game's own saves only.
+- First-person dungeons and the Algol music chip are experiments (Settings).
+
+
+Credits and legal
+-----------------
+
+Phantasy Star is a trademark of SEGA. This is an unofficial fan project and is
+not affiliated with or endorsed by SEGA. You need your own copy of the game.
+
+Built with SDL3 (zlib), ymfm (BSD-3-Clause), floooh's z80.h (zlib),
+stb_truetype (MIT / public domain) and the Noto Sans font (SIL OFL 1.1). Their
+licences are in the `LICENSES` folder.

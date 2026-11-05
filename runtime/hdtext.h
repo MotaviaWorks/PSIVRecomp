@@ -18,10 +18,13 @@
 #ifndef PSIV_HDTEXT_H
 #define PSIV_HDTEXT_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include "vdp.h"
 
 int  hdtext_init(const char *font_path);    /* 1 if the font loaded */
+/* the same from a font file already in memory (malloc'd: the text keeps it) */
+int  hdtext_init_mem(void *data, size_t size);
 void hdtext_set_enabled(int on);
 int  hdtext_enabled(void);
 

@@ -57,6 +57,19 @@ static void build_tables(void) {
     dlg_char[0x3D] = 0x201C; dlg_char[0x3E] = 0x201D; dlg_char[0x3F] = '%';   /* << >> as quotes */
 }
 
+int hdtext_init_mem(void *data, size_t size) {
+    build_tables();
+    if (!data || size < 12) return 0;
+    int offset = stbtt_GetFontOffsetForIndex(data, 0);
+    if (offset < 0 || !stbtt_InitFont(&font, data, offset)) return 0;
+    free(font_data);                    /* a font loaded before (the data is now the font's) */
+    font_data = data;
+    int x0, y0, x1, y1;
+    cap_units = stbtt_GetCodepointBox(&font, 'H', &x0, &y0, &x1, &y1) ? (float)(y1 - y0) : 700.0f;
+    loaded = 1;
+    return 1;
+}
+
 int hdtext_init(const char *path) {
     build_tables();
     FILE *f = fopen(path, "rb");
@@ -64,16 +77,14 @@ int hdtext_init(const char *path) {
     fseek(f, 0, SEEK_END);
     long n = ftell(f);
     fseek(f, 0, SEEK_SET);
-    font_data = malloc((size_t)n);
-    if (!font_data || fread(font_data, 1, (size_t)n, f) != (size_t)n) { fclose(f); return 0; }
+    unsigned char *data = n > 0 ? malloc((size_t)n) : NULL;
+    if (!data || fread(data, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(data); return 0; }
     fclose(f);
-    if (!stbtt_InitFont(&font, font_data, stbtt_GetFontOffsetForIndex(font_data, 0))) {
+    if (!hdtext_init_mem(data, (size_t)n)) {
         fprintf(stderr, "modern text: %s is not a TrueType/OpenType font\n", path);
+        free(data);
         return 0;
     }
-    int x0, y0, x1, y1;
-    cap_units = stbtt_GetCodepointBox(&font, 'H', &x0, &y0, &x1, &y1) ? (float)(y1 - y0) : 700.0f;
-    loaded = 1;
     return 1;
 }
 

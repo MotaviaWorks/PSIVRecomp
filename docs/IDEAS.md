@@ -108,6 +108,19 @@ Segoe UI (Microsoft) -- bundle an open-licence font instead. The executable
 contains code translated from the game: safest is publishing the source and
 build scripts so players build the port from their own ROM.
 
+### Alpha packages (PsiLok, 2026-11-04: "playable on Mac, Android and Linux ... install supplying it the game")
+- Done: Windows zip, portable Linux tarball (glibc 2.35+), Android APK
+  (arm64, Android 7+), each with no game data and `docs/TESTERS.md`. The
+  first run installs the ROM (dialog, dropped in the folder, or zipped) and
+  checks it. Noto Sans (OFL) bundled; Segoe UI only where Windows has it.
+- The binaries still contain the translated game code (see above): shipping
+  them is how comparable recomp ports are released, but it's PsiLok's call.
+- Next: macOS (an app bundle, universal, ad-hoc signed; needs the MacBook);
+  32-bit ARM and x86-64 Android if testers ask; a CRC/SHA list of other
+  dumps that are byte-identical (the Steam / collection releases?) to accept;
+  Android performance on low-end phones (depth and first person compose on
+  the CPU at up to 4x).
+
 ## Ideas from Gen1Recomp
 Its options and modules map onto this port: `Tilt` (an HD-2D diorama
 perspective for the field, eased between 0/15/35/50 degrees), survey `Zoom`,

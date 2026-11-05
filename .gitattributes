@@ -1,0 +1,2 @@
+# shell scripts run on Linux (Hermes, the Android build): keep LF on checkout
+*.sh text eol=lf

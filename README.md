@@ -33,7 +33,40 @@ build\native-Release\psiv.exe                          # play (run from the proj
 | `ymfm/src/` | YM2612 FM chip (BSD-3) | github.com/aaronsgiles/ymfm, commit in `ymfm/COMMIT`: `src/ymfm.h`, `ymfm_fm.h/.ipp`, `ymfm_opn.h/.cpp`, `ymfm_adpcm.h/.cpp`, `ymfm_ssg.h/.cpp`, `ymfm_misc.h/.cpp` |
 | `chips/` | Z80 CPU (zlib) | `chips/z80.h` from github.com/floooh/chips, commit in `chips/COMMIT` |
 
-The PSG is implemented in `runtime/sound.c`.
+The PSG is implemented in `runtime/sound.c`. Android and the portable Linux
+build also need the SDL3 3.4.20 source (`SDL3-3.4.20.tar.gz`, same releases
+page), kept outside the repo. The modern text's font, Noto Sans (SIL OFL 1.1),
+is committed in `res/fonts/` with its licence.
+
+### Platforms and packages
+
+| | Build | Package for testers |
+|---|---|---|
+| Windows | `build.bat` (static C runtime: no redistributable needed) | `python tools/package.py windows build\native-Release dist` |
+| Linux | `cmake -S . -B build/linux -G Ninja && ninja -C build/linux` (system SDL3) | below |
+| Linux, portable | SDL3 built static from source, then `-DPSIV_PORTABLE=ON -DPSIV_TOOLS=OFF -DCMAKE_PREFIX_PATH=<its prefix>` | `python3 tools/package.py linux <build> dist` |
+| Android | `tools/build_android.sh <SDL3 source>` on Linux (SDK, NDK r30, build-tools 36, JDK 17; no Gradle) | the `.apk` it makes |
+
+- **First run:** with no `rom/psiv.bin`, a dump in the home folder or `rom/`
+  installs itself, else a file dialog asks for it (Android: the system picker).
+  `.smd`, raw, or either inside a `.zip` (`runtime/unzip.c`); checked by
+  SHA-256 and kept as `rom/psiv.bin`. Testing hooks: `--test-pick FILE`
+  answers the dialog, `--no-dialogs` sends message boxes to the log.
+- **Home folder:** next to the program when writable (the zip, the tarball),
+  else `SDL_GetPrefPath` (`%APPDATA%\PSIV Recomp`, `~/.local/share/psiv-recomp`);
+  Android: `Android/data/com.psilok.psiv/files`; a dev build: the project root.
+- **Portable Linux:** libstdc++ and SDL3 are linked in, so it needs only glibc;
+  `runtime/glibc_compat.c` binds the functions newer glibcs re-versioned to
+  their old versions, so it runs on glibc 2.35 (Ubuntu 22.04) while being built
+  on a current distro. Check: `objdump -T psiv | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1`.
+- **Android:** `libmain.so` (the port) under SDL3's activity
+  (`android/java`), landscape, an on-screen pad (`runtime/touch.c`) that hides
+  when a gamepad or key is used; Back opens the menu. The APK is signed with
+  `~/.psiv-keys/psiv-alpha.jks` (made on first build, password beside it):
+  keep that key, since Android only installs updates signed with the same one.
+- **macOS:** not packaged yet. The code is ready for it (an app bundle's
+  home is the pref path); it needs a Mac to build and sign.
+- `docs/TESTERS.md` is the README that goes into every package.
 
 ### Controls
 
@@ -301,12 +334,13 @@ Windows (`asl` on Linux) and fails unless the result is byte-identical.
 |---|---|
 | `disasm/ps4disasm` | Phantasy Star IV disassembly (submodule, [squidfeatures/ps4disasm](https://github.com/squidfeatures/ps4disasm), originally by lory90) |
 | `tools/` | ROM prep, rebuild, listing parser, 68000 decoder, program model, resolver, C generator |
-| `runtime/` | CPU (`m68k.*`), bus, VDP + renderer (`vdp.*`), frame loop, SDL3 and headless front ends |
-| `third_party/` | SDL3 for Windows builds (fetched, never committed) |
-| `res/` | The app's icon: an original four-point star in the game's window colours, drawn by `tools/make_icon.py` (which also writes `runtime/icon.h`); no game art |
+| `runtime/` | CPU (`m68k.*`), bus, VDP + renderer (`vdp.*`), frame loop, SDL3 and headless front ends; touch controls, zip reader, glibc compatibility |
+| `third_party/` | SDL3 for Windows builds, ymfm, z80.h, stb (fetched, never committed) |
+| `res/` | The app's icon: an original four-point star in the game's window colours, drawn by `tools/make_icon.py` (which also writes `runtime/icon.h` and Android's launcher icons); `fonts/`: Noto Sans (OFL); no game art |
+| `android/` | Android manifest, resources and activity (`tools/build_android.sh`) |
 | `analysis/` | Generated analysis: `functions.json` (every function entry and why), `indirect_targets.{json,md}` (addresses and labels only) |
-| `docs/` | Plan and ideas |
-| `rom/`, `build/` | Your ROM and build output (never committed) |
+| `docs/` | Plan, ideas, and the testers' README (`TESTERS.md`) |
+| `rom/`, `build/`, `dist/` | Your ROM, build output and packages (never committed) |
 | `vgm/`, `mp3/` | Your soundtrack references for the sound milestone (never committed) |
 
 The disassembly is for informational and educational use; commercial use is

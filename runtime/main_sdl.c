@@ -4,11 +4,21 @@
  *
  *   psiv [--rom PATH] [--save FILE]
  *
- * Files live in the "home" folder: the folder holding psiv.exe, or the
- * project root when running a development build from build/native-*. There:
+ * Files live in the "home" folder:
+ *   - the folder holding the program, when it can be written to (the Windows
+ *     zip, the Linux tarball: everything stays together)
+ *   - otherwise your data folder: %APPDATA%\PSIV Recomp, ~/.local/share/
+ *     psiv-recomp, ~/Library/Application Support/PSIV Recomp
+ *   - Android: Android/data/com.psilok.psiv/files on the shared storage
+ *     (reachable over USB, for logs, music and samples)
+ *   - a development build in build/native-*: the project root
+ * There:
  *   psiv.ini         settings (written with defaults on first run)
- *   rom/psiv.bin     the ROM; if missing, a file dialog asks for your dump
- *                    (.smd or raw), checks it and writes this file
+ *   rom/psiv.bin     the ROM. If missing, a dump dropped into the home
+ *                    folder (or rom/) installs itself; otherwise a file
+ *                    dialog asks for it. Either way it's checked (.smd or
+ *                    raw, or either in a .zip: unzip.h) and kept here as a
+ *                    raw copy
  *   saves/psiv.srm   battery save (the cartridge's 8 KB); --save FILE plays
  *                    another, an emulator's .srm too (BizHawk, Gens, Kega
  *                    Fusion: written back in its own layout)
@@ -20,6 +30,8 @@
  * Gamepads: D-pad or left stick; x/a/b (west/south/east) = A/B/C; start.
  * Mouse: click on the field to walk there (a person or a chest: walk up to
  * it and press C); right click stops. With text up, click = C, right = B.
+ * Touch (touch.h): on-screen pad and buttons; a tap elsewhere is a click.
+ * Android's Back button opens the system menu.
  */
 #include "bus.h"
 #include "depth.h"
@@ -39,6 +51,8 @@
 #include "m68k.h"
 #include "sha256.h"
 #include "sound.h"
+#include "touch.h"
+#include "unzip.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -50,6 +64,23 @@
 
 #define NTSC_FRAME_NS 16688154ull     /* 1 / 59.922751 Hz */
 #define HANG_SECONDS 8
+
+#ifndef PSIV_VERSION                  /* set by CMake: version + commit */
+#define PSIV_VERSION "dev"
+#endif
+#define APP_NAME "PSIV Recomp"
+#if defined(SDL_PLATFORM_LINUX) && !defined(SDL_PLATFORM_ANDROID)
+#define PREF_NAME "psiv-recomp"       /* ~/.local/share/psiv-recomp */
+#else
+#define PREF_NAME APP_NAME
+#endif
+#if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS)
+#define MOBILE 1
+#define INTEGER_SCALING_DEFAULT "0"   /* a phone or handheld: fill the screen */
+#else
+#define MOBILE 0
+#define INTEGER_SCALING_DEFAULT "1"
+#endif
 
 /* Phantasy Star IV (USA), raw: the only ROM the recompiled code matches */
 static const char *ROM_SHA256 = "511f35cc11f88316f8b8940e28ab298bd75a4da193672a80172884d6eb913b6a";
@@ -63,7 +94,8 @@ static SDL_Gamepad *pad;
 static SDL_AudioStream *audio;
 static uint64_t next_deadline, last_sram_flush;
 static int paused;
-static char home[1024];
+static char home[1024];               /* written to: settings, ROM, saves, logs */
+static char base_dir[1024];           /* shipped with the program, read-only: fonts (Android: the APK's assets) */
 
 /* ------------------------------------------------------------------ paths */
 static void path_in_home(char *out, size_t n, const char *rel) {
@@ -76,8 +108,25 @@ static int file_exists(const char *p) {
     return f != NULL;
 }
 
+#if !defined(SDL_PLATFORM_ANDROID)
+static int dir_writable(const char *dir) {
+    char probe[1100];
+    snprintf(probe, sizeof probe, "%s.psiv-write-test", dir);
+    FILE *f = fopen(probe, "wb");
+    if (!f) return 0;
+    fclose(f);
+    remove(probe);
+    return 1;
+}
+#endif
+
 static void find_home(void) {
     const char *base = SDL_GetBasePath();
+#if defined(SDL_PLATFORM_ANDROID)
+    base_dir[0] = 0;                                     /* relative paths reach the APK's assets */
+#else
+    snprintf(base_dir, sizeof base_dir, "%s", base ? base : "");
+#endif
     snprintf(home, sizeof home, "%s", base ? base : "./");
     /* development build: build/native-<config>/psiv.exe -> project root */
     char probe[1100];
@@ -85,7 +134,28 @@ static void find_home(void) {
     if (file_exists(probe)) {
         size_t len = strlen(home);
         snprintf(home + len, sizeof home - len, "../../");
+        return;
     }
+#if defined(SDL_PLATFORM_ANDROID)
+    const char *ext = SDL_GetAndroidExternalStoragePath();   /* Android/data/<package>/files */
+    if (ext) { snprintf(home, sizeof home, "%s/", ext); return; }
+#else
+    /* portable: everything next to the program, if that folder takes writes
+     * (not inside a macOS app bundle) */
+    if (base && !strstr(base, ".app/Contents/") && dir_writable(home)) return;
+#endif
+    char *pref = SDL_GetPrefPath("", PREF_NAME);
+    if (pref) {
+        snprintf(home, sizeof home, "%s", pref);
+        SDL_free(pref);
+    }
+}
+
+/* a message box -- or, testing with --no-dialogs, a line in the log */
+static int no_dialogs;
+static void message(SDL_MessageBoxFlags kind, const char *text, SDL_Window *parent) {
+    SDL_Log("%s: %s", kind == SDL_MESSAGEBOX_ERROR ? "error" : kind == SDL_MESSAGEBOX_WARNING ? "warning" : "note", text);
+    if (!no_dialogs) SDL_ShowSimpleMessageBox(kind, "Phantasy Star IV", text, parent);
 }
 
 /* SDL_Log output goes to psiv.log in the home folder (the window has no console) */
@@ -111,7 +181,7 @@ typedef struct { const char *key; char value[300]; const char *comment; } Settin
 static Setting settings[] = {
     {"video.scale", "3", "window size at start, in multiples of the game's resolution"},
     {"video.fullscreen", "0", "1 = start fullscreen (F11 toggles)"},
-    {"video.integer_scaling", "1", "1 = whole-number scaling only (sharpest)"},
+    {"video.integer_scaling", INTEGER_SCALING_DEFAULT, "1 = whole-number scaling only (sharpest); 0 = fill the screen"},
     {"video.widescreen", "1", "16:9 widescreen (other screens keep their shape): 0 off, 1 more map in exploration, 2 side panels with the party in exploration; battles are wide either way"},
     {"video.aspect", "square", "square = square pixels; 4:3 = the console's TV shape (pixels a bit narrower)"},
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed"},
@@ -120,11 +190,11 @@ static Setting settings[] = {
     {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
     {"enhance.text", "modern", "text: modern = redrawn with the font below at full resolution; original = the game's pixel font"},
-    {"enhance.text_font", "C:/Windows/Fonts/segoeui.ttf", "TrueType/OpenType font for modern text"},
+    {"enhance.text_font", "", "TrueType/OpenType font file for modern text; empty = Segoe UI on Windows, else the bundled Noto Sans"},
     {"enhance.sfx", "modern", "sound effects: modern = the port's own, synthesized; custom = your samples, mapped in sfx/sfx.ini (the rest modern); original = the game's own"},
     {"enhance.music", "original", "music: algol = the port's modern sound chip plays the game's music (new instruments, drums and reverb); original = the YM2612 and PSG"},
     {"enhance.first_person", "off", "dungeons: first_person = seen from the leader's eyes, like Phantasy Star I's mazes (up walks forward, left / right turn); off = the game's own view"},
-    {"enhance.click_walk", "on", "mouse: on = a click on the field walks the party there (a person or a chest: up to it, then C to talk or open); right click stops; with text up a click is C, a right click B; off = the mouse does nothing"},
+    {"enhance.click_walk", "on", "mouse: on = a click on the field walks the party there (a person or a chest: up to it, then C to talk or open); right click stops; with text up a click is C, a right click B; touch: a tap is a click; off = clicks and taps only work the system menu"},
     {"enhance.custom_music", "on", "your music: on = audio files in the music folder play in place of the game's songs (music/8F.wav, or named in music/music.ini; see runtime/music.h); off = the game's"},
     {"enhance.music_bank", "", "with Algol: a SNES game you own whose instruments play the music instead of Algol's (the path to its ROM, e.g. Lufia II); empty = Algol's own"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
@@ -288,12 +358,36 @@ static void quit(int code) {
     exit(code);
 }
 
+/* Phones: the app can be sent to the background, and killed there, at any
+ * moment. Save then (SDL calls this on the game's thread, at a frame
+ * boundary), and tell the watchdog the pause is no hang. */
+static volatile int backgrounded;
+static bool SDLCALL app_events(void *ud, SDL_Event *e) {
+    (void)ud;
+    switch (e->type) {
+    case SDL_EVENT_TERMINATING:
+    case SDL_EVENT_LOW_MEMORY:
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+        backgrounded = e->type == SDL_EVENT_WILL_ENTER_BACKGROUND || backgrounded;
+        sram_flush();
+        break;
+    case SDL_EVENT_DID_ENTER_FOREGROUND:
+        backgrounded = 0;
+        next_deadline = SDL_GetTicksNS();                /* no catching up on the time away */
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
 /* ------------------------------------------------------------------ crash and hang reports */
 static void write_report(const char *kind, const char *text, char *path_out, size_t n) {
     path_in_home(path_out, n, "psiv-crash.txt");
     FILE *f = fopen(path_out, "w");
     if (!f) return;
-    fprintf(f, "Phantasy Star IV port: %s\nframe %llu\n\n%s\n", kind, (unsigned long long)frame_count, text);
+    fprintf(f, "Phantasy Star IV port: %s\n%s %s on %s\nframe %llu\n\n%s\n", kind, APP_NAME, PSIV_VERSION,
+            SDL_GetPlatform(), (unsigned long long)frame_count, text);
     fprintf(f, "\nPlease send this file along with what you were doing in the game.\n");
     fclose(f);
 }
@@ -304,14 +398,14 @@ void platform_fatal(const char *text) {
     snprintf(msg, sizeof msg,
              "The game hit an error the port can't continue from.\n\nA report was saved to:\n%s\n\n%.400s",
              path, text);
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Phantasy Star IV", msg, window);
+    message(SDL_MESSAGEBOX_ERROR, msg, window);
     quit(1);
 }
 
 /* Watchdog: a frame normally arrives every 1/60 s. If none comes for
  * HANG_SECONDS while not paused, the game is stuck in a loop: report where.
  * The game held on purpose -- F10, or the system menu open (`holding`) -- is
- * no hang. */
+ * no hang, and neither is the app in the background on a phone. */
 static volatile int holding;
 
 static int SDLCALL watchdog(void *unused) {
@@ -321,7 +415,7 @@ static int SDLCALL watchdog(void *unused) {
     for (;;) {
         SDL_Delay(500);
         uint64_t now_frames = *(volatile uint64_t *)&frame_count;
-        if (now_frames != last || paused || holding) {
+        if (now_frames != last || paused || holding || backgrounded) {
             last = now_frames;
             since = SDL_GetTicks();
             reported = 0;
@@ -335,7 +429,7 @@ static int SDLCALL watchdog(void *unused) {
             diag_report(text, sizeof text, "the game stopped producing frames (hang)", where, 0);
             write_report("hang", text, path, sizeof path);
             snprintf(msg, sizeof msg, "The game has stopped responding.\n\nA report was saved to:\n%s", path);
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Phantasy Star IV", msg, NULL);
+            message(SDL_MESSAGEBOX_WARNING, msg, NULL);
             reported = 1;
         }
     }
@@ -343,13 +437,37 @@ static int SDLCALL watchdog(void *unused) {
 }
 
 /* ------------------------------------------------------------------ ROM */
-static int read_rom(const char *path, uint8_t *rom, uint32_t *size, char *err, size_t errn) {
-    FILE *f = fopen(path, "rb");
-    if (!f) { snprintf(err, errn, "cannot open %s", path); return 0; }
-    static uint8_t raw[0x400200];
-    size_t n = fread(raw, 1, sizeof raw, f);
-    fclose(f);
+/* `name` is how the file is called in a message: a path, or "That file" for
+ * the picker's answer (Android's is a content:// URI) */
+static int read_rom_named(const char *path, const char *name, uint8_t *rom, uint32_t *size, char *err, size_t errn) {
+    SDL_IOStream *io = SDL_IOFromFile(path, "rb");      /* any path SDL opens: also Android's content:// */
+    if (!io) { snprintf(err, errn, "%s can't be opened: %s", name, SDL_GetError()); return 0; }
+    static uint8_t file[0x800000], unpacked[0x400200];
+    size_t n = 0, got;
+    while (n < sizeof file && (got = SDL_ReadIO(io, file + n, sizeof file - n)) > 0) n += got;
+    SDL_CloseIO(io);
+    const uint8_t *raw = file;
+    int zipped = unzip_is_zip(file, n);
+    if (zipped) {                                        /* most ROM sets are zipped: the ROM inside */
+        char why[200];
+        n = unzip_rom(file, n, unpacked, sizeof unpacked, why, sizeof why);
+        if (!n) {
+            snprintf(err, errn, "%s can't be used: %s.", name, why);
+            SDL_Log("rom: %s: %s", path, why);
+            return 0;
+        }
+        raw = unpacked;
+    }
+    if (n >= 6 && !memcmp(raw, "7z\xBC\xAF\x27\x1C", 6)) {
+        snprintf(err, errn, "%s is a .7z archive. Extract the ROM from it first, then choose the extracted file.", name);
+        return 0;
+    }
     int smd = n % 16384 == 512 && raw[8] == 0xAA && raw[9] == 0xBB;
+    if ((smd ? n - 512 : n) > 0x400000) {               /* bigger than any cartridge: not this game */
+        snprintf(err, errn, "%s is not the Phantasy Star IV (USA) cartridge this port was built for "
+                 "(it's far too big).", name);
+        return 0;
+    }
     /* SMD copier dump: 512-byte header, 16 KB blocks of odd bytes then even bytes */
     if (smd) {
         size_t body = n - 512;
@@ -367,49 +485,122 @@ static int read_rom(const char *path, uint8_t *rom, uint32_t *size, char *err, s
     sha256(rom, n, digest);
     for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", digest[i]);
     if (n != ROM_SIZE || strcmp(hex, ROM_SHA256)) {
-        snprintf(err, errn, "%s is not the Phantasy Star IV (USA) cartridge this port was built for.", path);
+        snprintf(err, errn, "%s is not the Phantasy Star IV (USA) cartridge this port was built for.\n\n"
+                 "It needs that exact ROM: a raw dump (.bin, .md, .gen) or an .smd. Other releases and "
+                 "modified (hacked or translated) ROMs won't work.\n\n(%u bytes, SHA-256 %.16s...)",
+                 name, (unsigned)n, hex);
         SDL_Log("rom: %s rejected (%s, %u bytes, sha256 %s)", path, smd ? "SMD" : "raw", (unsigned)n, hex);
         return 0;
     }
     *size = (uint32_t)n;
-    SDL_Log("rom: %s (%s, verified)", path, smd ? "SMD, de-interleaved" : "raw");
+    SDL_Log("rom: %s (%s%s, verified)", path, zipped ? "zipped, " : "", smd ? "SMD, de-interleaved" : "raw");
     return 1;
 }
 
+static int read_rom(const char *path, uint8_t *rom, uint32_t *size, char *err, size_t errn) {
+    return read_rom_named(path, path, rom, size, err, errn);
+}
+
+/* keep a raw copy as rom/psiv.bin, so the next start needs nothing */
+static void install_rom(const uint8_t *rom, uint32_t size) {
+    char dir[1100], out[1100];
+    path_in_home(dir, sizeof dir, "rom");
+    SDL_CreateDirectory(dir);
+    path_in_home(out, sizeof out, "rom/psiv.bin");
+    FILE *f = fopen(out, "wb");
+    if (f && fwrite(rom, 1, size, f) == size) SDL_Log("rom: installed as %s", out);
+    else SDL_Log("rom: cannot write %s; it will be asked for again next time", out);
+    if (f) fclose(f);
+}
+
+/* first run: a dump dropped into the home folder (or rom/, or beside the
+ * program) installs itself -- no dialog needed (handy on a Steam Deck) */
+static int find_rom_nearby(uint8_t *rom, uint32_t *size) {
+    char dirs[3][1100];
+    int nd = 0;
+    snprintf(dirs[nd++], sizeof dirs[0], "%s", home);
+    path_in_home(dirs[nd++], sizeof dirs[0], "rom/");
+    if (base_dir[0] && strcmp(base_dir, home)) snprintf(dirs[nd++], sizeof dirs[0], "%s", base_dir);
+    for (int d = 0; d < nd; d++) {
+        int count = 0;
+        char **names = SDL_GlobDirectory(dirs[d], "*", SDL_GLOB_CASEINSENSITIVE, &count);
+        if (!names) continue;
+        for (int i = 0; i < count; i++) {
+            const char *dot = strrchr(names[i], '.');
+            int zip = dot && !SDL_strcasecmp(dot, ".zip");
+            if (!dot || (!zip && SDL_strcasecmp(dot, ".bin") && SDL_strcasecmp(dot, ".md") && SDL_strcasecmp(dot, ".gen")
+                         && SDL_strcasecmp(dot, ".smd") && SDL_strcasecmp(dot, ".68k")))
+                continue;
+            char path[1400], err[1500];
+            SDL_PathInfo info;
+            snprintf(path, sizeof path, "%s%s", dirs[d], names[i]);
+            if (!SDL_GetPathInfo(path, &info) || info.type != SDL_PATHTYPE_FILE ||
+                (zip ? info.size > 0x800000 : info.size != ROM_SIZE && info.size != ROM_SIZE + 512))
+                continue;
+            if (read_rom(path, rom, size, err, sizeof err)) {
+                SDL_free(names);
+                SDL_Log("rom: found %s", path);
+                return 1;
+            }
+        }
+        SDL_free(names);
+    }
+    return 0;
+}
+
 static volatile int dialog_done;
-static char dialog_path[1024];
+static char dialog_path[1024], dialog_error[300];
+static const char *test_pick;          /* testing: --test-pick FILE answers the file dialog */
 
 static void SDLCALL on_pick(void *ud, const char *const *list, int filter) {
     (void)ud; (void)filter;
-    if (list && list[0]) snprintf(dialog_path, sizeof dialog_path, "%s", list[0]);
+    if (!list) snprintf(dialog_error, sizeof dialog_error, "%s", SDL_GetError());   /* no picker could open */
+    else if (list[0]) snprintf(dialog_path, sizeof dialog_path, "%s", list[0]);
     dialog_done = 1;
 }
 
 /* ask for the dump, check it, keep a raw copy as rom/psiv.bin */
 static int pick_rom(uint8_t *rom, uint32_t *size) {
-    static const SDL_DialogFileFilter filters[] = {{"Mega Drive / Genesis ROM", "smd;bin;md;gen"}, {"All files", "*"}};
-    char err[1300], dir[1100], out[1100];
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Phantasy Star IV",
-                             "Select your Phantasy Star IV (USA) cartridge dump (.smd, .bin, .md or .gen).", window);
-    for (;;) {
+    char err[1500], intro[1600];
+    snprintf(intro, sizeof intro,
+             "Welcome! This port plays your own copy of Phantasy Star IV (USA), the Mega Drive / Genesis "
+             "cartridge, and ships none of the game.\n\n"
+             "Choose your ROM file next (.bin, .md, .gen or .smd, or the .zip it came in). It's checked, then "
+             "kept here with your saves:\n%srom/psiv.bin\n\n"
+             "You can also put the file in that folder before starting the game.", home);
+    message(SDL_MESSAGEBOX_INFORMATION, intro, window);
+    for (int tries = 0;; tries++) {
         dialog_done = 0;
-        dialog_path[0] = 0;
-        SDL_ShowOpenFileDialog(on_pick, NULL, window, filters, 2, NULL, false);
+        dialog_path[0] = dialog_error[0] = 0;
+        if (test_pick || no_dialogs) {                       /* testing: the dialog's answer, once (or none) */
+            if (!tries && test_pick) snprintf(dialog_path, sizeof dialog_path, "%s", test_pick);
+            dialog_done = 1;
+        } else {
+#if defined(SDL_PLATFORM_ANDROID)
+            SDL_ShowOpenFileDialog(on_pick, NULL, window, NULL, 0, NULL, false);   /* ROMs have no MIME type */
+#else
+            static const SDL_DialogFileFilter filters[] = {{"Mega Drive / Genesis ROM", "zip;smd;bin;md;gen;68k"},
+                                                           {"All files", "*"}};
+            SDL_ShowOpenFileDialog(on_pick, NULL, window, filters, 2, NULL, false);
+#endif
+        }
         while (!dialog_done) {
             SDL_Event e;
             while (SDL_PollEvent(&e))
                 if (e.type == SDL_EVENT_QUIT) quit(0);
             SDL_Delay(10);
         }
-        if (!dialog_path[0]) return 0;                    /* cancelled */
-        if (read_rom(dialog_path, rom, size, err, sizeof err)) break;
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Phantasy Star IV", err, window);
+        if (dialog_error[0]) {                               /* no picker on this system */
+            snprintf(err, sizeof err, "A file picker couldn't open (%s).\n\nPut your ROM file in this folder and "
+                     "start the game again:\n%s", dialog_error, home);
+            message(SDL_MESSAGEBOX_ERROR, err, window);
+            return 0;
+        }
+        if (!dialog_path[0]) return 0;                       /* cancelled */
+        if (read_rom_named(dialog_path, "That file", rom, size, err, sizeof err)) break;
+        message(SDL_MESSAGEBOX_ERROR, err, window);
     }
-    path_in_home(dir, sizeof dir, "rom");
-    SDL_CreateDirectory(dir);
-    path_in_home(out, sizeof out, "rom/psiv.bin");
-    FILE *f = fopen(out, "wb");
-    if (f) { fwrite(rom, 1, *size, f); fclose(f); }
+    install_rom(rom, *size);
     return 1;
 }
 
@@ -558,6 +749,7 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     SDL_RenderClear(renderer);
     SDL_RenderTexture(renderer, depth_shown ? depth_texture : texture, NULL, &dst);
     draw_walk_marker(&dst, fw, pm, w, h);
+    touch_draw(renderer, ow, oh);                        /* the on-screen pad, when touch is in use */
     if (menu_is_open()) menu_draw();
     if (test_capture_path && frame_count >= test_capture_frame) {
         SDL_Surface *shot = SDL_RenderReadPixels(renderer, NULL);
@@ -801,10 +993,32 @@ static void menu_text(float x, float y, const char *s, Uint8 r, Uint8 g, Uint8 b
     SDL_RenderDebugText(renderer, x, y, s);
 }
 
+/* where the menu was last drawn (its own units, k render pixels each), for taps */
+static float menu_k = 1, menu_px, menu_py, menu_pw, menu_ph, menu_row = 14;
+
+/* a tap or click on the menu: a line chooses it (a setting steps to its
+ * next value, or back on its "<"); outside the panel closes a level */
+static void menu_tap(float rx, float ry) {
+    float x = rx / menu_k, y = ry / menu_k;
+    if (x < menu_px || x > menu_px + menu_pw || y < menu_py || y > menu_py + menu_ph) {
+        menu_input(0, 0, 0, 0, 0, 1);
+        return;
+    }
+    int n = menu_screen == MENU_MAIN ? N_MAIN : menu_screen == MENU_SETTINGS ? N_SETTINGS : 2;
+    int i = (int)floorf((y - (menu_py + 30 - 3)) / menu_row);
+    if (i < 0 || i >= n) return;
+    menu_sel = i;
+    if (menu_screen == MENU_SETTINGS && i < N_SETTINGS - 1) {
+        item_change(&SETTINGS_ITEMS[i], x >= menu_px + 150 && x < menu_px + 150 + 20 ? -1 : 1);
+        return;
+    }
+    menu_input(0, 0, 0, 0, 1, 0);
+}
+
 static void menu_draw(void) {
     int ow, oh;
     SDL_GetRenderOutputSize(renderer, &ow, &oh);
-    float k = floorf((float)oh / 300.0f);                  /* text scale: whole pixels */
+    float k = floorf((float)(ow < oh * 4 / 3 ? ow * 3 / 4 : oh) / 300.0f);   /* text scale: whole pixels */
     if (k < 1) k = 1;
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 150);        /* dim the game */
@@ -818,6 +1032,7 @@ static void menu_draw(void) {
     float pw = menu_screen == MENU_SETTINGS ? 340.0f : 220.0f, row = 14.0f;
     float ph = 34.0f + row * (float)n + 22.0f;
     float px = floorf((vw - pw) / 2), py = floorf((vh - ph) / 2);
+    menu_k = k; menu_px = px; menu_py = py; menu_pw = pw; menu_ph = ph; menu_row = row;
     SDL_FRect panel = {px, py, pw, ph};
     SDL_SetRenderDrawColor(renderer, 0x00, 0x24, 0x6D, 235);   /* the game's window blue */
     SDL_RenderFillRect(renderer, &panel);
@@ -850,8 +1065,11 @@ static void menu_draw(void) {
         menu_text(px + 18, y, line, sel ? 0xFF : 0xE0, sel ? 0xD0 : 0xE0, sel ? 0x40 : 0xF0);
         if (value[0]) menu_text(px + 150, y, value, sel ? 0xFF : 0xC0, sel ? 0xE8 : 0xC8, sel ? 0x90 : 0xE8);
     }
-    const char *hint = menu_screen == MENU_SETTINGS ? "Left/Right change   Esc back" : "Enter select   Esc back";
+    const char *hint = touch_visible() ? (menu_screen == MENU_SETTINGS ? "Tap a line to change it" : "Tap to choose")
+                     : menu_screen == MENU_SETTINGS ? "Left/Right change   Esc back" : "Enter select   Esc back";
     menu_text(px + (pw - 8.0f * (float)strlen(hint)) / 2, py + ph - 14, hint, 0x90, 0x98, 0xC0);
+    if (menu_screen == MENU_MAIN)                          /* for bug reports */
+        menu_text(6, vh - 14, APP_NAME " " PSIV_VERSION, 0x90, 0x98, 0xC0);
     SDL_SetRenderScale(renderer, 1, 1);
 }
 
@@ -864,8 +1082,40 @@ void platform_audio(const int16_t *samples, int count) {
     SDL_PutAudioStreamData(audio, samples, count * 4);
 }
 
+/* a click or a tap at (rx, ry) in render pixels: the system menu, the battle
+ * menus, or a walk (walkto.h) */
+static void click_at(float rx, float ry, int right) {
+    if (menu_is_open()) {
+        if (right) menu_input(0, 0, 0, 0, 0, 1);
+        else menu_tap(rx, ry);
+        return;
+    }
+    if (paused || !walkto_enabled() || pic_dst.w <= 0) return;
+    float gx = (rx - pic_dst.x) / pic_dst.w * (float)pic_fw - (float)pic_pm;   /* the game's frame pixels */
+    float gy = (ry - pic_dst.y) / pic_dst.h * (float)pic_h;
+    if (battleui_active()) {                       /* the battle menus: pick, or back */
+        battleui_click(gx, gy, right);
+        return;
+    }
+    if (right) {                                   /* stop walking; with text up, B */
+        if (!walkto_active()) walkto_click_button(1);
+        walkto_cancel();
+        return;
+    }
+    if (walkto_click_button(0)) return;            /* text up: C, next */
+    if (gx < 0 || gy < 0 || gx >= (float)pic_w || gy >= (float)pic_h) return;   /* off the picture, or a panel */
+    int cx, cy, slot;
+    if (fpview_active()) {
+        if (fpview_pick(gx, gy, pic_w, pic_h, &cx, &cy, &slot)) walkto_go(cx, cy, slot);
+    } else walkto_click_screen((int)gx + vdp_view_x0, (int)gy);
+}
+
+static uint8_t touch_prev;                         /* the on-screen buttons last time, for the menu's presses */
+
 static void handle_events(const uint32_t *pixels, int w, int h) {
     SDL_Event e;
+    int ow = 0, oh = 0;
+    SDL_GetRenderOutputSize(renderer, &ow, &oh);
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
         case SDL_EVENT_QUIT:
@@ -873,17 +1123,19 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             break;
         case SDL_EVENT_KEY_DOWN: {
             SDL_Scancode sc = e.key.scancode;
+            touch_hide();                                /* keys in use: the on-screen pad goes */
             if (menu_is_open()) {                        /* the menu takes the keyboard */
                 int ok = sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER || sc == SDL_SCANCODE_SPACE
                          || sc == key_of[IN_C] || sc == key_of[IN_START];
-                int back = sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_BACKSPACE || sc == key_of[IN_B];
+                int back = sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_BACKSPACE || sc == SDL_SCANCODE_AC_BACK
+                           || sc == key_of[IN_B];
                 menu_input(sc == SDL_SCANCODE_UP || sc == key_of[IN_UP], sc == SDL_SCANCODE_DOWN || sc == key_of[IN_DOWN],
                            sc == SDL_SCANCODE_LEFT || sc == key_of[IN_LEFT], sc == SDL_SCANCODE_RIGHT || sc == key_of[IN_RIGHT],
                            ok && !e.key.repeat, back && !e.key.repeat);
                 break;
             }
             if (e.key.repeat) break;
-            if (e.key.key == SDLK_ESCAPE) { menu_open(); break; }
+            if (e.key.key == SDLK_ESCAPE || e.key.key == SDLK_AC_BACK) { menu_open(); break; }   /* Android: Back */
             if (e.key.key == SDLK_F12) {
                 if (depth_shown) screenshot_any(depth_pixels, depth_tex_w, depth_tex_h, depth_tex_w);
                 else screenshot_any(pixels, w, h, VDP_MAX_W);
@@ -900,6 +1152,7 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
         }
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
             SDL_GamepadButton b = (SDL_GamepadButton)e.gbutton.button;
+            touch_hide();                                /* a gamepad in use: the on-screen pad goes */
             if (b == SDL_GAMEPAD_BUTTON_BACK || b == SDL_GAMEPAD_BUTTON_GUIDE) {   /* Select/Back opens it */
                 if (menu_is_open()) menu_close(); else menu_open();
                 break;
@@ -910,39 +1163,40 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
                        b == pad_of[IN_C] || b == pad_of[IN_START], b == pad_of[IN_B]);
             break;
         }
-        case SDL_EVENT_MOUSE_BUTTON_DOWN: {                /* click to walk (walkto.h) */
-            if (menu_is_open() || paused || !walkto_enabled() || pic_dst.w <= 0) break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: {                /* click to walk (walkto.h), the menus */
+            if (e.button.button != SDL_BUTTON_LEFT && e.button.button != SDL_BUTTON_RIGHT) break;
             float rx, ry;
             SDL_RenderCoordinatesFromWindow(renderer, e.button.x, e.button.y, &rx, &ry);
-            float gx = (rx - pic_dst.x) / pic_dst.w * (float)pic_fw - (float)pic_pm;   /* the game's frame pixels */
-            float gy = (ry - pic_dst.y) / pic_dst.h * (float)pic_h;
-            int right = e.button.button == SDL_BUTTON_RIGHT;
-            if (battleui_active()) {                       /* the battle menus: pick, or back */
-                if (right || e.button.button == SDL_BUTTON_LEFT) battleui_click(gx, gy, right);
-                break;
-            }
-            if (right) {                                   /* stop walking; with text up, B */
-                if (!walkto_active()) walkto_click_button(1);
-                walkto_cancel();
-                break;
-            }
-            if (e.button.button != SDL_BUTTON_LEFT) break;
-            if (walkto_click_button(0)) break;             /* text up: C, next */
-            if (gx < 0 || gy < 0 || gx >= (float)pic_w || gy >= (float)pic_h) break;   /* off the picture, or a panel */
-            int cx, cy, slot;
-            if (fpview_active()) {
-                if (fpview_pick(gx, gy, pic_w, pic_h, &cx, &cy, &slot)) walkto_go(cx, cy, slot);
-            } else walkto_click_screen((int)gx + vdp_view_x0, (int)gy);
+            click_at(rx, ry, e.button.button == SDL_BUTTON_RIGHT);
+            break;
+        }
+        case SDL_EVENT_FINGER_DOWN:
+        case SDL_EVENT_FINGER_MOTION:
+        case SDL_EVENT_FINGER_UP:
+        case SDL_EVENT_FINGER_CANCELED: {                  /* the on-screen pad; a tap elsewhere clicks */
+            float tx, ty;
+            if (touch_event(&e, ow, oh, &tx, &ty)) click_at(tx, ty, 0);
             break;
         }
         case SDL_EVENT_GAMEPAD_ADDED:
             if (!pad) pad = SDL_OpenGamepad(e.gdevice.which);
+            touch_hide();
             break;
         case SDL_EVENT_GAMEPAD_REMOVED:
             if (pad && SDL_GetGamepadID(pad) == e.gdevice.which) { SDL_CloseGamepad(pad); pad = NULL; }
             break;
         }
     }
+    /* the on-screen buttons: the menu key, and presses that steer the menu */
+    if (touch_take_menu()) {
+        if (menu_is_open()) menu_input(0, 0, 0, 0, 0, 1);
+        else menu_open();
+    }
+    uint8_t tp = touch_pad(), pressed = tp & (uint8_t)~touch_prev;
+    touch_prev = tp;
+    if (menu_is_open() && pressed)
+        menu_input(pressed & PAD_UP, pressed & PAD_DOWN, pressed & PAD_LEFT, pressed & PAD_RIGHT,
+                   pressed & (PAD_C | PAD_START), pressed & PAD_B);
 }
 
 void platform_frame(const uint32_t *pixels, int w, int h) {
@@ -959,7 +1213,7 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         next_deadline = SDL_GetTicksNS();
     }
     holding = 0;
-    uint8_t user = read_input();
+    uint8_t user = read_input() | touch_pad();
     for (int i = 0; i < n_test_keys; i++)                /* testing: scripted keys */
         if (frame_count >= test_keys[i].frame && frame_count < test_keys[i].frame + test_keys[i].len) user |= test_keys[i].keys;
     if (test_click_frame && frame_count == test_click_frame && pic_dst.w > 0) {   /* testing: a click on frame pixel X,Y */
@@ -994,6 +1248,59 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
     next_deadline += NTSC_FRAME_NS;
     if (next_deadline > now) SDL_DelayPrecise(next_deadline - now);
     else if (now - next_deadline > 4 * NTSC_FRAME_NS) next_deadline = now;   /* fell behind: resync */
+}
+
+/* ------------------------------------------------------------------ modern text's font */
+static int try_font(const char *path) {
+    size_t n = 0;
+    void *d = SDL_LoadFile(path, &n);                    /* Android: relative paths read the APK's assets */
+    if (!d) return 0;
+    void *m = malloc(n);
+    if (m) memcpy(m, d, n);
+    SDL_free(d);
+    if (m && hdtext_init_mem(m, n)) {
+        SDL_Log("modern text: %s", path);
+        return 1;
+    }
+    free(m);
+    return 0;
+}
+
+/* the setting's file; else Segoe UI on Windows; else the Noto Sans shipped
+ * beside the program (fonts/, OFL); else a common system font */
+static void load_font(void) {
+    const char *want = setting("enhance.text_font");
+    if (*want) {
+        if (try_font(want)) return;
+        SDL_Log("modern text: font %s not loaded; trying the defaults", want);
+    }
+    char bundled[1100];
+    snprintf(bundled, sizeof bundled, "%sfonts/NotoSans-Regular.ttf", base_dir);
+#ifdef _WIN32
+    char winfont[300];
+    snprintf(winfont, sizeof winfont, "%s/Fonts/segoeui.ttf", SDL_getenv("WINDIR") ? SDL_getenv("WINDIR") : "C:/Windows");
+#endif
+    const char *candidates[] = {
+#ifdef _WIN32
+        winfont,
+#endif
+        bundled,
+#if defined(SDL_PLATFORM_ANDROID)
+        "/system/fonts/Roboto-Regular.ttf",
+#elif defined(SDL_PLATFORM_APPLE)
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+#else
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+#endif
+    };
+    for (size_t i = 0; i < sizeof candidates / sizeof candidates[0]; i++)
+        if (try_font(candidates[i])) return;
+    SDL_Log("modern text: no font found; text stays original");
 }
 
 /* ------------------------------------------------------------------ main */
@@ -1038,32 +1345,45 @@ int main(int argc, char **argv) {
             if (*e == ':') test_click_x = strtof(e + 1, &e);
             if (*e == ',') test_click_y = strtof(e + 1, &e);
         }
+        /* testing the first run: --test-pick FILE answers the file dialog;
+         * --no-dialogs writes message boxes to the log instead */
+        else if (!strcmp(argv[i], "--test-pick") && i + 1 < argc) test_pick = argv[++i];
+        else if (!strcmp(argv[i], "--no-dialogs")) no_dialogs = 1;
     }
 
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");        /* touches are handled as touches (touch.h) */
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");  /* Back opens the system menu */
+    SDL_SetAppMetadata(APP_NAME, PSIV_VERSION, "com.psilok.psiv");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Phantasy Star IV", SDL_GetError(), NULL);
+        message(SDL_MESSAGEBOX_ERROR, SDL_GetError(), NULL);
         return 1;
     }
+    SDL_AddEventWatch(app_events, NULL);
     find_home();
     open_log();
+    SDL_Log("%s %s on %s", APP_NAME, PSIV_VERSION, SDL_GetPlatform());
     load_settings();
     {
         char dir[1100];
         path_in_home(dir, sizeof dir, "sfx");
         SDL_Log("sound effects: %d synthesized; %d of yours (%s/sfx.ini)", sfx_synth_load(), sfx_load(dir), dir);
     }
-    if (!hdtext_init(setting("enhance.text_font")))
-        SDL_Log("modern text: font %s not loaded; text stays original", setting("enhance.text_font"));
+    load_font();
     apply_enhancements();
     resolve_bindings();
 
     int scale = setting_int("video.scale");
     if (scale < 1) scale = 1;
+    SDL_WindowFlags wflags = SDL_WINDOW_RESIZABLE;
+#if MOBILE
+    wflags |= SDL_WINDOW_FULLSCREEN;                      /* the whole screen, system bars hidden */
+#endif
     if (!SDL_CreateWindowAndRenderer("Phantasy Star IV", (320 + 2 * wide_margin()) * scale, 224 * scale,
-                                     SDL_WINDOW_RESIZABLE, &window, &renderer)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Phantasy Star IV", SDL_GetError(), NULL);
+                                     wflags, &window, &renderer)) {
+        message(SDL_MESSAGEBOX_ERROR, SDL_GetError(), NULL);
         return 1;
     }
+    touch_init(MOBILE && !SDL_HasGamepad());             /* a phone starts with the on-screen pad, a handheld without */
     SDL_SetRenderVSync(renderer, 0);                    /* paced to 59.92 Hz ourselves */
 #ifndef _WIN32
     {                                                   /* the icon (Windows: the exe's own, res/psiv.rc) */
@@ -1076,13 +1396,13 @@ int main(int argc, char **argv) {
 
     static uint8_t rom[0x400000];
     uint32_t rom_size = 0;
-    char path[1100], err[1300];
+    char path[1100], err[1500];
     if (rom_arg) snprintf(path, sizeof path, "%s", rom_arg);
     else path_in_home(path, sizeof path, "rom/psiv.bin");
     if (!read_rom(path, rom, &rom_size, err, sizeof err)) {
-        if (rom_arg || file_exists(path))
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Phantasy Star IV", err, window);
-        if (!pick_rom(rom, &rom_size)) quit(0);
+        if (rom_arg || file_exists(path)) message(SDL_MESSAGEBOX_ERROR, err, window);
+        if (!rom_arg && find_rom_nearby(rom, &rom_size)) install_rom(rom, rom_size);   /* dropped in the folder */
+        else if (!pick_rom(rom, &rom_size)) quit(0);
     }
 
     /* the game's native rate; SDL resamples to the output device */

@@ -5,8 +5,9 @@ rom/
 *.gen
 *.srm
 
-# Build output and generated code
+# Build output, generated code and packages
 build/
+dist/
 __pycache__/
 *.pyc
 

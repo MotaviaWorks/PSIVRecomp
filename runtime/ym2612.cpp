@@ -1,7 +1,10 @@
 // C interface to ymfm's YM2612 (third_party/ymfm, BSD-3).
 #include "ym2612.h"
 
-#include "ymfm_opn.h"
+// ymfm's OPN chips compiled here, in this file, rather than on their own:
+// generate_mask below drives the FM engine's templates directly, and gcc
+// keeps no out-of-line copies of them in a separately compiled ymfm_opn.cpp
+#include "ymfm_opn.cpp"
 
 namespace {
 

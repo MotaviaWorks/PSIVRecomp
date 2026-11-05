@@ -7,8 +7,9 @@ logo.
   python tools/make_icon.py [--preview DIR]
 
 writes res/psiv.ico (16-256 px, each size drawn at that size), res/psiv.png
-(512 px, for the README) and runtime/icon.h (64 px, the window's icon where
-the exe's own isn't used); --preview also writes every size on dark and light.
+(512 px, for the README), runtime/icon.h (64 px, the window's icon where
+the exe's own isn't used) and Android's launcher icons (android/res/mipmap-*,
+48-192 px); --preview also writes every size on dark and light.
 """
 import argparse, os
 import numpy as np
@@ -118,6 +119,11 @@ def main():
                    append_images=[imgs[s] for s in SIZES if s != 256])
     render(512).save(os.path.join(ROOT, 'res', 'psiv.png'))
     write_header(imgs[64], os.path.join(ROOT, 'runtime', 'icon.h'))
+    # Android's launcher icon, each density drawn at its own size
+    for dpi, s in (('mdpi', 48), ('hdpi', 72), ('xhdpi', 96), ('xxhdpi', 144), ('xxxhdpi', 192)):
+        d = os.path.join(ROOT, 'android', 'res', 'mipmap-' + dpi)
+        os.makedirs(d, exist_ok=True)
+        (imgs[s] if s in imgs else render(s)).save(os.path.join(d, 'ic_launcher.png'))
     if args.preview:
         os.makedirs(args.preview, exist_ok=True)
         W = sum(SIZES) + 12 * len(SIZES) + 12
@@ -129,7 +135,7 @@ def main():
                 sheet.alpha_composite(imgs[s], (x, row * (256 + 24) + 12 + (256 - s)))
             x += s + 12
         sheet.save(os.path.join(args.preview, 'icon_sizes.png'))
-    print('wrote res/psiv.ico, res/psiv.png, runtime/icon.h')
+    print('wrote res/psiv.ico, res/psiv.png, runtime/icon.h, android/res/mipmap-*/ic_launcher.png')
 
 
 if __name__ == '__main__':

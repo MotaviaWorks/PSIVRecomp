@@ -369,7 +369,7 @@ static int read_line(void) {
  * that work starts */
 static void feed_hv(const char *line) {
     const char *p = strstr(line, "hv:");
-    uint16_t v[1024];
+    static uint16_t v[1024];
     int n = 0;
     if (!p) { vdp_hv_feed(v, 0); return; }
     for (p += 3; *p && *p != '-' && n < 1024; ) {
