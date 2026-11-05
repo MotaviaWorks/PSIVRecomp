@@ -102,7 +102,7 @@ Not in this alpha
 
 - macOS.
 - Save states: the game's own saves only.
-- First-person dungeons and the Algol music chip are experiments (Settings).
+- The Algol music chip is an experiment (Settings > Sound > Music).
 
 
 Credits and legal

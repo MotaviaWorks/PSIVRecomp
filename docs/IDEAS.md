@@ -345,9 +345,18 @@ crash are synthesized; 7 (a pitched instrument, Ryucross Field), 8 (a voice),
   delay; a MIDI export of the decoded notes (for remixing); a "your bank"
   mode (an SF2 or samples you provide, like the sound effects).
 
-## First-person dungeons (PsiLok, 2026-11-04) -- v1 (`runtime/fpview.c`)
+## First-person dungeons (PsiLok, 2026-11-04) -- v1 (`runtime/fpview.c`), PAUSED 2026-11-05
 From Gen1Recomp's 3D mode and Phantasy Star I's mazes: the dungeons in
 first person, from the game's own tiles, and their battles fought there.
+- **Paused (PsiLok, 2026-11-05):** "it has more flaws that get in the way of
+  the experience" -- on hold until he works out how it would play well. The
+  setting and its menu entry are gone (an old `enhance.first_person` line in
+  psiv.ini is ignored); the code stays, dormant: `PSIV_FIRST_PERSON=1` turns
+  it on in the app, `psiv_headless --fpview S` still renders it. To bring it
+  back: the setting in `settings[]`, its row in GAME_ITEMS, and the
+  `fpview_set_enabled` line in `apply_enhancements` (main_sdl.c). Before
+  reviving it: write down the flaws PsiLok ran into (not recorded yet) and
+  decide what a functional version needs.
 - **The map, live from RAM:** Map_Layout_FG/BG ($FFA000/$FFB000, a byte per
   32x32 chunk, rows of Map_Row_Size+1), Chunk_Table ($FF6000, 4x4 name-table
   words per chunk, bit 14 = collision; up to 256 chunks, so a big map's run

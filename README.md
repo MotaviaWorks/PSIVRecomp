@@ -160,7 +160,10 @@ original game, unchanged; **Enhanced** turns on the additions:
   them); `psiv_headless --algol-bank ROM` renders with it. Adding a game
   means finding how it stores its samples: `tools/snes/sound_ram.py`.
 
-- **Dungeons** (top-down / first person): the dungeons seen from the
+- **First-person dungeons -- paused** (2026-11-05): not in the menu or
+  `psiv.ini` until it plays well; `PSIV_FIRST_PERSON=1` turns it on for
+  development, and `psiv_headless --fpview S` still renders it. What it is:
+  the dungeons seen from the
   leader's eyes, like the mazes of Phantasy Star I, built live from the
   game's own map and tiles (`runtime/fpview.c`): the walls are its solid
   cells faced with the wall fronts it draws in its 3/4 view, the floor is the

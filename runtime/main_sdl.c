@@ -199,7 +199,6 @@ static Setting settings[] = {
     {"enhance.text_font", "", "TrueType/OpenType font file for modern text; empty = Segoe UI on Windows, else the bundled Noto Sans"},
     {"enhance.sfx", "modern", "sound effects: modern = the port's own, synthesized; custom = your samples, mapped in sfx/sfx.ini (the rest modern); original = the game's own"},
     {"enhance.music", "original", "music: algol = the port's modern sound chip plays the game's music (new instruments, drums and reverb); original = the YM2612 and PSG"},
-    {"enhance.first_person", "off", "dungeons: first_person = seen from the leader's eyes, like Phantasy Star I's mazes (up walks forward, left / right turn); off = the game's own view"},
     {"enhance.click_walk", "on", "mouse: on = a click on the field walks the party there (a person or a chest: up to it, then C to talk or open); right click stops; with text up a click is C, a right click B; touch: a tap is a click; off = clicks and taps only work the system menu"},
     {"enhance.custom_music", "on", "your music: on = audio files in the music folder play in place of the game's songs (music/8F.wav, or named in music/music.ini; see runtime/music.h); off = the game's"},
     {"enhance.music_bank", "", "with Algol: a SNES game you own whose instruments play the music instead of Algol's (the path to its ROM, e.g. Lufia II); empty = Algol's own"},
@@ -887,7 +886,10 @@ static void apply_enhancements(void) {
     hdtext_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.text"), "original") != 0);
     battleui_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_ui"), "original") != 0);
     algol_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.music"), "algol"));
-    fpview_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.first_person"), "first_person"));
+    /* first-person dungeons are paused (PsiLok, 2026-11-05: not yet a good way
+     * to play): no setting, no menu entry; PSIV_FIRST_PERSON=1 brings the
+     * view back for development */
+    fpview_set_enabled(!classic_mode() && SDL_getenv("PSIV_FIRST_PERSON") && *SDL_getenv("PSIV_FIRST_PERSON") == '1');
     walkto_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.click_walk"), "off") != 0);
     /* your own music files (music.h), from the music folder */
     {
@@ -949,9 +951,6 @@ static const MenuItem GAME_ITEMS[] = {
     {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1,
      "Dialogue and the game's windows in a modern font at full resolution, or the game's own pixel font.",
      apply_enhancements},
-    {"Dungeons", "enhance.first_person", {"off", "first_person"}, {"Top-down", "First person"}, 0, 0, 0, 1,
-     "First person: the dungeons through the leader's eyes, like Phantasy Star I's mazes. Up walks, left and "
-     "right turn.", apply_enhancements},
 };
 static const MenuItem DISPLAY_ITEMS[] = {
     {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0,
@@ -1001,7 +1000,7 @@ static const MenuItem CONTROL_ITEMS[] = {
 typedef struct { const char *name, *about; const MenuItem *items; int n; } MenuPage;
 #define PAGE(name, about, items) {name, about, items, (int)(sizeof items / sizeof items[0])}
 static const MenuPage PAGES[] = {
-    PAGE("Game", "Classic or Enhanced, the text, and how dungeons are seen.", GAME_ITEMS),
+    PAGE("Game", "Classic or Enhanced, and the text.", GAME_ITEMS),
     PAGE("Display", "Fullscreen, widescreen, and how the pixels are drawn.", DISPLAY_ITEMS),
     PAGE("Sound", "The volume, the music and the sound effects.", SOUND_ITEMS),
     PAGE("Battles", "The battle menus, and what's drawn over battles.", BATTLE_ITEMS),
