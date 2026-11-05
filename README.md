@@ -82,6 +82,22 @@ resume, settings, quit. Battery saves go to `saves/psiv.srm`;
 `psiv --save FILE` plays another, an emulator's `.srm` too (BizHawk, Gens,
 Kega Fusion), written back in its own layout.
 
+**Rumble** (Settings > Rumble: off / light / normal / strong; `pad.rumble`):
+the Mega Drive had none, so the port reads the moments from the game's
+memory (`runtime/rumble.c`, reads only, so the game is unchanged): a blow
+landing, felt with the target's hit reaction (heavier when it's the party's
+hurt, stronger the more HP it takes when the game has worked that out yet),
+a critical hit with its white flash, an enemy destroyed, a party member
+falling, the final bosses' deaths, the big techniques, and the field's
+doors, stone slabs, elevators, breaking ice and barriers, explosions and a
+ship's engines, each shaped to the length of its sound. It plays on a
+gamepad's two motors; on a phone, or a handheld whose controls can't
+rumble, on the device's vibration motor, a short pulse per effect. Mode:
+Classic leaves it as set (nothing on screen or in the sound changes).
+`psiv_headless --rumble-log` lists the effects as they come
+(`PSIV_RUMBLE_SOUNDS=1`: every sound request too); `psiv --test-rumble F`
+attaches a virtual gamepad that logs what it's asked to play.
+
 ### Enhancements
 
 Settings in the Esc menu (saved to `psiv.ini`). **Mode: Classic** is the
@@ -334,7 +350,7 @@ Windows (`asl` on Linux) and fails unless the result is byte-identical.
 |---|---|
 | `disasm/ps4disasm` | Phantasy Star IV disassembly (submodule, [squidfeatures/ps4disasm](https://github.com/squidfeatures/ps4disasm), originally by lory90) |
 | `tools/` | ROM prep, rebuild, listing parser, 68000 decoder, program model, resolver, C generator |
-| `runtime/` | CPU (`m68k.*`), bus, VDP + renderer (`vdp.*`), frame loop, SDL3 and headless front ends; touch controls, zip reader, glibc compatibility |
+| `runtime/` | CPU (`m68k.*`), bus, VDP + renderer (`vdp.*`), frame loop, SDL3 and headless front ends; touch controls, rumble, zip reader, glibc compatibility |
 | `third_party/` | SDL3 for Windows builds, ymfm, z80.h, stb (fetched, never committed) |
 | `res/` | The app's icon: an original four-point star in the game's window colours, drawn by `tools/make_icon.py` (which also writes `runtime/icon.h` and Android's launcher icons); `fonts/`: Noto Sans (OFL); no game art |
 | `android/` | Android manifest, resources and activity (`tools/build_android.sh`) |

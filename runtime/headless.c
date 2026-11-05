@@ -44,6 +44,7 @@
  *                        (battleui.h); R: the right button; repeatable
  *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
  *                        (next to the trace, or build/bizhawk/port.*)
+ *     --rumble-log       print each rumble effect as it's detected (rumble.h)
  *
  * Prints game-mode changes and, at the end, a RAM checksum. Built with
  * PSIV_TRACE it also prints the hottest code blocks.
@@ -58,6 +59,7 @@
 #include "music.h"
 #include "fpview.h"
 #include "walkto.h"
+#include "rumble.h"
 #include "sfx.h"
 #include "frame.h"
 #include "m68k.h"
@@ -280,6 +282,11 @@ static void report_hot(void) {
 static FILE *replay;
 static const char *replay_path;
 static uint64_t logical, dump_at, mismatched_frames;
+
+/* --rumble-log: each effect with the logical frame it came on */
+static void rumble_print(const char *line) {
+    printf("logical %llu: rumble: %s\n", (unsigned long long)logical, line);
+}
 
 #ifdef PSIV_TRACE
 static void watch_check(uint32_t pc) {
@@ -935,6 +942,8 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--ymlog") && i + 1 < argc) {
             FILE *lf = fopen(argv[++i], "w");
             if (lf) sound_set_log(lf);
+        } else if (!strcmp(argv[i], "--rumble-log")) {
+            rumble_set_log(rumble_print);
         } else {
             fprintf(stderr, "unknown option %s\n", argv[i]);
             return 2;

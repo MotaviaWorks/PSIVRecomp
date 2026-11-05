@@ -61,6 +61,11 @@ Controls
 Settings live in the menu (Esc, Select, Back or ≡). **Mode: Classic** switches
 every addition off and gives you the original game.
 
+Gamepads rumble -- and phones vibrate -- when blows land, on critical hits,
+when enemies are destroyed, and at the field's big moments (doors, explosions,
+breaking ice). Settings > Rumble turns it down or off. If your gamepad doesn't
+rumble, `psiv.log` says whether the game found it able to.
+
 
 Where things are kept
 ---------------------

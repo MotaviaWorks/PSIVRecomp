@@ -121,6 +121,46 @@ build scripts so players build the port from their own ROM.
   Android performance on low-end phones (depth and first person compose on
   the CPU at up to 4x).
 
+## Rumble (PsiLok, 2026-11-05: "Build in rumble") -- v1 done (`runtime/rumble.c`)
+Hits, criticals, kills and the field's big moments on a gamepad's two motors,
+or a phone's vibration motor. Read from RAM, never written: the session
+replay still matches all 24,635 frames, and its rumble log is identical on
+MSVC and gcc (42 blows on enemies, 12 on the party, 5 criticals, 13 enemies
+destroyed, 3 chests).
+- **When a blow lands:** not the HP. The game takes the HP off about a second
+  after the blow, as the damage number finishes (FighterShowDamage_DecreaseHP).
+  The impact is the target's hit reaction: its fighter routine (+2) becomes 5
+  (Character_DamageAnimation / Enemy_DamageAnimation, the blink and a
+  critical's white flash), with Fighters_Hit_Flags ($FF4150) saying hit /
+  critical / missed. A sword's slash sound comes 8 frames before it (the
+  swing), an enemy's blow's sound on the same frame. Battle_Heal_Damage_List
+  ($FF415A) already holds a sword's damage then, not yet the boomerang's or
+  an enemy's (0 / -1): those get a fixed strength.
+- **Criticals:** one big blow. The game plays the hit sound 4 times, 4 frames
+  apart -- for enemies' blows on the frame of the reaction, for swords from 8
+  frames before it, so beats timed from the reaction would trail the sound.
+- **Falls and kills:** a party member's HP reaching 0 (when their number has
+  been shown); an enemy's $B9 (Enemy_Dead, as it dissolves); the final bosses
+  (Dark Force, Profound Darkness, Zio's last form) skip $B9, so their HP
+  reaching 0 (untested: no save that far).
+- **Sounds:** the queue at $FF500A, read before VInt (the driver clears every
+  slot each tick). Each rumbling sound is shaped to its own envelope, measured
+  from the original (`psiv_headless --music ID:60 --wav`, DC removed: the
+  chip mixer idles at ~0.035 FS). The conveyor belt loops for as long as the
+  belt runs: left out.
+- **Output:** taps with an envelope per motor, summed so they saturate
+  (1 - prod(1 - a)); levels 0.45 / 0.75 / 1.0. Gamepads: SDL_RumbleGamepad,
+  200 ms at a time, renewed every 100 ms while an effect lasts (a stall can't
+  leave it on); on Android at most every 50 ms and 16 steps (each change
+  restarts the vibrator through Java; gamepad rumble needs Android 12+). A
+  phone, or controls that can't rumble on mobile: the device's vibrator
+  (SDL haptic "VIBRATOR_SERVICE", VIBRATE permission), one pulse per effect,
+  at most 0.5 s. The menu and pause stop it; the setting plays a sample.
+- **Next:** PsiLok's verdict on the Odin 2; the swing as a light whoosh before
+  the impact; the enemies' attack styles (bites, lasers, claws); trigger
+  rumble on Xbox pads; walking with poison (the game's field HP ticks);
+  vehicles; a heartbeat when the party's HP is low.
+
 ## Ideas from Gen1Recomp
 Its options and modules map onto this port: `Tilt` (an HD-2D diorama
 perspective for the field, eased between 0/15/35/50 degrees), survey `Zoom`,

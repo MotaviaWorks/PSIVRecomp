@@ -18,6 +18,7 @@
 #include "battleui.h"
 #include "bus.h"
 #include "m68k.h"
+#include "rumble.h"
 #include "sfx.h"
 #include "sound.h"
 
@@ -80,6 +81,7 @@ void frame_run(void) {
 
     vdp.in_vblank = 1;
     vdp.line = h;
+    rumble_frame();                    /* hits and sound requests, for the rumble (reads only) */
     /* replaced sound effects: the game's requests wait in the sound queue
      * ($FF500A-$FF500D) for the driver, which runs in VInt; a replaced one
      * starts its sample and is taken out of the queue */
@@ -89,6 +91,7 @@ void frame_run(void) {
             if (id && sfx_request(id)) m68k_ram[SOUND_QUEUE + i] = 0;
         }
     if (vdp_vint_enabled()) m68k_interrupt(6, SPIN_PC);
+    rumble_after_vint();
     vdp.in_vblank = 0;
 
     /* lag VInts scheduled by a reference replay: they belong at the start of

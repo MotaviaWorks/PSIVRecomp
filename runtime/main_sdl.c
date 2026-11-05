@@ -32,6 +32,7 @@
  * it and press C); right click stops. With text up, click = C, right = B.
  * Touch (touch.h): on-screen pad and buttons; a tap elsewhere is a click.
  * Android's Back button opens the system menu.
+ * Rumble (rumble.h): on the gamepad, or a phone's vibration motor.
  */
 #include "bus.h"
 #include "depth.h"
@@ -42,6 +43,7 @@
 #include "music.h"
 #include "fpview.h"
 #include "walkto.h"
+#include "rumble.h"
 #ifndef _WIN32
 #include "icon.h"
 #endif
@@ -213,6 +215,7 @@ static Setting settings[] = {
     {"pad.c", "b", ""},
     {"pad.start", "start", ""},
     {"pad.fast_forward", "rightshoulder", ""},
+    {"pad.rumble", "normal", "rumble: off, light, normal, strong -- blows landing, critical hits, enemies destroyed, the field's doors and explosions; on the gamepad, or a phone's vibration motor"},
 };
 #define NSETTINGS (int)(sizeof settings / sizeof settings[0])
 
@@ -362,6 +365,7 @@ static void quit(int code) {
  * moment. Save then (SDL calls this on the game's thread, at a frame
  * boundary), and tell the watchdog the pause is no hang. */
 static volatile int backgrounded;
+static void rumble_off(void);
 static bool SDLCALL app_events(void *ud, SDL_Event *e) {
     (void)ud;
     switch (e->type) {
@@ -370,6 +374,7 @@ static bool SDLCALL app_events(void *ud, SDL_Event *e) {
     case SDL_EVENT_WILL_ENTER_BACKGROUND:
         backgrounded = e->type == SDL_EVENT_WILL_ENTER_BACKGROUND || backgrounded;
         sram_flush();
+        if (e->type == SDL_EVENT_WILL_ENTER_BACKGROUND) rumble_off();
         break;
     case SDL_EVENT_DID_ENTER_FOREGROUND:
         backgrounded = 0;
@@ -868,6 +873,18 @@ static void apply_audio(void) {
     if (audio) SDL_SetAudioStreamGain(audio, (float)setting_int("audio.volume") / 100.0f);
 }
 
+static int rumble_setting(void) {
+    const char *v = setting("pad.rumble");
+    for (int i = 0; i < RUMBLE_LEVELS; i++)
+        if (!SDL_strcasecmp(v, rumble_level_name(i))) return i;
+    return *v >= '0' && *v <= '3' ? *v - '0' : 2;
+}
+
+static void apply_rumble(void) {                  /* changed in the menu: a taste of the new level */
+    rumble_set_level(rumble_setting());
+    rumble_test();
+}
+
 typedef struct {
     const char *label;
     const char *key;                  /* setting changed with left/right (NULL: an action) */
@@ -902,6 +919,7 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Integer scaling", "video.integer_scaling", {"1", "0"}, {"On", "Off"}, 0, 0, 0, 0, NULL, NULL},
     {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0, NULL, apply_video},
     {"Volume", "audio.volume", {0}, {0}, 0, 200, 10, 0, NULL, apply_audio},
+    {"Rumble", "pad.rumble", {"off", "light", "normal", "strong"}, {"Off", "Light", "Normal", "Strong"}, 0, 0, 0, 0, NULL, apply_rumble},
     {"Back", NULL, {0}, {0}, 0, 0, 0, 0, NULL, NULL},
 };
 #define N_MAIN     (int)(sizeof MAIN_ITEMS / sizeof MAIN_ITEMS[0])
@@ -1073,6 +1091,70 @@ static void menu_draw(void) {
     SDL_SetRenderScale(renderer, 1, 1);
 }
 
+/* ------------------------------------------------------------------ rumble */
+/* rumble.h says what to play; here it goes to the gamepad's two motors, or --
+ * a phone, or a handheld whose controls can't rumble -- to the device's own
+ * vibration motor, a pulse per effect. */
+static SDL_Haptic *vibrator;
+static Uint16 sent_lo, sent_hi;
+static uint64_t sent_at;
+
+static int pad_rumbles(void) {
+    return pad && SDL_GetBooleanProperty(SDL_GetGamepadProperties(pad), SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false);
+}
+
+static void rumble_output(void) {
+    uint64_t now = SDL_GetTicks();
+    float lo, hi;
+    rumble_motors(now, &lo, &hi);
+    if (pad && (pad_rumbles() || !vibrator)) {
+#if MOBILE
+        /* Android restarts the controller's vibrator on every change: fewer
+         * steps, and a fading effect updated every 50 ms at most */
+        const Uint16 mask = 0xF000;
+        int soon = now - sent_at < 50;
+#else
+        const Uint16 mask = 0xFC00;                  /* 64 steps */
+        int soon = 0;
+#endif
+        Uint16 l = (Uint16)(lo * 65535.0f) & mask, h = (Uint16)(hi * 65535.0f) & mask;
+        if (l || h) {
+            /* each call runs for its duration (a stall can't leave it on):
+             * renewed while the effect lasts; a new blow goes out at once */
+            int stronger = l > sent_lo || h > sent_hi;
+            if ((l != sent_lo || h != sent_hi || now - sent_at >= 100) && (stronger || !soon)) {
+                SDL_RumbleGamepad(pad, l, h, 200);
+                sent_lo = l;
+                sent_hi = h;
+                sent_at = now;
+            }
+        } else if (sent_lo || sent_hi) {
+            SDL_RumbleGamepad(pad, 0, 0, 0);
+            sent_lo = sent_hi = 0;
+        }
+    } else if (vibrator) {
+        float s;
+        int ms;
+        if (rumble_take_pulse(now, &s, &ms)) SDL_PlayHapticRumble(vibrator, s, (Uint32)ms);
+    }
+}
+
+static void rumble_off(void) {                    /* paused, the menu, the background */
+    rumble_stop();
+    if (pad && (sent_lo || sent_hi)) SDL_RumbleGamepad(pad, 0, 0, 0);
+    sent_lo = sent_hi = 0;
+    if (vibrator) SDL_StopHapticRumble(vibrator);
+}
+
+/* testing: --test-rumble F attaches a virtual gamepad that logs what it's
+ * asked to do, and plays the menu's sample at frame F */
+static uint64_t test_rumble_frame;
+static bool SDLCALL test_pad_rumble(void *ud, Uint16 lo, Uint16 hi) {
+    (void)ud;
+    SDL_Log("rumble: test pad %5u %5u at frame %llu", lo, hi, (unsigned long long)frame_count);
+    return true;
+}
+
 /* ------------------------------------------------------------------ frame and audio */
 void platform_audio(const int16_t *samples, int count) {
     if (!audio || count <= 0 || paused) return;
@@ -1179,7 +1261,10 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             break;
         }
         case SDL_EVENT_GAMEPAD_ADDED:
-            if (!pad) pad = SDL_OpenGamepad(e.gdevice.which);
+            if (!pad) {
+                pad = SDL_OpenGamepad(e.gdevice.which);
+                if (pad) SDL_Log("gamepad: %s (rumble: %s)", SDL_GetGamepadName(pad), pad_rumbles() ? "yes" : "no");
+            }
             touch_hide();
             break;
         case SDL_EVENT_GAMEPAD_REMOVED:
@@ -1205,14 +1290,18 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         menu_open();
         if (test_menu_settings) { menu_screen = MENU_SETTINGS; menu_sel = 1; }
     }
+    if (paused || menu_is_open()) rumble_off();          /* the game holds: so does the rumble */
     while (paused || menu_is_open()) {                   /* F10 or the menu: hold here, keep the window alive */
         holding = 1;                                     /* (the watchdog knows it's on purpose) */
         present(pixels, w, h, 0);
+        rumble_output();                                 /* the Rumble setting's sample */
         SDL_Delay(16);
         handle_events(pixels, w, h);
         next_deadline = SDL_GetTicksNS();
     }
     holding = 0;
+    if (test_rumble_frame && frame_count == test_rumble_frame) rumble_test();
+    rumble_output();
     uint8_t user = read_input() | touch_pad();
     for (int i = 0; i < n_test_keys; i++)                /* testing: scripted keys */
         if (frame_count >= test_keys[i].frame && frame_count < test_keys[i].frame + test_keys[i].len) user |= test_keys[i].keys;
@@ -1349,6 +1438,8 @@ int main(int argc, char **argv) {
          * --no-dialogs writes message boxes to the log instead */
         else if (!strcmp(argv[i], "--test-pick") && i + 1 < argc) test_pick = argv[++i];
         else if (!strcmp(argv[i], "--no-dialogs")) no_dialogs = 1;
+        /* testing the rumble: --test-rumble F (see test_pad_rumble) */
+        else if (!strcmp(argv[i], "--test-rumble") && i + 1 < argc) test_rumble_frame = strtoull(argv[++i], NULL, 10);
     }
 
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");        /* touches are handled as touches (touch.h) */
@@ -1371,6 +1462,32 @@ int main(int argc, char **argv) {
     load_font();
     apply_enhancements();
     resolve_bindings();
+    rumble_set_level(rumble_setting());
+#if MOBILE
+    /* the device's own vibration motor, for when the controls can't rumble */
+    if (SDL_InitSubSystem(SDL_INIT_HAPTIC)) {
+        int n = 0;
+        SDL_HapticID *ids = SDL_GetHaptics(&n);
+        if (ids && n > 0 && (vibrator = SDL_OpenHaptic(ids[0])) && !SDL_InitHapticRumble(vibrator)) {
+            SDL_CloseHaptic(vibrator);
+            vibrator = NULL;
+        }
+        SDL_free(ids);
+    }
+    SDL_Log("rumble: %s; vibration motor: %s", rumble_level_name(rumble_get_level()), vibrator ? "yes" : "no");
+#else
+    SDL_Log("rumble: %s", rumble_level_name(rumble_get_level()));
+#endif
+    if (test_rumble_frame) {
+        SDL_VirtualJoystickDesc d;
+        SDL_INIT_INTERFACE(&d);
+        d.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        d.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        d.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        d.name = "PSIV test pad";
+        d.Rumble = test_pad_rumble;
+        if (!SDL_AttachVirtualJoystick(&d)) SDL_Log("rumble: no test pad: %s", SDL_GetError());
+    }
 
     int scale = setting_int("video.scale");
     if (scale < 1) scale = 1;
