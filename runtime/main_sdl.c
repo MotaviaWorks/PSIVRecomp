@@ -467,10 +467,12 @@ static void draw_walk_marker(const SDL_FRect *dst, int fw, int pm, int w, int h)
     float kx = dst->w / (float)fw, ky = dst->h / (float)h;
     float X = dst->x + (fx + (float)pm) * kx, Y = dst->y + fy * ky;
     if (X < dst->x || Y < dst->y || X > dst->x + dst->w || Y > dst->y + dst->h) return;
-    for (int k = 0; k < 2; k++) {                          /* a diamond, breathing */
-        float r = (5.0f + 1.5f * sinf((float)frame_count * 0.2f) - (float)k) * ky;
+    float r0 = (7.0f + 1.5f * sinf((float)frame_count * 0.2f)) * ky, line = ky > 1.5f ? ky * 0.6f : 1.0f;
+    for (int k = 0; k < 3; k++) {                          /* a diamond, breathing: dark rim, gold, dark rim */
+        float r = r0 - (float)(k - 1) * line;
         SDL_FPoint p[5] = {{X, Y - r}, {X + r, Y}, {X, Y + r}, {X - r, Y}, {X, Y - r}};
-        SDL_SetRenderDrawColor(renderer, k ? 0x60 : 0xFF, k ? 0x40 : 0xE0, k ? 0x00 : 0x40, 255);
+        if (k == 1) SDL_SetRenderDrawColor(renderer, 0xFF, 0xE0, 0x40, 255);
+        else SDL_SetRenderDrawColor(renderer, 0x40, 0x28, 0x00, 255);
         SDL_RenderLines(renderer, p, 5);
     }
 }
