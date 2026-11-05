@@ -58,12 +58,15 @@ Controls
 | Touch | the on-screen pad; tap like a mouse click; the ≡ button = menu |
 | Android | Back = menu |
 
-Settings live in the menu (Esc, Select, Back or ≡). **Mode: Classic** switches
-every addition off and gives you the original game.
+Settings live in the menu (Esc, Select, Back or ≡), on five pages: Game,
+Display, Sound, Battles and Controls. Turn pages with the shoulder buttons,
+Tab, or a tap on a page's name; the line at the bottom says what the
+highlighted setting does. **Mode: Classic** (on the Game page) switches every
+addition off and gives you the original game.
 
 Gamepads rumble -- and phones vibrate -- when blows land, on critical hits,
 when enemies are destroyed, and at the field's big moments (doors, explosions,
-breaking ice). Settings > Rumble turns it down or off. If your gamepad doesn't
+breaking ice). Settings > Controls > Rumble turns it down or off. If your gamepad doesn't
 rumble, `psiv.log` says whether the game found it able to.
 
 

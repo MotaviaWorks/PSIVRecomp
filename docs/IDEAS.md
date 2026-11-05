@@ -37,6 +37,22 @@ An overlay menu on Esc (quitting moves into it): resume, settings, quit.
   4:3 or 16:9, filters, volume, controls.
 - **Needs:** an overlay renderer with its own font (SDL3's built-in debug
   font to start, a proper font later) and saving to `psiv.ini`.
+- **v2, five pages (PsiLok, 2026-11-05: "clean up the settings screen. It's
+  starting to get crowded"):** 18 settings in one list became Game (Mode,
+  Text, Dungeons), Display, Sound, Battles and Controls, two to five each,
+  with short labels and a line under the list saying what the highlighted
+  one does (Classic mode greys the additions and says why). A page bar
+  above the list (Up from the first setting reaches it; Left / Right there
+  turn pages), Tab / Shift+Tab / Page Up / Page Down, the shoulder buttons,
+  or a tap on a page; hints for the device in use, naming the gamepad's own
+  buttons. Drawn with uikit like the battle menus -- rounded navy panel,
+  gold highlight, the modern font -- into a transparent texture
+  (`ui_set_straight_alpha`: uikit and hdtext composite with straight alpha
+  while it's on), redrawn only when something on it changes, fading in;
+  SDL's 8x8 font if no font loads (`PSIV_MENU_8X8=1` shows it). Taps and
+  clicks use the rectangles the drawing recorded; the mouse highlights the
+  line under it. Testing: `psiv --menu F:settings:PAGE:ROW` and
+  `--menu-script` (keys, clicks, hover, gamepad buttons, shots).
 
 ## Widescreen side panels (PsiLok, 2026-11-03) -- v1 done
 In exploration, use the 16:9 margins as frames with party info instead of

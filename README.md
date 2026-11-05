@@ -78,11 +78,14 @@ is committed in `res/fonts/` with its licence.
 
 Hold Tab to fast-forward, F10 pause, F11 fullscreen, F12 screenshot
 (`screenshots/`). **Esc** (or the pad's Back/Select) opens the system menu:
-resume, settings, quit. Battery saves go to `saves/psiv.srm`;
+resume, settings, quit. Settings are on five pages -- Game, Display, Sound,
+Battles, Controls -- turned with Tab / Page Up / Page Down, the shoulder
+buttons, or a click or tap on the page's name; the line under the list says
+what the highlighted setting does. Battery saves go to `saves/psiv.srm`;
 `psiv --save FILE` plays another, an emulator's `.srm` too (BizHawk, Gens,
 Kega Fusion), written back in its own layout.
 
-**Rumble** (Settings > Rumble: off / light / normal / strong; `pad.rumble`):
+**Rumble** (Settings > Controls > Rumble: off / light / normal / strong; `pad.rumble`):
 the Mega Drive had none, so the port reads the moments from the game's
 memory (`runtime/rumble.c`, reads only, so the game is unchanged): a blow
 landing, felt with the target's hit reaction (heavier when it's the party's
@@ -170,7 +173,7 @@ original game, unchanged; **Enhanced** turns on the additions:
   (`PSIV_FPVIEW_ANYWHERE=1`: in towns too, for testing). Inspired by
   Gen1Recomp's 3D mode.
 
-- **Mouse** (click to walk / off): a click on the field sends the party
+- **Click to walk** (Controls page: on / off): a click on the field sends the party
   there, by the shortest way the game's own collision allows
   (`runtime/walkto.c`): the d-pad is held a step at a time, as you would.
   Click a person, a chest or a door to walk up to it, face it and press C

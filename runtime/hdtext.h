@@ -45,6 +45,11 @@ float hdtext_string_width(const char *text, float cap_px);
  * byte, when not 0, is the text's opacity */
 uint32_t hdtext_win_char(int code);
 
+/* Drawing into a transparent buffer (an overlay with straight alpha) instead
+ * of over an opaque image: on while drawing one, off again after. */
+void     hdtext_set_straight_alpha(int on);
+uint32_t hdtext_over(uint32_t dst, uint32_t rgb, int alpha);   /* rgb at alpha over dst, straight alpha */
+
 /* nearest-neighbour upscale of a frame (src_stride pixels per row) */
 void hdtext_upscale(const uint32_t *src, int src_stride, int w, int h, uint32_t *out, int out_stride, int scale);
 

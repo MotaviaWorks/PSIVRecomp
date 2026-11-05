@@ -186,6 +186,22 @@ static const Glyph *glyph(uint32_t cp, float scale) {
     return NULL;
 }
 
+/* Straight alpha (the port's own overlays, drawn into a transparent buffer):
+ * colour c at opacity a (0-255) over d, keeping d's own opacity in mind */
+static int straight_alpha;
+void hdtext_set_straight_alpha(int on) { straight_alpha = on; }
+
+uint32_t hdtext_over(uint32_t d, uint32_t c, int a) {
+    int da = (int)(d >> 24);
+    if (a >= 255 || da == 0) return (uint32_t)(a > 255 ? 255 : a) << 24 | (c & 0xFFFFFF);
+    int oa = a * 255 + da * (255 - a);                            /* the result's opacity, x255 */
+    int wd = da * (255 - a);
+    int r = ((int)(c >> 16 & 255) * a * 255 + (int)(d >> 16 & 255) * wd) / oa;
+    int g = ((int)(c >> 8 & 255) * a * 255 + (int)(d >> 8 & 255) * wd) / oa;
+    int b = ((int)(c & 255) * a * 255 + (int)(d & 255) * wd) / oa;
+    return (uint32_t)(oa / 255) << 24 | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+}
+
 /* glyph alpha over the image in the text colour, kept inside the clip box
  * and off pixels a high-priority sprite covers (cursors over menus) */
 static void blit(const VdpLine *lines, int h, uint32_t *out, int stride, int scale, const Glyph *g, float pen_x,
@@ -201,6 +217,7 @@ static void blit(const VdpLine *lines, int h, uint32_t *out, int stride, int sca
             int X = ox + x, a = g->bmp[y * g->w + x] * fa / 255;
             if (!a || X < cx0 || X >= cx1 || (l && (l->sprite[X / scale] & 0x80))) continue;
             uint32_t *d = &out[(size_t)Y * (size_t)stride + (size_t)X];
+            if (straight_alpha) { *d = hdtext_over(*d, fg, a); continue; }
             int r = (int)(*d >> 16 & 255), gg = (int)(*d >> 8 & 255), b = (int)(*d & 255);
             r += (fr - r) * a / 255; gg += (fgc - gg) * a / 255; b += (fb - b) * a / 255;
             *d = 0xFF000000u | (uint32_t)r << 16 | (uint32_t)gg << 8 | (uint32_t)b;

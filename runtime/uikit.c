@@ -99,8 +99,15 @@ const UiImage *ui_portrait(int id) {
 }
 
 /* ------------------------------------------------------------------ shapes */
+static int straight;                       /* ui_set_straight_alpha */
+void ui_set_straight_alpha(int on) {
+    straight = on;
+    hdtext_set_straight_alpha(on);
+}
+
 void ui_blend(uint32_t *d, uint32_t c, int a) {
     if (a <= 0) return;
+    if (straight) { *d = hdtext_over(*d, c, a); return; }
     if (a >= 255) { *d = 0xFF000000u | (c & 0xFFFFFF); return; }
     int r = (int)(*d >> 16 & 255), g = (int)(*d >> 8 & 255), b = (int)(*d & 255);
     r += ((int)(c >> 16 & 255) - r) * a / 255;

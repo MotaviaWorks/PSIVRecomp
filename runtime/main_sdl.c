@@ -54,6 +54,7 @@
 #include "sha256.h"
 #include "sound.h"
 #include "touch.h"
+#include "uikit.h"
 #include "unzip.h"
 
 #include <SDL3/SDL.h>
@@ -625,7 +626,9 @@ static void screenshot_any(const uint32_t *pixels, int w, int h, int stride) {
 
 /* testing hooks (see main) */
 static uint64_t test_menu_frame, test_capture_frame;
-static int test_menu_settings;
+static int test_menu_settings, test_menu_page, test_menu_row;
+static const char *test_menu_script;                                  /* --menu-script */
+static const char *test_shot;                                         /* its shot:FILE, taken at the next present */
 static const char *test_capture_path;
 static struct { uint64_t frame, len; uint8_t keys; } test_keys[32];   /* --test-keys */
 static int n_test_keys;
@@ -756,11 +759,13 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     draw_walk_marker(&dst, fw, pm, w, h);
     touch_draw(renderer, ow, oh);                        /* the on-screen pad, when touch is in use */
     if (menu_is_open()) menu_draw();
-    if (test_capture_path && frame_count >= test_capture_frame) {
+    if ((test_capture_path && frame_count >= test_capture_frame) || test_shot) {
+        const char *path = test_shot ? test_shot : test_capture_path;
         SDL_Surface *shot = SDL_RenderReadPixels(renderer, NULL);
-        if (shot) { SDL_SaveBMP(shot, test_capture_path); SDL_DestroySurface(shot); }
-        SDL_Log("captured %s", test_capture_path);
-        quit(0);
+        if (shot) { SDL_SaveBMP(shot, path); SDL_DestroySurface(shot); }
+        SDL_Log("captured %s", path);
+        if (!test_shot) quit(0);
+        test_shot = NULL;
     }
     SDL_RenderPresent(renderer);
 }
@@ -885,48 +890,94 @@ static void apply_rumble(void) {                  /* changed in the menu: a tast
     rumble_test();
 }
 
+/* The settings, on five pages. Each says what it does under the list, so the
+ * labels can stay short. */
 typedef struct {
     const char *label;
-    const char *key;                  /* setting changed with left/right (NULL: an action) */
-    const char *values[4];            /* setting values, and how they're shown */
+    const char *key;                  /* the setting left / right changes */
+    const char *values[4];            /* its values, and how they're shown */
     const char *names[4];
-    int lo, hi, step;                 /* numeric setting instead of a list */
-    int enhancement;                  /* greyed out in Classic mode */
-    const char *coming;               /* not built yet: shown greyed with this note */
+    int lo, hi, step;                 /* a number instead of a list */
+    int enhancement;                  /* off (greyed) in Classic mode */
+    const char *help;                 /* what it does */
     void (*apply)(void);
 } MenuItem;
 
-static const MenuItem MAIN_ITEMS[] = {
-    {"Resume", NULL, {0}, {0}, 0, 0, 0, 0, NULL, NULL},
-    {"Settings", NULL, {0}, {0}, 0, 0, 0, 0, NULL, NULL},
-    {"Quit game", NULL, {0}, {0}, 0, 0, 0, 0, NULL, NULL},
+static const MenuItem GAME_ITEMS[] = {
+    {"Mode", "enhance.mode", {"enhanced", "classic"}, {"Enhanced", "Classic"}, 0, 0, 0, 0,
+     "Classic turns every addition off: the original game, unchanged.", apply_enhancements},
+    {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1,
+     "Dialogue and the game's windows in a modern font at full resolution, or the game's own pixel font.",
+     apply_enhancements},
+    {"Dungeons", "enhance.first_person", {"off", "first_person"}, {"Top-down", "First person"}, 0, 0, 0, 1,
+     "First person: the dungeons through the leader's eyes, like Phantasy Star I's mazes. Up walks, left and "
+     "right turn.", apply_enhancements},
 };
-static const MenuItem SETTINGS_ITEMS[] = {
-    {"Mode", "enhance.mode", {"enhanced", "classic"}, {"Enhanced", "Classic"}, 0, 0, 0, 0, NULL, apply_enhancements},
-    {"Battle depth", "enhance.battle_depth", {"0", "1", "2"}, {"Off", "Subtle", "Strong"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Battle fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Music", "enhance.music", {"original", "algol"}, {"Original chip", "Algol (modern)"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Dungeons", "enhance.first_person", {"off", "first_person"}, {"Top-down", "First person"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Mouse", "enhance.click_walk", {"on", "off"}, {"Click to walk", "Off"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Your music", "enhance.custom_music", {"on", "off"}, {"On (music folder)", "Off"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Sound effects", "enhance.sfx", {"modern", "custom", "original"}, {"Modern", "Your samples", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Battle menus", "enhance.battle_ui", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Widescreen", "video.widescreen", {"0", "1", "2"}, {"Off", "More map", "Side panels"}, 0, 0, 0, 1, NULL, apply_enhancements},
-    {"Aspect", "video.aspect", {"square", "4:3"}, {"Square pixels", "4:3 TV"}, 0, 0, 0, 0, NULL, apply_enhancements},
-    {"Pixels", "video.filter", {"nearest", "linear"}, {"Sharp", "Smooth"}, 0, 0, 0, 0, NULL, apply_video},
-    {"Integer scaling", "video.integer_scaling", {"1", "0"}, {"On", "Off"}, 0, 0, 0, 0, NULL, NULL},
-    {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0, NULL, apply_video},
-    {"Volume", "audio.volume", {0}, {0}, 0, 200, 10, 0, NULL, apply_audio},
-    {"Rumble", "pad.rumble", {"off", "light", "normal", "strong"}, {"Off", "Light", "Normal", "Strong"}, 0, 0, 0, 0, NULL, apply_rumble},
-    {"Back", NULL, {0}, {0}, 0, 0, 0, 0, NULL, NULL},
+static const MenuItem DISPLAY_ITEMS[] = {
+    {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0,
+     "Fill the screen. F11 switches it too.", apply_video},
+    {"Widescreen", "video.widescreen", {"0", "1", "2"}, {"Off", "More map", "Side panels"}, 0, 0, 0, 1,
+     "16:9: more of the world on either side, or the party's cards in the margins while exploring. Battles "
+     "are wide either way.", apply_enhancements},
+    {"Pixel shape", "video.aspect", {"square", "4:3"}, {"Square", "4:3 TV"}, 0, 0, 0, 0,
+     "4:3 TV: the slightly narrow pixels the console showed on a television.", apply_enhancements},
+    {"Smoothing", "video.filter", {"nearest", "linear"}, {"Off", "On"}, 0, 0, 0, 0,
+     "Off keeps every pixel sharp; on blends them where the picture is scaled.", apply_video},
+    {"Integer scaling", "video.integer_scaling", {"1", "0"}, {"On", "Off"}, 0, 0, 0, 0,
+     "Scale by whole numbers only: the sharpest pixels, with a border round the picture.", NULL},
 };
-#define N_MAIN     (int)(sizeof MAIN_ITEMS / sizeof MAIN_ITEMS[0])
-#define N_SETTINGS (int)(sizeof SETTINGS_ITEMS / sizeof SETTINGS_ITEMS[0])
+static const MenuItem SOUND_ITEMS[] = {
+    {"Volume", "audio.volume", {0}, {0}, 0, 200, 10, 0,
+     "The music and the sound effects together.", apply_audio},
+    {"Music", "enhance.music", {"original", "algol"}, {"Original chip", "Algol"}, 0, 0, 0, 1,
+     "Algol: the port's own modern sound chip plays the game's music on new instruments, with rock drums.",
+     apply_enhancements},
+    {"Your music", "enhance.custom_music", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "Audio files you put in the music folder play in place of the game's songs.", apply_enhancements},
+    {"Sound effects", "enhance.sfx", {"modern", "custom", "original"}, {"Modern", "Your samples", "Original"},
+     0, 0, 0, 1, "Modern: the port's own. Your samples: the ones in the sfx folder. Original: the game's.",
+     apply_enhancements},
+};
+static const MenuItem BATTLE_ITEMS[] = {
+    {"Menus", "enhance.battle_ui", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1,
+     "Full names, descriptions and a party bar with portraits, or the game's own windows.", apply_enhancements},
+    {"Depth", "enhance.battle_depth", {"0", "1", "2"}, {"Off", "Subtle", "Strong"}, 0, 0, 0, 1,
+     "Battles drawn as layers at different depths under a gently moving camera. F9 switches it too.",
+     apply_enhancements},
+    {"Fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1,
+     "Drifting mist between the enemies and the party. F8 switches it too.", apply_enhancements},
+    {"Effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1,
+     "Attacks and techniques light the scene: sparks, flashes, embers and lens flares.", apply_enhancements},
+};
+static const MenuItem CONTROL_ITEMS[] = {
+    {"Click to walk", "enhance.click_walk", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "Click or tap the field to walk there, or a person or a chest to talk or open it. Battle menus take "
+     "clicks too.", apply_enhancements},
+    {"Rumble", "pad.rumble", {"off", "light", "normal", "strong"}, {"Off", "Light", "Normal", "Strong"}, 0, 0, 0, 0,
+     "Blows landing, critical hits, enemies destroyed and the field's big moments, on a gamepad or a "
+     "phone's motor.", apply_rumble},
+};
+
+typedef struct { const char *name, *about; const MenuItem *items; int n; } MenuPage;
+#define PAGE(name, about, items) {name, about, items, (int)(sizeof items / sizeof items[0])}
+static const MenuPage PAGES[] = {
+    PAGE("Game", "Classic or Enhanced, the text, and how dungeons are seen.", GAME_ITEMS),
+    PAGE("Display", "Fullscreen, widescreen, and how the pixels are drawn.", DISPLAY_ITEMS),
+    PAGE("Sound", "The volume, the music and the sound effects.", SOUND_ITEMS),
+    PAGE("Battles", "The battle menus, and what's drawn over battles.", BATTLE_ITEMS),
+    PAGE("Controls", "Clicks and taps, and rumble.", CONTROL_ITEMS),
+};
+#define N_PAGES (int)(sizeof PAGES / sizeof PAGES[0])
+#define MAX_ROWS 5                    /* the longest page: the panel keeps its size */
+static const char *const MAIN_LABELS[] = {"Resume", "Settings", "Quit game"};
+#define N_MAIN 3
+static const char *const CLASSIC_NOTE = "Off in Classic mode. Set Mode to Enhanced, on the Game page, to use it.";
 
 enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT };
-static int menu_screen, menu_sel;
+static int menu_screen, menu_sel;     /* in Settings, -1 = the page bar */
+static int menu_page;                 /* the settings page (kept while the game runs) */
+static uint64_t menu_opened;          /* when it opened (it fades in); 0 = at once */
+static int menu_last_pad;             /* the last press was a gamepad's: the hints name its buttons */
 
 static int item_values(const MenuItem *it) {
     int n = 0;
@@ -935,18 +986,15 @@ static int item_values(const MenuItem *it) {
 }
 
 static int item_disabled(const MenuItem *it) {
-    return it->coming || (it->enhancement && classic_mode());
+    return it->enhancement && classic_mode();
 }
 
-static void item_value_text(const MenuItem *it, char *buf, size_t n) {
-    buf[0] = 0;
-    if (it->coming) { snprintf(buf, n, "%s", it->coming); return; }
-    if (!it->key) return;
-    if (it->step) { snprintf(buf, n, "< %d%% >", setting_int(it->key)); return; }
+static void item_value(const MenuItem *it, char *buf, size_t n) {
+    if (it->step) { snprintf(buf, n, "%d%%", setting_int(it->key)); return; }
     const char *v = setting(it->key);
     for (int i = 0; i < item_values(it); i++)
-        if (!SDL_strcasecmp(v, it->values[i])) { snprintf(buf, n, "< %s >", it->names[i]); return; }
-    snprintf(buf, n, "< %s >", v);
+        if (!SDL_strcasecmp(v, it->values[i])) { snprintf(buf, n, "%s", it->names[i]); return; }
+    snprintf(buf, n, "%s", v);
 }
 
 static void item_change(const MenuItem *it, int dir) {
@@ -974,31 +1022,49 @@ static void item_change(const MenuItem *it, int dir) {
 /* after the menu closes, the game sees no buttons until all are released, so
  * the key that closed it (Enter = Start) doesn't also reach the game */
 static int input_hold;
-static void menu_open(void) { menu_screen = MENU_MAIN; menu_sel = 0; }
+static void menu_open(void) { menu_screen = MENU_MAIN; menu_sel = 0; menu_opened = SDL_GetTicks(); }
 static void menu_close(void) { menu_screen = MENU_CLOSED; input_hold = 1; }
 static int menu_is_open(void) { return menu_screen != MENU_CLOSED; }
 
+static const MenuPage *page_now(void) { return &PAGES[menu_page]; }
+
+/* the next or previous settings page (shoulder buttons, Tab, the page bar) */
+static void menu_turn_page(int dir) {
+    if (menu_screen != MENU_SETTINGS) return;
+    menu_page = (menu_page + dir + N_PAGES) % N_PAGES;
+    if (menu_sel >= page_now()->n) menu_sel = page_now()->n - 1;
+}
+
 /* one key or button press while the menu is open */
 static void menu_input(int up, int down, int left, int right, int ok, int back) {
-    int n = menu_screen == MENU_MAIN ? N_MAIN : menu_screen == MENU_SETTINGS ? N_SETTINGS : 2;
-    const MenuItem *items = menu_screen == MENU_MAIN ? MAIN_ITEMS : SETTINGS_ITEMS;
-    if (up) menu_sel = (menu_sel + n - 1) % n;
-    if (down) menu_sel = (menu_sel + 1) % n;
-    if (menu_screen == MENU_SETTINGS && (left || right)) item_change(&items[menu_sel], right ? 1 : -1);
-    if (menu_screen == MENU_QUIT && (left || right)) menu_sel ^= 1;
     if (back) {
         if (menu_screen == MENU_MAIN) menu_close();
         else { menu_sel = menu_screen == MENU_SETTINGS ? 1 : 2; menu_screen = MENU_MAIN; }
         return;
     }
+    if (menu_screen == MENU_SETTINGS) {               /* the page bar sits above the first setting */
+        int n = page_now()->n;
+        if (up) menu_sel = menu_sel < 0 ? n - 1 : menu_sel - 1;
+        if (down) menu_sel = menu_sel >= n - 1 ? -1 : menu_sel + 1;
+        if (left || right) {
+            if (menu_sel < 0) menu_turn_page(right ? 1 : -1);
+            else item_change(&page_now()->items[menu_sel], right ? 1 : -1);
+        }
+        if (ok) {
+            if (menu_sel < 0) menu_sel = 0;
+            else item_change(&page_now()->items[menu_sel], 1);
+        }
+        return;
+    }
+    int n = menu_screen == MENU_MAIN ? N_MAIN : 2;
+    if (up) menu_sel = (menu_sel + n - 1) % n;
+    if (down) menu_sel = (menu_sel + 1) % n;
+    if (menu_screen == MENU_QUIT && (left || right)) menu_sel ^= 1;
     if (!ok) return;
     if (menu_screen == MENU_MAIN) {
         if (menu_sel == 0) menu_close();
         else if (menu_sel == 1) { menu_screen = MENU_SETTINGS; menu_sel = 0; }
         else { menu_screen = MENU_QUIT; menu_sel = 1; }               /* default: No */
-    } else if (menu_screen == MENU_SETTINGS) {
-        if (menu_sel == N_SETTINGS - 1) { menu_screen = MENU_MAIN; menu_sel = 1; }
-        else item_change(&items[menu_sel], 1);
     } else {
         if (menu_sel == 0) quit(0);
         menu_screen = MENU_MAIN;
@@ -1006,89 +1072,349 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
     }
 }
 
-static void menu_text(float x, float y, const char *s, Uint8 r, Uint8 g, Uint8 b) {
-    SDL_SetRenderDrawColor(renderer, r, g, b, 255);
-    SDL_RenderDebugText(renderer, x, y, s);
+/* ------------------------------------------------------------------ the menus' look */
+/* Drawn like the modern battle menus (uikit.h: rounded navy panels, a gold
+ * highlight, the modern text's font) into a transparent texture that is only
+ * redrawn when something on it changes; without a font, with SDL's own 8x8
+ * one straight to the window. Sizes are in units of the 320x224 screen. */
+#define C_PANEL_TOP 0x1B2756
+#define C_PANEL_LOW 0x0C1230
+#define C_RULE      0x6F8FE0
+#define C_GOLD      0xFFE08A
+#define C_GOLD_LOW  0xF0A83C
+#define C_INK       0x1A1406                     /* text on the gold */
+#define C_INK_SOFT  0x3A2A08
+#define C_TEXT      0xFFFFFF
+#define C_VALUE     0xD8E2FF
+#define C_SOFT      0x9FB4E8
+#define C_DIM       0x6F7FA8
+#define C_HINT      0x8C9CC8
+
+typedef struct { float x0, y0, x1, y1; int kind, index; } MenuHit;   /* render pixels */
+enum { HIT_ROW, HIT_STEP_BACK, HIT_PAGE, HIT_BACK };
+static MenuHit menu_hits[24];
+static int n_menu_hits;
+static SDL_FRect menu_panel;                     /* where the panel is, render pixels */
+static SDL_Texture *menu_tex;
+static uint32_t *menu_buf;
+static int menu_tex_w, menu_tex_h;
+static uint64_t menu_drawn;                      /* what the texture shows (menu_signature) */
+
+static int m_ttf;                                /* drawing into menu_buf with the TrueType font */
+static UiCanvas m_cv;
+static float m_S, m_ox, m_oy;                    /* render pixels per unit; the panel's top left */
+
+static float m_debug_scale(float cap) {          /* SDL's font: capitals 7 of its 8 pixels */
+    float k = floorf(cap * m_S / 7.0f + 0.3f);
+    return k < 1.0f ? 1.0f : k;
+}
+static void m_box(float x0, float y0, float x1, float y1, float r, uint32_t top, uint32_t bottom, int alpha) {
+    if (m_ttf) {
+        ui_round_rect_v(&m_cv, x0 * m_S, y0 * m_S, x1 * m_S, y1 * m_S, r * m_S, top, bottom, alpha);
+        return;
+    }
+    SDL_SetRenderDrawColor(renderer, (Uint8)(top >> 16), (Uint8)(top >> 8), (Uint8)top, (Uint8)alpha);
+    SDL_FRect f = {m_ox + x0 * m_S, m_oy + y0 * m_S, (x1 - x0) * m_S, (y1 - y0) * m_S};
+    SDL_RenderFillRect(renderer, &f);
+}
+static void m_frame(float x0, float y0, float x1, float y1, float r, uint32_t c, int alpha) {
+    if (m_ttf) {
+        ui_round_frame(&m_cv, x0 * m_S, y0 * m_S, x1 * m_S, y1 * m_S, r * m_S, fmaxf(1.0f, 0.35f * m_S), c, alpha);
+        return;
+    }
+    SDL_SetRenderDrawColor(renderer, (Uint8)(c >> 16), (Uint8)(c >> 8), (Uint8)c, (Uint8)alpha);
+    SDL_FRect f = {m_ox + x0 * m_S, m_oy + y0 * m_S, (x1 - x0) * m_S, (y1 - y0) * m_S};
+    SDL_RenderRect(renderer, &f);
+}
+static float m_width(const char *s, float cap) {
+    if (m_ttf) return ui_text_width(s, cap * m_S) / m_S;
+    return 8.0f * m_debug_scale(cap) * (float)strlen(s) / m_S;
+}
+/* at (x, baseline); align 0 left, 1 right of x, 2 centred on it */
+static void m_text(float x, float base, float cap, const char *s, uint32_t c, int align) {
+    if (align) x -= m_width(s, cap) / (align == 1 ? 1.0f : 2.0f);
+    if (m_ttf) {
+        ui_text(&m_cv, x * m_S, base * m_S, cap * m_S, s, c, 255);
+        return;
+    }
+    float k = m_debug_scale(cap);
+    SDL_SetRenderScale(renderer, k, k);
+    SDL_SetRenderDrawColor(renderer, (Uint8)(c >> 16), (Uint8)(c >> 8), (Uint8)c, 255);
+    SDL_RenderDebugText(renderer, (m_ox + x * m_S) / k, (m_oy + base * m_S) / k - 7.0f, s);
+    SDL_SetRenderScale(renderer, 1, 1);
+}
+/* word-wrapped to `width`, at most `lines` lines */
+static void m_wrap(float x, float base, float width, float line_h, int lines, float cap, const char *s, uint32_t c) {
+    char line[256];
+    while (*s && lines-- > 0) {
+        while (*s == ' ') s++;
+        int fit = 0, i = 0;
+        for (;;) {                                   /* as many whole words as fit */
+            while (s[i] && s[i] != ' ') i++;
+            if (i >= (int)sizeof line) break;
+            memcpy(line, s, (size_t)i);
+            line[i] = 0;
+            if (fit && m_width(line, cap) > width) break;
+            fit = i;
+            if (!s[i]) break;
+            i++;
+        }
+        if (!fit) break;
+        memcpy(line, s, (size_t)fit);
+        line[fit] = 0;
+        m_text(x, base, cap, line, c, 0);
+        s += fit;
+        base += line_h;
+    }
+}
+static void m_arrow(float cx, float cy, float size, int dir, uint32_t c) {   /* dir 2 right, 3 left */
+    if (m_ttf) ui_triangle(&m_cv, cx * m_S, cy * m_S, size * m_S, dir, c, 255);
+    else m_text(cx, cy + size * 0.8f, size * 1.2f, dir == 3 ? "<" : ">", c, 2);
+}
+static void m_hit(float x0, float y0, float x1, float y1, int kind, int index) {
+    if (n_menu_hits >= (int)(sizeof menu_hits / sizeof menu_hits[0])) return;
+    MenuHit *h = &menu_hits[n_menu_hits++];
+    h->x0 = m_ox + x0 * m_S;
+    h->y0 = m_oy + y0 * m_S;
+    h->x1 = m_ox + x1 * m_S;
+    h->y1 = m_oy + y1 * m_S;
+    h->kind = kind;
+    h->index = index;
 }
 
-/* where the menu was last drawn (its own units, k render pixels each), for taps */
-static float menu_k = 1, menu_px, menu_py, menu_pw, menu_ph, menu_row = 14;
+/* the gamepad's own names for its buttons, for the hints */
+static const char *pad_button_name(SDL_GamepadButton b) {
+    switch (pad ? SDL_GetGamepadButtonLabel(pad, b) : SDL_GAMEPAD_BUTTON_LABEL_UNKNOWN) {
+    case SDL_GAMEPAD_BUTTON_LABEL_A: return "A";
+    case SDL_GAMEPAD_BUTTON_LABEL_B: return "B";
+    case SDL_GAMEPAD_BUTTON_LABEL_X: return "X";
+    case SDL_GAMEPAD_BUTTON_LABEL_Y: return "Y";
+    case SDL_GAMEPAD_BUTTON_LABEL_CROSS: return "Cross";
+    case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE: return "Circle";
+    case SDL_GAMEPAD_BUTTON_LABEL_SQUARE: return "Square";
+    case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE: return "Triangle";
+    default: return b == pad_of[IN_B] ? "B" : "C";              /* the Mega Drive's names */
+    }
+}
+static const char *pad_shoulder_names(void) {
+    switch (pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_UNKNOWN) {
+    case SDL_GAMEPAD_TYPE_XBOX360:
+    case SDL_GAMEPAD_TYPE_XBOXONE: return "LB / RB";
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR: return "L / R";
+    default: return "L1 / R1";
+    }
+}
 
-/* a tap or click on the menu: a line chooses it (a setting steps to its
- * next value, or back on its "<"); outside the panel closes a level */
-static void menu_tap(float rx, float ry) {
-    float x = rx / menu_k, y = ry / menu_k;
-    if (x < menu_px || x > menu_px + menu_pw || y < menu_py || y > menu_py + menu_ph) {
-        menu_input(0, 0, 0, 0, 0, 1);
-        return;
+/* how to drive the menu with what's in use: touch, a gamepad, the keyboard */
+static void menu_hint(char *out, size_t n) {
+    const char *sep = m_ttf ? "   \xC2\xB7   " : "   ";
+    int settings_screen = menu_screen == MENU_SETTINGS;
+    if (touch_visible())
+        snprintf(out, n, "%s%sTap outside to go back", settings_screen ? "Tap a setting to change it" : "Tap to choose", sep);
+    else if (menu_last_pad && pad) {
+        if (settings_screen)
+            snprintf(out, n, "Left / Right change%s%s page%s%s back", sep, pad_shoulder_names(), sep,
+                     pad_button_name(pad_of[IN_B]));
+        else
+            snprintf(out, n, "%s choose%s%s back", pad_button_name(pad_of[IN_C]), sep, pad_button_name(pad_of[IN_B]));
+    } else if (settings_screen)
+        snprintf(out, n, "Left / Right change%sTab page%sEsc back", sep, sep);
+    else
+        snprintf(out, n, "Enter choose%sEsc back", sep);
+}
+
+/* Resume / Settings / Quit, and the quit question's answers */
+static void draw_rows(float W, const char *const *labels, int n, float y0) {
+    for (int i = 0; i < n; i++) {
+        float a = y0 + 16.0f * (float)i, b = a + 14.0f;
+        if (i == menu_sel) m_box(8.0f, a, W - 8.0f, b, 7.0f, C_GOLD, C_GOLD_LOW, 255);
+        m_text(15.0f, a + 9.8f, 5.0f, labels[i], i == menu_sel ? C_INK : C_TEXT, 0);
+        m_hit(8.0f, a, W - 8.0f, b, HIT_ROW, i);
     }
-    int n = menu_screen == MENU_MAIN ? N_MAIN : menu_screen == MENU_SETTINGS ? N_SETTINGS : 2;
-    int i = (int)floorf((y - (menu_py + 30 - 3)) / menu_row);
-    if (i < 0 || i >= n) return;
-    menu_sel = i;
-    if (menu_screen == MENU_SETTINGS && i < N_SETTINGS - 1) {
-        item_change(&SETTINGS_ITEMS[i], x >= menu_px + 150 && x < menu_px + 150 + 20 ? -1 : 1);
-        return;
+}
+
+static void draw_settings(float W, float H, const char *hint) {
+    const float pad = 10.0f;
+    const MenuPage *pg = page_now();
+    m_text(pad + 2.0f, 17.0f, 6.4f, "Settings", C_GOLD, 0);
+    /* Back, for the mouse and for touch */
+    float bx1 = W - pad, bx0 = bx1 - m_width("Back", 4.2f) - 17.0f, by0 = 7.0f, by1 = 20.0f;
+    m_box(bx0, by0, bx1, by1, 6.5f, 0x26346A, 0x18214A, 240);
+    m_frame(bx0, by0, bx1, by1, 6.5f, C_RULE, 120);
+    m_arrow(bx0 + 7.5f, (by0 + by1) / 2, 4.0f, 3, C_SOFT);
+    m_text(bx0 + 12.0f, by0 + 9.1f, 4.2f, "Back", C_VALUE, 0);
+    m_hit(bx0, by0, bx1, by1, HIT_BACK, 0);
+    /* the pages */
+    float x = pad, t0 = 26.0f, t1 = 40.0f;
+    for (int i = 0; i < N_PAGES; i++) {
+        float w = m_width(PAGES[i].name, 4.6f) + 14.0f;
+        int on = i == menu_page, focus = on && menu_sel < 0;
+        if (focus) m_box(x, t0, x + w, t1, 7.0f, C_GOLD, C_GOLD_LOW, 255);
+        else if (on) m_box(x, t0, x + w, t1, 7.0f, 0x3A4C8E, 0x2A3870, 255);
+        m_text(x + w / 2, t0 + 9.8f, 4.6f, PAGES[i].name, focus ? C_INK : on ? C_TEXT : C_SOFT, 2);
+        m_hit(x, t0, x + w, t1, HIT_PAGE, i);
+        x += w + 3.0f;
     }
-    menu_input(0, 0, 0, 0, 1, 0);
+    m_box(pad, 44.5f, W - pad, 45.0f, 0, C_RULE, C_RULE, 80);
+    /* its settings: the label, the value; the highlighted one with arrows */
+    for (int i = 0; i < pg->n; i++) {
+        const MenuItem *it = &pg->items[i];
+        float a = 48.5f + 15.0f * (float)i, b = a + 13.5f, base = a + 9.5f, mid = (a + b) / 2;
+        int sel = i == menu_sel, off = item_disabled(it);
+        char v[64];
+        item_value(it, v, sizeof v);
+        if (sel) m_box(pad, a, W - pad, b, 6.75f, off ? 0x56607E : C_GOLD, off ? 0x3E4766 : C_GOLD_LOW, 255);
+        uint32_t lc = off ? (sel ? 0xC8D0E8 : C_DIM) : sel ? C_INK : C_TEXT;
+        uint32_t vc = off ? (sel ? 0xC8D0E8 : C_DIM) : sel ? C_INK : C_VALUE;
+        m_text(pad + 8.0f, base, 4.6f, it->label, lc, 0);
+        float vr = W - pad - 13.0f, vw = m_width(v, 4.6f);
+        m_text(vr, base, 4.6f, v, vc, 1);
+        if (sel && !off) {
+            m_arrow(vr - vw - 6.5f, mid, 4.0f, 3, C_INK_SOFT);
+            m_arrow(vr + 6.5f, mid, 4.0f, 2, C_INK_SOFT);
+        }
+        m_hit(vr - vw - 14.0f, a, vr - vw * 0.5f, b, HIT_STEP_BACK, i);   /* the value's left: a step back */
+        m_hit(pad, a, W - pad, b, HIT_ROW, i);
+    }
+    /* what the highlighted one does */
+    m_box(pad, 127.5f, W - pad, 128.0f, 0, C_RULE, C_RULE, 80);
+    const char *about = menu_sel < 0 ? pg->about
+                      : item_disabled(&pg->items[menu_sel]) ? CLASSIC_NOTE : pg->items[menu_sel].help;
+    m_wrap(pad + 2.0f, 138.0f, W - 2 * pad - 4.0f, 8.6f, 2, 4.0f, about, C_VALUE);
+    m_text(pad + 2.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
+}
+
+static void menu_layout(float W, float H) {
+    char hint[200];
+    menu_hint(hint, sizeof hint);
+    m_box(0, 0, W, H, 7.0f, C_PANEL_TOP, C_PANEL_LOW, 244);
+    m_frame(0, 0, W, H, 7.0f, C_RULE, 150);
+    if (menu_screen == MENU_SETTINGS) {
+        draw_settings(W, H, hint);
+    } else if (menu_screen == MENU_MAIN) {
+        m_text(12.0f, 17.0f, 6.4f, "Paused", C_GOLD, 0);
+        draw_rows(W, MAIN_LABELS, N_MAIN, 26.0f);
+        m_text(12.0f, H - 15.0f, 3.4f, hint, C_HINT, 0);
+        m_text(12.0f, H - 6.5f, 3.1f, APP_NAME " " PSIV_VERSION, C_DIM, 0);   /* for bug reports */
+    } else {
+        static const char *const ANSWERS[2] = {"Yes, quit", "No, keep playing"};
+        m_text(12.0f, 17.0f, 6.4f, "Quit the game?", C_GOLD, 0);
+        draw_rows(W, ANSWERS, 2, 26.0f);
+        m_wrap(12.0f, 67.5f, W - 24.0f, 7.5f, 2, 3.8f, "Anything since you last saved in the game is lost.", C_VALUE);
+        m_text(12.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
+    }
+}
+
+/* what's on the panel: when this changes, it's drawn again */
+static uint64_t menu_signature(int ow, int oh) {
+    uint64_t parts[] = {(uint64_t)menu_screen, (uint64_t)(menu_sel + 1), (uint64_t)menu_page, (uint64_t)ow,
+                        (uint64_t)oh, (uint64_t)touch_visible(), (uint64_t)(menu_last_pad && pad),
+                        pad ? (uint64_t)SDL_GetGamepadID(pad) : 0};
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) h = (h ^ parts[i]) * 1099511628211ull;
+    for (int i = 0; i < NSETTINGS; i++)
+        for (const char *p = settings[i].value; *p; p++) h = (h ^ (unsigned char)*p) * 1099511628211ull;
+    return h;
 }
 
 static void menu_draw(void) {
     int ow, oh;
     SDL_GetRenderOutputSize(renderer, &ow, &oh);
-    float k = floorf((float)(ow < oh * 4 / 3 ? ow * 3 / 4 : oh) / 300.0f);   /* text scale: whole pixels */
-    if (k < 1) k = 1;
+    float fade = menu_opened ? fminf(1.0f, (float)(SDL_GetTicks() - menu_opened) / 140.0f) : 1.0f;
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 150);        /* dim the game */
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)(165.0f * fade));    /* dim the game */
     SDL_FRect all = {0, 0, (float)ow, (float)oh};
     SDL_RenderFillRect(renderer, &all);
-    SDL_SetRenderScale(renderer, k, k);
-    float vw = (float)ow / k, vh = (float)oh / k;
 
-    const char *title = menu_screen == MENU_SETTINGS ? "SETTINGS" : menu_screen == MENU_QUIT ? "QUIT GAME?" : "SYSTEM";
-    int n = menu_screen == MENU_MAIN ? N_MAIN : menu_screen == MENU_SETTINGS ? N_SETTINGS : 2;
-    float pw = menu_screen == MENU_SETTINGS ? 340.0f : 220.0f, row = 14.0f;
-    float ph = 34.0f + row * (float)n + 22.0f;
-    float px = floorf((vw - pw) / 2), py = floorf((vh - ph) / 2);
-    menu_k = k; menu_px = px; menu_py = py; menu_pw = pw; menu_ph = ph; menu_row = row;
-    SDL_FRect panel = {px, py, pw, ph};
-    SDL_SetRenderDrawColor(renderer, 0x00, 0x24, 0x6D, 235);   /* the game's window blue */
-    SDL_RenderFillRect(renderer, &panel);
-    SDL_SetRenderDrawColor(renderer, 0xB0, 0xB8, 0xE8, 255);
-    SDL_RenderRect(renderer, &panel);
-    SDL_FRect inner = {px + 2, py + 2, pw - 4, ph - 4};
-    SDL_SetRenderDrawColor(renderer, 0x50, 0x60, 0xA8, 255);
-    SDL_RenderRect(renderer, &inner);
-    menu_text(px + (pw - 8.0f * (float)strlen(title)) / 2, py + 10, title, 0xFF, 0xFF, 0xFF);
+    float W = menu_screen == MENU_SETTINGS ? 288.0f : menu_screen == MENU_QUIT ? 176.0f : 168.0f;
+    float H = menu_screen == MENU_SETTINGS ? 168.0f : menu_screen == MENU_QUIT ? 86.0f : 100.0f;
+    /* about the game's own scale, small enough that Settings always fits */
+    m_S = fminf(fminf((float)ow / 320.0f, (float)oh / 224.0f), fminf((float)ow * 0.95f / 288.0f, (float)oh * 0.92f / 168.0f));
+    int tw = (int)ceilf(W * m_S), th = (int)ceilf(H * m_S);
+    m_ox = floorf(((float)ow - (float)tw) / 2);
+    m_oy = floorf(((float)oh - (float)th) / 2);
+    menu_panel.x = m_ox;
+    menu_panel.y = m_oy;
+    menu_panel.w = (float)tw;
+    menu_panel.h = (float)th;
 
-    for (int i = 0; i < n; i++) {
-        float y = py + 30 + row * (float)i;
-        int sel = i == menu_sel;
-        char line[96], value[64];
-        if (menu_screen == MENU_QUIT) {
-            snprintf(line, sizeof line, "%s", i == 0 ? "Yes, quit" : "No, keep playing");
-            value[0] = 0;
-        } else {
-            const MenuItem *it = (menu_screen == MENU_MAIN ? MAIN_ITEMS : SETTINGS_ITEMS) + i;
-            snprintf(line, sizeof line, "%s", it->label);
-            item_value_text(it, value, sizeof value);
-            if (item_disabled(it)) {
-                menu_text(px + 18, y, line, 0x70, 0x78, 0x98);
-                menu_text(px + 150, y, value, 0x70, 0x78, 0x98);
-                if (sel) menu_text(px + 8, y, ">", 0xFF, 0xD0, 0x40);
-                continue;
-            }
+    static int force_8x8 = -1;                       /* testing: PSIV_MENU_8X8=1 draws it as with no font */
+    if (force_8x8 < 0) force_8x8 = SDL_getenv("PSIV_MENU_8X8") != NULL;
+    m_ttf = ui_ready() && !force_8x8;
+    if (m_ttf && (!menu_tex || tw != menu_tex_w || th != menu_tex_h)) {
+        if (menu_tex) SDL_DestroyTexture(menu_tex);
+        free(menu_buf);
+        menu_buf = malloc((size_t)tw * (size_t)th * 4);
+        menu_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, tw, th);
+        menu_tex_w = tw;
+        menu_tex_h = th;
+        menu_drawn = 0;
+        if (menu_tex) {
+            SDL_SetTextureBlendMode(menu_tex, SDL_BLENDMODE_BLEND);
+            SDL_SetTextureScaleMode(menu_tex, SDL_SCALEMODE_NEAREST);
         }
-        if (sel) menu_text(px + 8, y, ">", 0xFF, 0xD0, 0x40);
-        menu_text(px + 18, y, line, sel ? 0xFF : 0xE0, sel ? 0xD0 : 0xE0, sel ? 0x40 : 0xF0);
-        if (value[0]) menu_text(px + 150, y, value, sel ? 0xFF : 0xC0, sel ? 0xE8 : 0xC8, sel ? 0x90 : 0xE8);
     }
-    const char *hint = touch_visible() ? (menu_screen == MENU_SETTINGS ? "Tap a line to change it" : "Tap to choose")
-                     : menu_screen == MENU_SETTINGS ? "Left/Right change   Esc back" : "Enter select   Esc back";
-    menu_text(px + (pw - 8.0f * (float)strlen(hint)) / 2, py + ph - 14, hint, 0x90, 0x98, 0xC0);
-    if (menu_screen == MENU_MAIN)                          /* for bug reports */
-        menu_text(6, vh - 14, APP_NAME " " PSIV_VERSION, 0x90, 0x98, 0xC0);
-    SDL_SetRenderScale(renderer, 1, 1);
+    if (!m_ttf || !menu_tex || !menu_buf) {          /* no font: straight to the window, each frame */
+        m_ttf = 0;
+        n_menu_hits = 0;
+        menu_layout(W, H);
+        return;
+    }
+    uint64_t sig = menu_signature(ow, oh);
+    if (sig != menu_drawn) {
+        memset(menu_buf, 0, (size_t)tw * (size_t)th * 4);
+        m_cv.px = menu_buf;
+        m_cv.stride = tw;
+        m_cv.x0 = m_cv.y0 = 0;
+        m_cv.x1 = tw;
+        m_cv.y1 = th;
+        n_menu_hits = 0;
+        ui_set_straight_alpha(1);
+        menu_layout(W, H);
+        ui_set_straight_alpha(0);
+        SDL_UpdateTexture(menu_tex, NULL, menu_buf, tw * 4);
+        menu_drawn = sig;
+    }
+    SDL_SetTextureAlphaModFloat(menu_tex, fade);
+    SDL_FRect dst = {m_ox, m_oy, (float)tw, (float)th};
+    SDL_RenderTexture(renderer, menu_tex, NULL, &dst);
+}
+
+/* a tap or a click on the menu: what's under it; outside the panel, back */
+static void menu_tap(float rx, float ry) {
+    if (rx < menu_panel.x || ry < menu_panel.y || rx >= menu_panel.x + menu_panel.w || ry >= menu_panel.y + menu_panel.h) {
+        menu_input(0, 0, 0, 0, 0, 1);
+        return;
+    }
+    for (int i = 0; i < n_menu_hits; i++) {
+        const MenuHit *h = &menu_hits[i];
+        if (rx < h->x0 || ry < h->y0 || rx >= h->x1 || ry >= h->y1) continue;
+        if (h->kind == HIT_BACK) {
+            menu_input(0, 0, 0, 0, 0, 1);
+        } else if (h->kind == HIT_PAGE) {
+            menu_page = h->index;
+            menu_sel = 0;
+        } else if (menu_screen == MENU_SETTINGS) {   /* a setting: a step on (or back, left of its value) */
+            menu_sel = h->index;
+            item_change(&page_now()->items[h->index], h->kind == HIT_STEP_BACK ? -1 : 1);
+        } else {
+            menu_sel = h->index;
+            menu_input(0, 0, 0, 0, 1, 0);
+        }
+        return;
+    }
+}
+
+/* the mouse over a line highlights it */
+static void menu_hover(float rx, float ry) {
+    for (int i = 0; i < n_menu_hits; i++) {
+        const MenuHit *h = &menu_hits[i];
+        if (h->kind == HIT_ROW && rx >= h->x0 && ry >= h->y0 && rx < h->x1 && ry < h->y1) {
+            menu_sel = h->index;
+            return;
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ rumble */
@@ -1206,7 +1532,13 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
         case SDL_EVENT_KEY_DOWN: {
             SDL_Scancode sc = e.key.scancode;
             touch_hide();                                /* keys in use: the on-screen pad goes */
+            menu_last_pad = 0;
             if (menu_is_open()) {                        /* the menu takes the keyboard */
+                if (sc == SDL_SCANCODE_TAB || sc == SDL_SCANCODE_PAGEDOWN || sc == SDL_SCANCODE_PAGEUP) {
+                    if (!e.key.repeat || sc != SDL_SCANCODE_TAB)    /* settings pages */
+                        menu_turn_page(sc == SDL_SCANCODE_PAGEUP || (sc == SDL_SCANCODE_TAB && (e.key.mod & SDL_KMOD_SHIFT)) ? -1 : 1);
+                    break;
+                }
                 int ok = sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER || sc == SDL_SCANCODE_SPACE
                          || sc == key_of[IN_C] || sc == key_of[IN_START];
                 int back = sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_BACKSPACE || sc == SDL_SCANCODE_AC_BACK
@@ -1235,11 +1567,16 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
             SDL_GamepadButton b = (SDL_GamepadButton)e.gbutton.button;
             touch_hide();                                /* a gamepad in use: the on-screen pad goes */
+            menu_last_pad = 1;
             if (b == SDL_GAMEPAD_BUTTON_BACK || b == SDL_GAMEPAD_BUTTON_GUIDE) {   /* Select/Back opens it */
                 if (menu_is_open()) menu_close(); else menu_open();
                 break;
             }
             if (!menu_is_open()) break;
+            if (b == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER || b == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) {   /* settings pages */
+                menu_turn_page(b == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER ? 1 : -1);
+                break;
+            }
             menu_input(b == SDL_GAMEPAD_BUTTON_DPAD_UP, b == SDL_GAMEPAD_BUTTON_DPAD_DOWN,
                        b == SDL_GAMEPAD_BUTTON_DPAD_LEFT, b == SDL_GAMEPAD_BUTTON_DPAD_RIGHT,
                        b == pad_of[IN_C] || b == pad_of[IN_START], b == pad_of[IN_B]);
@@ -1248,10 +1585,25 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {                /* click to walk (walkto.h), the menus */
             if (e.button.button != SDL_BUTTON_LEFT && e.button.button != SDL_BUTTON_RIGHT) break;
             float rx, ry;
+            menu_last_pad = 0;
             SDL_RenderCoordinatesFromWindow(renderer, e.button.x, e.button.y, &rx, &ry);
             click_at(rx, ry, e.button.button == SDL_BUTTON_RIGHT);
             break;
         }
+        case SDL_EVENT_MOUSE_MOTION:                       /* the menu: the line under the mouse */
+            if (menu_is_open() && e.motion.which != SDL_TOUCH_MOUSEID) {
+                float rx, ry;
+                SDL_RenderCoordinatesFromWindow(renderer, e.motion.x, e.motion.y, &rx, &ry);
+                menu_hover(rx, ry);
+            }
+            break;
+        case SDL_EVENT_RENDER_DEVICE_RESET:                /* every texture lost (phones): made again */
+            if (menu_tex) SDL_DestroyTexture(menu_tex);
+            if (texture) SDL_DestroyTexture(texture);
+            if (depth_texture) SDL_DestroyTexture(depth_texture);
+            menu_tex = texture = depth_texture = NULL;
+            menu_tex_w = tex_w = depth_tex_w = 0;
+            break;
         case SDL_EVENT_FINGER_DOWN:
         case SDL_EVENT_FINGER_MOTION:
         case SDL_EVENT_FINGER_UP:
@@ -1284,11 +1636,67 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
                    pressed & (PAD_C | PAD_START), pressed & PAD_B);
 }
 
+/* testing: --menu-script STEPS, one step per pass of the menu's loop: a key
+ * by SDL name ("Down", "Tab", "Shift+Tab", "Return", "Escape"), click:X:Y and
+ * move:X:Y (render pixels), pad:BUTTON (SDL's name, e.g. rightshoulder),
+ * shot:FILE.bmp; then the program ends */
+static void menu_script_step(void) {
+    static const char *p;
+    static char shot_path[300];
+    if (!p) p = test_menu_script;
+    if (!*p) quit(0);
+    char tok[300];
+    size_t n = strcspn(p, ",");
+    snprintf(tok, sizeof tok, "%.*s", (int)n, p);
+    p += n + (p[n] == ',');
+    SDL_Event e;
+    SDL_zero(e);
+    float x, y;
+    if (!strncmp(tok, "shot:", 5)) {
+        snprintf(shot_path, sizeof shot_path, "%s", tok + 5);
+        test_shot = shot_path;
+    } else if (sscanf(tok, "click:%f:%f", &x, &y) == 2) {
+        e.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        e.button.button = SDL_BUTTON_LEFT;
+        e.button.down = true;
+        e.button.windowID = SDL_GetWindowID(window);
+        SDL_RenderCoordinatesToWindow(renderer, x, y, &e.button.x, &e.button.y);
+        SDL_PushEvent(&e);
+    } else if (sscanf(tok, "move:%f:%f", &x, &y) == 2) {
+        e.type = SDL_EVENT_MOUSE_MOTION;
+        e.motion.windowID = SDL_GetWindowID(window);
+        SDL_RenderCoordinatesToWindow(renderer, x, y, &e.motion.x, &e.motion.y);
+        SDL_PushEvent(&e);
+    } else if (!strncmp(tok, "pad:", 4)) {             /* a gamepad button by SDL name (with --test-rumble's pad) */
+        e.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+        e.gbutton.which = pad ? SDL_GetGamepadID(pad) : 0;
+        e.gbutton.button = (Uint8)SDL_GetGamepadButtonFromString(tok + 4);
+        e.gbutton.down = true;
+        SDL_PushEvent(&e);
+    } else {
+        int shift = !strncmp(tok, "Shift+", 6);
+        SDL_Scancode sc = SDL_GetScancodeFromName(shift ? tok + 6 : tok);
+        e.type = SDL_EVENT_KEY_DOWN;
+        e.key.scancode = sc;
+        e.key.key = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);
+        e.key.mod = shift ? SDL_KMOD_LSHIFT : SDL_KMOD_NONE;
+        e.key.down = true;
+        e.key.windowID = SDL_GetWindowID(window);
+        if (sc == SDL_SCANCODE_UNKNOWN) SDL_Log("menu script: no key %s", tok);
+        else SDL_PushEvent(&e);
+    }
+}
+
 void platform_frame(const uint32_t *pixels, int w, int h) {
     handle_events(pixels, w, h);
     if (test_menu_frame && frame_count == test_menu_frame) {
         menu_open();
-        if (test_menu_settings) { menu_screen = MENU_SETTINGS; menu_sel = 1; }
+        menu_opened = 0;                                 /* no fade: a capture shows it at once */
+        if (test_menu_settings) {
+            menu_screen = MENU_SETTINGS;
+            menu_page = test_menu_page >= 0 && test_menu_page < N_PAGES ? test_menu_page : 0;
+            menu_sel = test_menu_row >= -1 && test_menu_row < page_now()->n ? test_menu_row : 0;
+        }
     }
     if (paused || menu_is_open()) rumble_off();          /* the game holds: so does the rumble */
     while (paused || menu_is_open()) {                   /* F10 or the menu: hold here, keep the window alive */
@@ -1297,6 +1705,7 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         rumble_output();                                 /* the Rumble setting's sample */
         SDL_Delay(16);
         handle_events(pixels, w, h);
+        if (test_menu_script && menu_is_open()) menu_script_step();
         next_deadline = SDL_GetTicksNS();
     }
     holding = 0;
@@ -1398,15 +1807,24 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--rom") && i + 1 < argc) rom_arg = argv[++i];
         else if (!strcmp(argv[i], "--save") && i + 1 < argc) save_arg = argv[++i];
-        /* testing: --menu F[:settings] opens the system menu at frame F;
-         * --capture F:FILE.bmp saves the rendered window at frame F and exits
-         * (run with SDL_VIDEO_DRIVER=offscreen to keep it off the screen);
+        /* testing: --menu F[:settings[:PAGE[:ROW]]] opens the system menu at
+         * frame F (Settings on that page, that row highlighted; -1 the page
+         * bar); --capture F:FILE.bmp saves the rendered window at frame F and
+         * exits (run with SDL_VIDEO_DRIVER=offscreen to keep it off the screen);
          * --test-keys F:KEYS:N,... holds keys by frame; --test-click F:X,Y
          * clicks the frame's pixel (X, Y) through the window, as a mouse would */
         else if (!strcmp(argv[i], "--menu") && i + 1 < argc) {
             char *e;
             test_menu_frame = strtoull(argv[++i], &e, 10);
             test_menu_settings = *e == ':';
+            const char *p = test_menu_settings ? strchr(e + 1, ':') : NULL;
+            if (p) {
+                test_menu_page = atoi(p + 1);
+                p = strchr(p + 1, ':');
+                if (p) test_menu_row = atoi(p + 1);
+            }
+        } else if (!strcmp(argv[i], "--menu-script") && i + 1 < argc) {   /* with --menu: see menu_script_step */
+            test_menu_script = argv[++i];
         } else if (!strcmp(argv[i], "--capture") && i + 1 < argc) {
             char *e;
             test_capture_frame = strtoull(argv[++i], &e, 10);

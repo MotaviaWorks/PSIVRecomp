@@ -14,6 +14,9 @@ typedef struct { int w, h; uint8_t *rgba; } UiImage;
 
 /* colours are 0xRRGGBB; alpha 0-255 */
 void  ui_blend(uint32_t *dst, uint32_t rgb, int alpha);
+/* on: draw into a transparent buffer (cleared to 0) for an overlay -- shapes
+ * and text keep straight alpha; off (the default): over an opaque image */
+void  ui_set_straight_alpha(int on);
 void  ui_round_rect(const UiCanvas *cv, float x0, float y0, float x1, float y1, float r, uint32_t rgb, int alpha);
 /* a vertical gradient from top to bottom colour */
 void  ui_round_rect_v(const UiCanvas *cv, float x0, float y0, float x1, float y1, float r,
