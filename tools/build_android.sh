@@ -25,7 +25,13 @@ MIN_API=24
 TARGET_API=35
 ABIS=${ABIS:-arm64-v8a}
 VERSION=${PSIV_VERSION:-0.1.0-alpha+$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo local)}
-VERSION_CODE=${VERSION_CODE:-$(date -u +%y%m%d%H)}
+# versionCode: the hour (yymmddHH), but always above the last build made in
+# OUT_DIR -- two builds within an hour mustn't share one
+if [ -z "${VERSION_CODE:-}" ]; then
+  VERSION_CODE=$(date -u +%y%m%d%H)
+  LAST=$(cat "$OUT/last-version-code" 2>/dev/null || echo 0)
+  [ "$VERSION_CODE" -gt "$LAST" ] || VERSION_CODE=$((LAST + 1))
+fi
 KEYSTORE=${KEYSTORE:-$HOME/.psiv-keys/psiv-alpha.jks}
 PASS=${KEYSTORE%.jks}.pass
 TOOLCHAIN=$NDK/build/cmake/android.toolchain.cmake
@@ -97,4 +103,5 @@ APK=$OUT/psiv-recomp-$VERSION_CODE.apk
 "$BT/apksigner" sign --ks "$KEYSTORE" --ks-pass "file:$PASS" --ks-key-alias psiv --out "$APK" "$OUT/aligned.apk"
 "$BT/apksigner" verify --verbose "$APK" | grep -E "Verified using|Number of signers" || true
 "$BT/aapt2" dump badging "$APK" | grep -E "^package:|^sdkVersion|^targetSdkVersion|^native-code|^application-label:"
+echo "$VERSION_CODE" > "$OUT/last-version-code"
 ls -la "$APK"
