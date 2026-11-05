@@ -244,6 +244,45 @@ crash are synthesized; 7 (a pitched instrument, Ryucross Field), 8 (a voice),
   delay; a MIDI export of the decoded notes (for remixing); a "your bank"
   mode (an SF2 or samples you provide, like the sound effects).
 
+## First-person dungeons (PsiLok, 2026-11-04) -- v1 (`runtime/fpview.c`)
+From Gen1Recomp's 3D mode and Phantasy Star I's mazes: the dungeons in
+first person, from the game's own tiles, and their battles fought there.
+- **The map, live from RAM:** Map_Layout_FG/BG ($FFA000/$FFB000, a byte per
+  32x32 chunk, rows of Map_Row_Size+1), Chunk_Table ($FF6000, 4x4 name-table
+  words per chunk, bit 14 = collision); $FFEC24 picks the layer walked on.
+  A 16x16 cell's collision is GetChunkAndCollision's (bit 14 of its four
+  words; 8 solid). Every visible tile matched VRAM (1,120/1,120 per plane).
+  The leader is Character_1 ($FFC000): x +$30, y +$34 (stands on y+16),
+  facing +6. Colours: the tile patterns in VRAM and CRAM, so fades and
+  animated tiles carry over; palette lines are voted from what the game drew.
+- **The look:** a raycaster on the 16x16 grid (66 degrees, walls 2 cells,
+  eye 0.9). A face the game draws (a wall over a floor, seen from the south)
+  takes its own art: the stack of cells above where it meets the floor; the
+  other faces take the front of their own wall (found below them), else the
+  map's commonest 2-cell front. The floor is the map in perspective; the
+  ceiling dark; distance shading. Drawn at up to 2x, ~6 ms a frame.
+- **Gotchas:** a window saves the plane mappings it covers over the chunk
+  table ($FFEC98, the end of what is saved, is $6040 when none is open): the
+  table is kept from frames with no window. The game's windows are found as
+  plane A cells that differ from the map they hold (the plane is a 64x32 ring
+  of the map; the pixel -> cell mapping from the VDP's own scroll, as the
+  camera variables lag a frame), keeping groups with window art (tile $55C
+  up: text $580-$5FF, portraits, frames $6E9+); the temple's sparkles ($17F)
+  and the Plate System's platform ($1CE-$1D4, drawn on plane A) are map art.
+- **Battles:** the last field view is kept (the battle loads its own tiles);
+  in the battle the backdrop (plane B) and the party's cells ($180-$27F) show
+  it, enemies, sprites and effects stay in front; the battle menus' aura is
+  off (the party isn't in the picture).
+- **Controls (the app):** relative, each held key latched to the direction it
+  meant when pressed (so a held "left" turns once and walks on); untouched
+  while a window is open. The headless and replays get the game's own input.
+- **Dungeon list:** by map name (FieldMapPtrs): caves, towers, forts, plants,
+  mazes, the Air Castle, Kuran, Garuberk...; towns and houses excluded.
+- **Next:** sprites (people, chests, enemies on the map) as billboards from
+  the sprite table; plane-A props; doors that change on screen; turning in
+  place (the game can't: a turn is a step); a minimap; ceilings from map art;
+  a cheaper render mode.
+
 ### Your own music (PsiLok, 2026-11-04) -- v1 done (`runtime/music.c`)
 PsiLok's Meet Them Head-On rearrangement as a bonus without shipping it (it is
 a derivative of Sega's composition): players put their own files in

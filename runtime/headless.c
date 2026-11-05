@@ -38,6 +38,7 @@
  *     --algol            the music on Algol, the port's modern sound chip (algol.h)
  *     --algol-bank ROM   with the instruments of a SNES game you own (snesbank.h)
  *     --custom-music DIR your own music files in place of the game's songs (music.h)
+ *     --fpview S         first-person dungeons (fpview.h); shots at S x
  *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
  *                        (next to the trace, or build/bizhawk/port.*)
  *
@@ -52,6 +53,7 @@
 #include "battleui.h"
 #include "algol.h"
 #include "music.h"
+#include "fpview.h"
 #include "sfx.h"
 #include "frame.h"
 #include "m68k.h"
@@ -150,7 +152,7 @@ static void save_png(const char *path, const uint32_t *px, int w, int h) {
 
 /* --depth L[:S]: battle depth at level L; screenshots of battle frames show
  * it, composed at S times the game's resolution (default 2) */
-static int depth_scale, depth_active, text_scale = 3, panels_on, out_w;
+static int depth_scale, depth_active, text_scale = 3, panels_on, out_w, fp_scale;
 static uint64_t shot_from, shot_to;              /* --shot-range F1-F2 */
 static uint32_t depth_buf[VDP_MAX_W * 4 * VDP_MAX_H * 4];
 
@@ -648,7 +650,7 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
     uint64_t when = (movie || replay) ? logical : f;
     int fresh = !movie || frame_vint_will_fire();      /* a logical frame only counts once */
     /* battle depth and modern text: shots show what the player sees */
-    int hs = depth_scale ? depth_scale : text_scale;
+    int hs = depth_scale ? depth_scale : fp_scale ? fp_scale : text_scale;
     if (fresh) {
         int pm = panels_on && frame_wide_margin > 0 && width == 320 && panels_field() ? frame_wide_margin : 0;
         int hires = 0;
@@ -661,7 +663,8 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
             panels_draw(depth_buf, out_w * hs, hs, pm, width, height);
             hires = 1;
         } else {
-            hires = depth_scale ? depth_compose(frame_lines, width, height, depth_buf, width * hs, hs) : 0;
+            hires = fpview_compose(frame_lines, pixels, width, height, depth_buf, width * hs, hs)
+                    || (depth_scale ? depth_compose(frame_lines, width, height, depth_buf, width * hs, hs) : 0);
             if (hdtext_enabled() && hdtext_has_text(frame_lines, width, height)) {
                 if (!hires) hdtext_upscale(pixels, VDP_MAX_W, width, height, depth_buf, width * hs, hs);
                 hdtext_draw(frame_lines, width, height, depth_buf, width * hs, hs);
@@ -822,6 +825,11 @@ int main(int argc, char **argv) {
             if (depth_scale > 4) depth_scale = 4;
         } else if (!strcmp(argv[i], "--algol")) {
             algol_set_enabled(1);                          /* the music on the modern chip */
+        } else if (!strcmp(argv[i], "--fpview") && i + 1 < argc) {
+            fpview_set_enabled(1);                         /* first-person dungeons (fpview.h) */
+            fp_scale = atoi(argv[++i]);
+            if (fp_scale < 1) fp_scale = 1;
+            if (fp_scale > 4) fp_scale = 4;
         } else if (!strcmp(argv[i], "--custom-music") && i + 1 < argc) {
             music_set_folder(argv[++i]);                   /* your own music files (music.h) */
         } else if (!strcmp(argv[i], "--algol-bank") && i + 1 < argc) {

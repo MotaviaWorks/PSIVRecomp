@@ -26,6 +26,7 @@
 #include "battleui.h"
 #include "algol.h"
 #include "music.h"
+#include "fpview.h"
 #include "sfx.h"
 #include "diag.h"
 #include "frame.h"
@@ -116,6 +117,7 @@ static Setting settings[] = {
     {"enhance.text_font", "C:/Windows/Fonts/segoeui.ttf", "TrueType/OpenType font for modern text"},
     {"enhance.sfx", "modern", "sound effects: modern = the port's own, synthesized; custom = your samples, mapped in sfx/sfx.ini (the rest modern); original = the game's own"},
     {"enhance.music", "original", "music: algol = the port's modern sound chip plays the game's music (new instruments, drums and reverb); original = the YM2612 and PSG"},
+    {"enhance.first_person", "off", "dungeons: first_person = seen from the leader's eyes, like Phantasy Star I's mazes (up walks forward, left / right turn); off = the game's own view"},
     {"enhance.custom_music", "on", "your music: on = audio files in the music folder play in place of the game's songs (music/8F.wav, or named in music/music.ini; see runtime/music.h); off = the game's"},
     {"enhance.music_bank", "", "with Algol: a SNES game you own whose instruments play the music instead of Algol's (the path to its ROM, e.g. Lufia II); empty = Algol's own"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
@@ -442,7 +444,7 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     int ow, oh;
     SDL_GetRenderOutputSize(renderer, &ow, &oh);
     /* side panels: exploration keeps its 320 view, the margins show the party */
-    int pm = panels_on && frame_wide_margin > 0 && w == 320 && panels_field() ? frame_wide_margin : 0;
+    int pm = !fpview_active() && panels_on && frame_wide_margin > 0 && w == 320 && panels_field() ? frame_wide_margin : 0;
     int fw = w + 2 * pm;                                 /* the picture's width in game pixels */
     /* pixel aspect: square, or the 4:3 TV shape (the mode's 320x224 pixels
      * are ~0.93 wide), whatever the picture's width */
@@ -464,7 +466,8 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
             panels_draw(depth_pixels, stride, ds, pm, w, h);
             depth_shown = 1;
         } else {
-            depth_shown = depth_compose(frame_lines, w, h, depth_pixels, stride, ds);
+            depth_shown = fpview_compose(frame_lines, pixels, w, h, depth_pixels, stride, ds)   /* first-person dungeons */
+                       || depth_compose(frame_lines, w, h, depth_pixels, stride, ds);
             if (hdtext_enabled() && hdtext_has_text(frame_lines, w, h)) {    /* modern text */
                 if (!depth_shown) hdtext_upscale(pixels, VDP_MAX_W, w, h, depth_pixels, stride, ds);
                 hdtext_draw(frame_lines, w, h, depth_pixels, stride, ds);
@@ -588,6 +591,7 @@ static void apply_enhancements(void) {
     hdtext_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.text"), "original") != 0);
     battleui_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_ui"), "original") != 0);
     algol_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.music"), "algol"));
+    fpview_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.first_person"), "first_person"));
     /* your own music files (music.h), from the music folder */
     {
         char dir[1100];
@@ -639,6 +643,7 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Battle fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Music", "enhance.music", {"original", "algol"}, {"Original chip", "Algol (modern)"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Dungeons", "enhance.first_person", {"off", "first_person"}, {"Top-down", "First person"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Your music", "enhance.custom_music", {"on", "off"}, {"On (music folder)", "Off"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Sound effects", "enhance.sfx", {"modern", "custom", "original"}, {"Modern", "Your samples", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
@@ -871,7 +876,7 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         handle_events(pixels, w, h);
         next_deadline = SDL_GetTicksNS();
     }
-    bus_pad[0] = read_input();
+    bus_pad[0] = fpview_remap_pad(read_input());      /* first person: the d-pad turns with the view */
     if (input_hold) {
         if (bus_pad[0]) bus_pad[0] = 0;
         else input_hold = 0;

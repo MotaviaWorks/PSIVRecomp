@@ -95,6 +95,20 @@ original game, unchanged; **Enhanced** turns on the additions:
   them); `psiv_headless --algol-bank ROM` renders with it. Adding a game
   means finding how it stores its samples: `tools/snes/sound_ram.py`.
 
+- **Dungeons** (top-down / first person): the dungeons seen from the
+  leader's eyes, like the mazes of Phantasy Star I, built live from the
+  game's own map and tiles (`runtime/fpview.c`): the walls are its solid
+  cells faced with the wall fronts it draws in its 3/4 view, the floor is the
+  map itself in perspective, and its palettes and animations carry over.
+  Up walks forward, left / right turn that way, down turns back (each held
+  key keeps its direction); menus and dialogue are drawn on top and take the
+  pad as usual. A battle that starts there is fought in that view: the
+  corridor behind the enemies, the party seen through the battle menus.
+  Towns and the planets' surfaces keep the game's view. Not yet: people and
+  objects the game draws as sprites (or as plane-A props), doors that only
+  change on screen. `psiv_headless --fpview S` takes shots of it.
+  Inspired by Gen1Recomp's 3D mode.
+
 - **Your music** (on / off): audio files of your own -- a remix, say -- play
   in place of the game's songs. Put WAVs (16/24-bit or float, any rate) in
   `music/` (git-ignored), named by the song's ID: `music/8F.wav` for Meet

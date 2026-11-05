@@ -3,6 +3,7 @@
  */
 #include "battleui.h"
 #include "battledesc.h"
+#include "fpview.h"
 #include "depth.h"
 #include "frame.h"
 #include "hdtext.h"
@@ -1195,8 +1196,9 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     static float hud_in;
     hud_in = ncards ? fminf(1.0f, hud_in + 0.1f) : 0.0f;
 
-    /* the aura: gold on the member choosing, cyan on an ally being targeted */
-    {
+    /* the aura: gold on the member choosing, cyan on an ally being targeted
+     * (not in a first-person battle: the party is not in the picture) */
+    if (!fpview_in_battle()) {
         int actor_k = choosing(menu) && fighter < 5 && (restore >> fighter & 1) ? fighter : -1, target_k = -1;
         for (int k = 0; k < 5 && target_id >= 0; k++)
             if (fighter_char(k) == target_id && (restore >> k & 1)) target_k = k;
