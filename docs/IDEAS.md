@@ -53,6 +53,23 @@ An overlay menu on Esc (quitting moves into it): resume, settings, quit.
   clicks use the rectangles the drawing recorded; the mouse highlights the
   line under it. Testing: `psiv --menu F:settings:PAGE:ROW` and
   `--menu-script` (keys, clicks, hover, gamepad buttons, shots).
+- **The launcher (PsiLok, 2026-11-05: "when launching the app it presents as a
+  launcher with start game, settings, a toggle for classic or enhanced"):**
+  the app opens on Start game / Mode (a two-way switch) / Settings / Quit
+  before the game boots, over a field of drifting, twinkling stars (the
+  brightest with four points) under the emblem: the icon's star from
+  make_icon.py's formula (|x/a|^0.46 + |y/b|^0.46 < 1, white heart to gold
+  tips, two sparkles), supersampled at the window's size, with a breathing
+  halo. A line under the choices says what the highlighted one means (the
+  ROM's state for Start game). The ROM is looked for quietly at startup;
+  Start game asks for it if need be, and a cancelled picker returns to the
+  launcher. Settings from the launcher come back to it. Touch is all taps
+  there (`touch_suspend`); the left stick steers every menu now; F11 works
+  in menus. `--play` skips it.
+- **Next:** a "Return to the launcher" in the pause menu needs the game
+  restarted from scratch (its state lives in the recompiled code's C stack):
+  a longjmp out of `m68k_call` and everything re-initialised -- possible,
+  not done.
 
 ## Widescreen side panels (PsiLok, 2026-11-03) -- v1 done
 In exploration, use the 16:9 margins as frames with party info instead of

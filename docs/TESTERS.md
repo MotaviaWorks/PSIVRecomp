@@ -15,8 +15,9 @@ Your ROM
 - **Phantasy Star IV (USA)**, the Mega Drive / Genesis cartridge.
 - Any of these work: a raw dump (`.bin`, `.md`, `.gen`), an `.smd` copier dump,
   or the `.zip` it came in.
-- The first time you start the game it asks for the file. You can also put the
-  file into the game's folder before you start, and it gets picked up there.
+- The app opens on a launcher. The first time, **Start game** asks for the
+  file. You can also put the file into the game's folder before you start,
+  and it gets picked up there.
 - It's checked (SHA-256 `511f35cc11f88316...`) and kept as `rom/psiv.bin`
   next to your saves, so it's only asked for once.
 - Other releases (Japanese, Brazilian), hacks and translations are refused:
@@ -39,7 +40,8 @@ folder. Start `psiv` once, then add it to Steam as a Non-Steam Game.
 
 **Android (64-bit ARM, Android 7 or newer)**
 Install the `.apk`; your browser or file manager will ask you to allow installs
-from it. On first start, pick your ROM in the file picker (the `.zip` is fine).
+from it. The first time you choose Start game, pick your ROM in the file
+picker (the `.zip` is fine).
 Phones get an on-screen pad. Handhelds with built-in controls (Odin, Retroid and
 the like) start without one; touch the screen to bring it up.
 
@@ -58,7 +60,9 @@ Controls
 | Touch | the on-screen pad; tap like a mouse click; the ≡ button = menu |
 | Android | Back = menu |
 
-Settings live in the menu (Esc, Select, Back or ≡), on five pages: Game,
+The launcher has **Start game**, the switch between **Enhanced** (the port's
+additions) and **Classic** (the original game, unchanged), **Settings** and
+**Quit**. In the game, Settings are in the menu too (Esc, Select, Back or ≡), on five pages: Game,
 Display, Sound, Battles and Controls. Turn pages with the shoulder buttons,
 Tab, or a tap on a page's name; the line at the bottom says what the
 highlighted setting does. **Mode: Classic** (on the Game page) switches every

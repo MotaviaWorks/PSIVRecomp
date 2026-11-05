@@ -23,6 +23,7 @@ uint8_t touch_pad(void);                   /* PAD_* bits held on the on-screen p
 int     touch_take_menu(void);             /* 1 once after the menu button was pressed */
 int     touch_visible(void);
 void    touch_hide(void);                  /* a gamepad or the keyboard took over */
+void    touch_suspend(int on);             /* on: no pad, every touch a tap (the launcher) */
 void    touch_draw(SDL_Renderer *r, int ow, int oh);
 
 #endif

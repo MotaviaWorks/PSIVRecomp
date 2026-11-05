@@ -47,8 +47,17 @@ is committed in `res/fonts/` with its licence.
 | Linux, portable | SDL3 built static from source, then `-DPSIV_PORTABLE=ON -DPSIV_TOOLS=OFF -DCMAKE_PREFIX_PATH=<its prefix>` | `python3 tools/package.py linux <build> dist` |
 | Android | `tools/build_android.sh <SDL3 source>` on Linux (SDK, NDK r30, build-tools 36, JDK 17; no Gradle) | the `.apk` it makes |
 
+- **The launcher:** the app opens on it -- Start game, the mode (Enhanced /
+  Classic, a switch), Settings (the same five pages as in the game), Quit --
+  over a drifting field of stars under the port's emblem, the icon's
+  four-point star drawn at full size from the same shape (`launcher()` in
+  `runtime/main_sdl.c`). The game boots only when Start game is chosen.
+  `psiv --play` skips it (for frontends and shortcuts); the game-frame
+  testing hooks (`--menu`, `--test-keys`, `--test-click`, `--test-rumble`,
+  `--capture`) skip it too, unless a `--menu-script` drives the launcher.
 - **First run:** with no `rom/psiv.bin`, a dump in the home folder or `rom/`
-  installs itself, else a file dialog asks for it (Android: the system picker).
+  installs itself at startup; otherwise Start game asks for it in a file
+  dialog (Android: the system picker), and cancelling returns to the launcher.
   `.smd`, raw, or either inside a `.zip` (`runtime/unzip.c`); checked by
   SHA-256 and kept as `rom/psiv.bin`. Testing hooks: `--test-pick FILE`
   answers the dialog, `--no-dialogs` sends message boxes to the log.
@@ -76,6 +85,8 @@ is committed in `res/fonts/` with its licence.
 | A / B / C | Z / X / C | West / South / East |
 | Start | Enter | Start |
 
+The app opens on the launcher: Start game, Enhanced or Classic, Settings,
+Quit (arrows or the stick, Enter or C; Left / Right flips the mode).
 Hold Tab to fast-forward, F10 pause, F11 fullscreen, F12 screenshot
 (`screenshots/`). **Esc** (or the pad's Back/Select) opens the system menu:
 resume, settings, quit. Settings are on five pages -- Game, Display, Sound,

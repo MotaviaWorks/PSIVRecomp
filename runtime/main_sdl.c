@@ -2,7 +2,10 @@
  * SDL3 front end: window, input, audio, 60 Hz pacing, battery saves,
  * settings, crash and hang reports.
  *
- *   psiv [--rom PATH] [--save FILE]
+ *   psiv [--rom PATH] [--save FILE] [--play]
+ *
+ * It opens on the launcher -- Start game, Enhanced or Classic, Settings,
+ * Quit -- unless --play: straight into the game.
  *
  * Files live in the "home" folder:
  *   - the folder holding the program, when it can be written to (the Windows
@@ -610,6 +613,38 @@ static int pick_rom(uint8_t *rom, uint32_t *size) {
     return 1;
 }
 
+/* The ROM the game will run: looked for quietly at the start (the installed
+ * copy, or a dump dropped in the folder), asked for when the game starts. */
+static uint8_t rom_buf[0x400000];
+static uint32_t rom_size;
+static int rom_ready;                      /* verified and in rom_buf */
+static char rom_problem[1500];             /* why the installed one (or --rom) can't be used */
+static const char *rom_arg;                /* --rom PATH */
+
+static void rom_look(void) {
+    char path[1100];
+    if (rom_arg) snprintf(path, sizeof path, "%s", rom_arg);
+    else path_in_home(path, sizeof path, "rom/psiv.bin");
+    if (read_rom(path, rom_buf, &rom_size, rom_problem, sizeof rom_problem)) { rom_ready = 1; return; }
+    if (!rom_arg && !file_exists(path)) rom_problem[0] = 0;          /* just not installed yet */
+    if (!rom_arg && find_rom_nearby(rom_buf, &rom_size)) {           /* dropped in the folder */
+        install_rom(rom_buf, rom_size);
+        rom_ready = 1;
+        rom_problem[0] = 0;
+    }
+}
+
+/* the game is about to start: 1 with a ROM -- what was wrong with the one
+ * found, then the file dialog, if need be; 0 if none was chosen */
+static int rom_ensure(void) {
+    if (rom_ready) return 1;
+    if (rom_problem[0]) message(SDL_MESSAGEBOX_ERROR, rom_problem, window);
+    if (!pick_rom(rom_buf, &rom_size)) return 0;
+    rom_ready = 1;
+    rom_problem[0] = 0;
+    return 1;
+}
+
 /* ------------------------------------------------------------------ video */
 static void screenshot_any(const uint32_t *pixels, int w, int h, int stride) {
     char dir[1100], path[1200];
@@ -681,6 +716,18 @@ static void draw_walk_marker(const SDL_FRect *dst, int fw, int pm, int w, int h)
         else SDL_SetRenderDrawColor(renderer, 0x40, 0x28, 0x00, 255);
         SDL_RenderLines(renderer, p, 5);
     }
+}
+
+/* testing: --capture's picture (then the end), or a --menu-script shot:, of
+ * what's about to be shown */
+static void test_shots(void) {
+    if (!(test_capture_path && frame_count >= test_capture_frame) && !test_shot) return;
+    const char *path = test_shot ? test_shot : test_capture_path;
+    SDL_Surface *shot = SDL_RenderReadPixels(renderer, NULL);
+    if (shot) { SDL_SaveBMP(shot, path); SDL_DestroySurface(shot); }
+    SDL_Log("captured %s", path);
+    if (!test_shot) quit(0);
+    test_shot = NULL;
 }
 
 static void present(const uint32_t *pixels, int w, int h, int compose) {
@@ -759,14 +806,7 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     draw_walk_marker(&dst, fw, pm, w, h);
     touch_draw(renderer, ow, oh);                        /* the on-screen pad, when touch is in use */
     if (menu_is_open()) menu_draw();
-    if ((test_capture_path && frame_count >= test_capture_frame) || test_shot) {
-        const char *path = test_shot ? test_shot : test_capture_path;
-        SDL_Surface *shot = SDL_RenderReadPixels(renderer, NULL);
-        if (shot) { SDL_SaveBMP(shot, path); SDL_DestroySurface(shot); }
-        SDL_Log("captured %s", path);
-        if (!test_shot) quit(0);
-        test_shot = NULL;
-    }
+    test_shots();
     SDL_RenderPresent(renderer);
 }
 
@@ -973,8 +1013,13 @@ static const char *const MAIN_LABELS[] = {"Resume", "Settings", "Quit game"};
 #define N_MAIN 3
 static const char *const CLASSIC_NOTE = "Off in Classic mode. Set Mode to Enhanced, on the Game page, to use it.";
 
-enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT };
+enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT, MENU_LAUNCHER };
 static int menu_screen, menu_sel;     /* in Settings, -1 = the page bar */
+static int in_launcher;               /* the launcher is up: the game hasn't started */
+static int launcher_go;               /* its Start game was chosen */
+static const char *const LAUNCHER_LABELS[] = {"Start game", "Mode", "Settings", "Quit"};
+enum { L_START, L_MODE, L_SETTINGS, L_QUIT, N_LAUNCHER };
+#define MODE_ITEM (&GAME_ITEMS[0])    /* Classic / Enhanced */
 static int menu_page;                 /* the settings page (kept while the game runs) */
 static uint64_t menu_opened;          /* when it opened (it fades in); 0 = at once */
 static int menu_last_pad;             /* the last press was a gamepad's: the hints name its buttons */
@@ -1023,7 +1068,11 @@ static void item_change(const MenuItem *it, int dir) {
  * the key that closed it (Enter = Start) doesn't also reach the game */
 static int input_hold;
 static void menu_open(void) { menu_screen = MENU_MAIN; menu_sel = 0; menu_opened = SDL_GetTicks(); }
-static void menu_close(void) { menu_screen = MENU_CLOSED; input_hold = 1; }
+static void menu_close(void) {
+    if (in_launcher) { menu_screen = MENU_LAUNCHER; return; }   /* it stays until Start game */
+    menu_screen = MENU_CLOSED;
+    input_hold = 1;
+}
 static int menu_is_open(void) { return menu_screen != MENU_CLOSED; }
 
 static const MenuPage *page_now(void) { return &PAGES[menu_page]; }
@@ -1038,8 +1087,22 @@ static void menu_turn_page(int dir) {
 /* one key or button press while the menu is open */
 static void menu_input(int up, int down, int left, int right, int ok, int back) {
     if (back) {
-        if (menu_screen == MENU_MAIN) menu_close();
+        if (menu_screen == MENU_LAUNCHER) menu_sel = L_QUIT;
+        else if (menu_screen == MENU_MAIN) menu_close();
+        else if (menu_screen == MENU_SETTINGS && in_launcher) { menu_screen = MENU_LAUNCHER; menu_sel = L_SETTINGS; }
         else { menu_sel = menu_screen == MENU_SETTINGS ? 1 : 2; menu_screen = MENU_MAIN; }
+        return;
+    }
+    if (menu_screen == MENU_LAUNCHER) {
+        if (up) menu_sel = (menu_sel + N_LAUNCHER - 1) % N_LAUNCHER;
+        if (down) menu_sel = (menu_sel + 1) % N_LAUNCHER;
+        if ((left || right) && menu_sel == L_MODE) item_change(MODE_ITEM, right ? 1 : -1);
+        if (ok) {
+            if (menu_sel == L_START) launcher_go = 1;
+            else if (menu_sel == L_MODE) item_change(MODE_ITEM, 1);
+            else if (menu_sel == L_SETTINGS) { menu_screen = MENU_SETTINGS; menu_sel = 0; }
+            else quit(0);
+        }
         return;
     }
     if (menu_screen == MENU_SETTINGS) {               /* the page bar sits above the first setting */
@@ -1091,10 +1154,17 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
 #define C_HINT      0x8C9CC8
 
 typedef struct { float x0, y0, x1, y1; int kind, index; } MenuHit;   /* render pixels */
-enum { HIT_ROW, HIT_STEP_BACK, HIT_PAGE, HIT_BACK };
+enum { HIT_ROW, HIT_STEP_BACK, HIT_PAGE, HIT_BACK, HIT_MODE };
+/* the launcher fills the window: units of 1/224 of its height (narrow windows:
+ * 1/300 of the width), its content in a 224-tall column in the middle; the
+ * emblem (drawn under it, launcher_backdrop) is centred this far down */
+#define LAUNCH_EMBLEM_Y 47.0f
+static float launch_scale(int ow, int oh) { return fminf((float)oh / 224.0f, (float)ow / 300.0f); }
 static MenuHit menu_hits[24];
 static int n_menu_hits;
 static SDL_FRect menu_panel;                     /* where the panel is, render pixels */
+static SDL_Texture *emblem_tex, *halo_tex;       /* the launcher's emblem (emblem_make) */
+static int emblem_n;
 static SDL_Texture *menu_tex;
 static uint32_t *menu_buf;
 static int menu_tex_w, menu_tex_h;
@@ -1143,8 +1213,9 @@ static void m_text(float x, float base, float cap, const char *s, uint32_t c, in
     SDL_RenderDebugText(renderer, (m_ox + x * m_S) / k, (m_oy + base * m_S) / k - 7.0f, s);
     SDL_SetRenderScale(renderer, 1, 1);
 }
-/* word-wrapped to `width`, at most `lines` lines */
-static void m_wrap(float x, float base, float width, float line_h, int lines, float cap, const char *s, uint32_t c) {
+/* word-wrapped to `width` from x, at most `lines` lines; centre: each line centred in the width */
+static void m_wrap(float x, float base, float width, float line_h, int lines, float cap, const char *s, uint32_t c,
+                   int centre) {
     char line[256];
     while (*s && lines-- > 0) {
         while (*s == ' ') s++;
@@ -1162,7 +1233,7 @@ static void m_wrap(float x, float base, float width, float line_h, int lines, fl
         if (!fit) break;
         memcpy(line, s, (size_t)fit);
         line[fit] = 0;
-        m_text(x, base, cap, line, c, 0);
+        m_text(centre ? x + width / 2 : x, base, cap, line, c, centre ? 2 : 0);
         s += fit;
         base += line_h;
     }
@@ -1210,7 +1281,11 @@ static const char *pad_shoulder_names(void) {
 static void menu_hint(char *out, size_t n) {
     const char *sep = m_ttf ? "   \xC2\xB7   " : "   ";
     int settings_screen = menu_screen == MENU_SETTINGS;
-    if (touch_visible())
+    if (menu_screen == MENU_LAUNCHER) {
+        if (touch_visible()) snprintf(out, n, "Tap to choose");
+        else snprintf(out, n, "%s select%sLeft / Right switch the mode",
+                      menu_last_pad && pad ? pad_button_name(pad_of[IN_C]) : "Enter", sep);
+    } else if (touch_visible())
         snprintf(out, n, "%s%sTap outside to go back", settings_screen ? "Tap a setting to change it" : "Tap to choose", sep);
     else if (menu_last_pad && pad) {
         if (settings_screen)
@@ -1281,13 +1356,66 @@ static void draw_settings(float W, float H, const char *hint) {
     m_box(pad, 127.5f, W - pad, 128.0f, 0, C_RULE, C_RULE, 80);
     const char *about = menu_sel < 0 ? pg->about
                       : item_disabled(&pg->items[menu_sel]) ? CLASSIC_NOTE : pg->items[menu_sel].help;
-    m_wrap(pad + 2.0f, 138.0f, W - 2 * pad - 4.0f, 8.6f, 2, 4.0f, about, C_VALUE);
+    m_wrap(pad + 2.0f, 138.0f, W - 2 * pad - 4.0f, 8.6f, 2, 4.0f, about, C_VALUE, 0);
     m_text(pad + 2.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
+}
+
+/* the launcher: its title under the emblem, the choices, what the highlighted
+ * one means; the version and the hints in the corners */
+static void draw_launcher(float W, float H, const char *hint) {
+    float cx = W / 2.0f, oy = (H - 224.0f) / 2.0f;
+    m_text(cx, oy + 98.0f, 12.5f, "PSIV Recomp", C_GOLD, 2);
+    m_text(cx, oy + 108.5f, 4.2f, "A native port of Phantasy Star IV", C_SOFT, 2);
+
+    float pw = 158.0f, x0 = cx - pw / 2.0f, x1 = cx + pw / 2.0f, y0 = oy + 116.0f, row = 16.0f;
+    m_box(x0, y0, x1, y0 + 6.0f + row * N_LAUNCHER, 7.0f, C_PANEL_TOP, C_PANEL_LOW, 236);
+    m_frame(x0, y0, x1, y0 + 6.0f + row * N_LAUNCHER, 7.0f, C_RULE, 150);
+    int classic = classic_mode();
+    for (int i = 0; i < N_LAUNCHER; i++) {
+        float a = y0 + 3.0f + row * (float)i, b = a + row - 2.0f;
+        int sel = i == menu_sel;
+        if (sel) m_box(x0 + 3.0f, a, x1 - 3.0f, b, 7.0f, C_GOLD, C_GOLD_LOW, 255);
+        m_text(x0 + 11.0f, a + 9.6f, 5.2f, LAUNCHER_LABELS[i], sel ? C_INK : C_TEXT, 0);
+        if (i == L_MODE) {                           /* a two-way switch, the mode in force lit */
+            static const char *const MODES[2] = {"Enhanced", "Classic"};
+            float sw[2], sx1 = x1 - 8.0f, sh0 = a + 1.8f, sh1 = b - 1.8f;
+            for (int k = 0; k < 2; k++) sw[k] = m_width(MODES[k], 4.1f) + 10.0f;
+            float sx0 = sx1 - sw[0] - sw[1];
+            m_box(sx0, sh0, sx1, sh1, (sh1 - sh0) / 2, sel ? 0x6A4A12 : 0x101830, sel ? 0x5A3C0C : 0x0A1024, 200);
+            for (int k = 0; k < 2; k++) {
+                float s0 = k ? sx0 + sw[0] : sx0, s1 = s0 + sw[k];
+                int on = k == classic;
+                if (on) m_box(s0 + 0.6f, sh0 + 0.6f, s1 - 0.6f, sh1 - 0.6f, (sh1 - sh0) / 2 - 0.6f,
+                              sel ? 0xFFFFFF : C_GOLD, sel ? 0xF4F0E6 : C_GOLD_LOW, 255);
+                m_text((s0 + s1) / 2, a + 9.1f, 4.1f, MODES[k], on ? C_INK : sel ? 0xF2D8A0 : C_SOFT, 2);
+                m_hit(s0, a, s1, b, HIT_MODE, k);    /* before the row's: a tap here picks that mode */
+            }
+        }
+        m_hit(x0 + 3.0f, a, x1 - 3.0f, b, HIT_ROW, i);
+    }
+
+    const char *about =
+        menu_sel == L_START ? (rom_ready ? "Your Phantasy Star IV (USA), checked and ready."
+                               : rom_problem[0] ? "The ROM that's installed can't be used: Start game says why, then asks for another."
+                               : "Start game asks for your copy of Phantasy Star IV (USA): a .bin, .md, .gen or .smd file, or the .zip it came in.")
+        : menu_sel == L_MODE ? (classic ? "Classic: the original game, unchanged. Every addition is off."
+                                : "Enhanced: modern text and battle menus, widescreen, battle depth and effects, and the port's other additions.")
+        : menu_sel == L_SETTINGS ? "The display, sound, battles and controls, on five pages."
+        : "Leave the game.";
+    float ab = y0 + 6.0f + row * N_LAUNCHER + 9.5f;
+    m_wrap(cx - 95.0f, ab, 190.0f, 7.6f, 2, 3.8f, about, C_VALUE, 1);
+
+    m_text(6.0f, H - 5.0f, 3.2f, APP_NAME " " PSIV_VERSION, C_DIM, 0);
+    m_text(W - 6.0f, H - 5.0f, 3.4f, hint, C_HINT, 1);
 }
 
 static void menu_layout(float W, float H) {
     char hint[200];
     menu_hint(hint, sizeof hint);
+    if (menu_screen == MENU_LAUNCHER) {
+        draw_launcher(W, H, hint);
+        return;
+    }
     m_box(0, 0, W, H, 7.0f, C_PANEL_TOP, C_PANEL_LOW, 244);
     m_frame(0, 0, W, H, 7.0f, C_RULE, 150);
     if (menu_screen == MENU_SETTINGS) {
@@ -1301,7 +1429,7 @@ static void menu_layout(float W, float H) {
         static const char *const ANSWERS[2] = {"Yes, quit", "No, keep playing"};
         m_text(12.0f, 17.0f, 6.4f, "Quit the game?", C_GOLD, 0);
         draw_rows(W, ANSWERS, 2, 26.0f);
-        m_wrap(12.0f, 67.5f, W - 24.0f, 7.5f, 2, 3.8f, "Anything since you last saved in the game is lost.", C_VALUE);
+        m_wrap(12.0f, 67.5f, W - 24.0f, 7.5f, 2, 3.8f, "Anything since you last saved in the game is lost.", C_VALUE, 0);
         m_text(12.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
     }
 }
@@ -1310,7 +1438,7 @@ static void menu_layout(float W, float H) {
 static uint64_t menu_signature(int ow, int oh) {
     uint64_t parts[] = {(uint64_t)menu_screen, (uint64_t)(menu_sel + 1), (uint64_t)menu_page, (uint64_t)ow,
                         (uint64_t)oh, (uint64_t)touch_visible(), (uint64_t)(menu_last_pad && pad),
-                        pad ? (uint64_t)SDL_GetGamepadID(pad) : 0};
+                        pad ? (uint64_t)SDL_GetGamepadID(pad) : 0, (uint64_t)rom_ready, (uint64_t)(rom_problem[0] != 0)};
     uint64_t h = 1469598103934665603ull;
     for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) h = (h ^ parts[i]) * 1099511628211ull;
     for (int i = 0; i < NSETTINGS; i++)
@@ -1322,18 +1450,34 @@ static void menu_draw(void) {
     int ow, oh;
     SDL_GetRenderOutputSize(renderer, &ow, &oh);
     float fade = menu_opened ? fminf(1.0f, (float)(SDL_GetTicks() - menu_opened) / 140.0f) : 1.0f;
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)(165.0f * fade));    /* dim the game */
-    SDL_FRect all = {0, 0, (float)ow, (float)oh};
-    SDL_RenderFillRect(renderer, &all);
+    int launcher_screen = menu_screen == MENU_LAUNCHER;
+    if (!launcher_screen) {                          /* dim the game (or the launcher) behind */
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)(165.0f * fade));
+        SDL_FRect all = {0, 0, (float)ow, (float)oh};
+        SDL_RenderFillRect(renderer, &all);
+    }
 
-    float W = menu_screen == MENU_SETTINGS ? 288.0f : menu_screen == MENU_QUIT ? 176.0f : 168.0f;
-    float H = menu_screen == MENU_SETTINGS ? 168.0f : menu_screen == MENU_QUIT ? 86.0f : 100.0f;
-    /* about the game's own scale, small enough that Settings always fits */
-    m_S = fminf(fminf((float)ow / 320.0f, (float)oh / 224.0f), fminf((float)ow * 0.95f / 288.0f, (float)oh * 0.92f / 168.0f));
-    int tw = (int)ceilf(W * m_S), th = (int)ceilf(H * m_S);
-    m_ox = floorf(((float)ow - (float)tw) / 2);
-    m_oy = floorf(((float)oh - (float)th) / 2);
+    float W, H;
+    int tw, th;
+    if (launcher_screen) {                           /* the whole window */
+        m_S = launch_scale(ow, oh);
+        W = (float)ow / m_S;
+        H = (float)oh / m_S;
+        tw = ow;
+        th = oh;
+        m_ox = m_oy = 0;
+    } else {
+        W = menu_screen == MENU_SETTINGS ? 288.0f : menu_screen == MENU_QUIT ? 176.0f : 168.0f;
+        H = menu_screen == MENU_SETTINGS ? 168.0f : menu_screen == MENU_QUIT ? 86.0f : 100.0f;
+        /* about the game's own scale, small enough that Settings always fits */
+        m_S = fminf(fminf((float)ow / 320.0f, (float)oh / 224.0f),
+                    fminf((float)ow * 0.95f / 288.0f, (float)oh * 0.92f / 168.0f));
+        tw = (int)ceilf(W * m_S);
+        th = (int)ceilf(H * m_S);
+        m_ox = floorf(((float)ow - (float)tw) / 2);
+        m_oy = floorf(((float)oh - (float)th) / 2);
+    }
     menu_panel.x = m_ox;
     menu_panel.y = m_oy;
     menu_panel.w = (float)tw;
@@ -1392,6 +1536,9 @@ static void menu_tap(float rx, float ry) {
         if (rx < h->x0 || ry < h->y0 || rx >= h->x1 || ry >= h->y1) continue;
         if (h->kind == HIT_BACK) {
             menu_input(0, 0, 0, 0, 0, 1);
+        } else if (h->kind == HIT_MODE) {           /* the launcher's switch: that mode */
+            menu_sel = L_MODE;
+            if ((h->index == 1) != classic_mode()) item_change(MODE_ITEM, 1);
         } else if (h->kind == HIT_PAGE) {
             menu_page = h->index;
             menu_sel = 0;
@@ -1533,6 +1680,12 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             SDL_Scancode sc = e.key.scancode;
             touch_hide();                                /* keys in use: the on-screen pad goes */
             menu_last_pad = 0;
+            if (e.key.key == SDLK_F11 && !e.key.repeat) {   /* fullscreen, menus or not */
+                int fs = !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN);
+                SDL_SetWindowFullscreen(window, fs);
+                save_setting_int("video.fullscreen", fs);
+                break;
+            }
             if (menu_is_open()) {                        /* the menu takes the keyboard */
                 if (sc == SDL_SCANCODE_TAB || sc == SDL_SCANCODE_PAGEDOWN || sc == SDL_SCANCODE_PAGEUP) {
                     if (!e.key.repeat || sc != SDL_SCANCODE_TAB)    /* settings pages */
@@ -1557,11 +1710,6 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             if (e.key.key == SDLK_F10) paused = !paused;
             if (e.key.key == SDLK_F9) cycle_battle_depth();
             if (e.key.key == SDLK_F8) cycle_battle_fog();
-            if (e.key.key == SDLK_F11) {
-                int fs = !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN);
-                SDL_SetWindowFullscreen(window, fs);
-                save_setting_int("video.fullscreen", fs);
-            }
             break;
         }
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
@@ -1569,7 +1717,9 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             touch_hide();                                /* a gamepad in use: the on-screen pad goes */
             menu_last_pad = 1;
             if (b == SDL_GAMEPAD_BUTTON_BACK || b == SDL_GAMEPAD_BUTTON_GUIDE) {   /* Select/Back opens it */
-                if (menu_is_open()) menu_close(); else menu_open();
+                if (in_launcher) menu_input(0, 0, 0, 0, 0, 1);
+                else if (menu_is_open()) menu_close();
+                else menu_open();
                 break;
             }
             if (!menu_is_open()) break;
@@ -1590,6 +1740,19 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             click_at(rx, ry, e.button.button == SDL_BUTTON_RIGHT);
             break;
         }
+        case SDL_EVENT_GAMEPAD_AXIS_MOTION: {              /* the left stick steers the menus too */
+            static int stick[2];                           /* each axis: -1, 0 or 1, with some hysteresis */
+            int axis = e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX ? 0 : e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY ? 1 : -1;
+            if (axis < 0) break;
+            int v = e.gaxis.value, now = v > 20000 ? 1 : v < -20000 ? -1 : abs(v) < 12000 ? 0 : stick[axis];
+            if (now == stick[axis]) break;
+            stick[axis] = now;
+            if (!now || !menu_is_open()) break;
+            menu_last_pad = 1;
+            if (axis == 0) menu_input(0, 0, now < 0, now > 0, 0, 0);
+            else menu_input(now < 0, now > 0, 0, 0, 0, 0);
+            break;
+        }
         case SDL_EVENT_MOUSE_MOTION:                       /* the menu: the line under the mouse */
             if (menu_is_open() && e.motion.which != SDL_TOUCH_MOUSEID) {
                 float rx, ry;
@@ -1601,8 +1764,10 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             if (menu_tex) SDL_DestroyTexture(menu_tex);
             if (texture) SDL_DestroyTexture(texture);
             if (depth_texture) SDL_DestroyTexture(depth_texture);
-            menu_tex = texture = depth_texture = NULL;
-            menu_tex_w = tex_w = depth_tex_w = 0;
+            if (emblem_tex) SDL_DestroyTexture(emblem_tex);
+            if (halo_tex) SDL_DestroyTexture(halo_tex);
+            menu_tex = texture = depth_texture = emblem_tex = halo_tex = NULL;
+            menu_tex_w = tex_w = depth_tex_w = emblem_n = 0;
             break;
         case SDL_EVENT_FINGER_DOWN:
         case SDL_EVENT_FINGER_MOTION:
@@ -1801,12 +1966,238 @@ static void load_font(void) {
     SDL_Log("modern text: no font found; text stays original");
 }
 
+/* ------------------------------------------------------------------ the launcher */
+/* What the app opens on: Start game, the mode (Enhanced or Classic),
+ * Settings, Quit -- over a slowly drifting field of stars, under the port's
+ * emblem: the four-point star of its icon (tools/make_icon.py), drawn here at
+ * full size from the same shape. The game starts only with Start game, and
+ * only with a ROM: if none is installed yet, that's when it's asked for. */
+
+/* the icon's star: |x/a|^p + |y/b|^p < 1, white at the heart to gold at the tips */
+static void star_ramp(float t, float *r, float *g, float *b) {
+    static const float T[5] = {0.00f, 0.12f, 0.32f, 0.60f, 1.00f};
+    static const float C[5][3] = {{255, 255, 255}, {255, 255, 255}, {255, 255, 182}, {255, 218, 72}, {255, 182, 0}};
+    t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+    for (int i = 0; i < 4; i++)
+        if (t <= T[i + 1]) {
+            float k = (t - T[i]) / (T[i + 1] - T[i]);
+            *r = C[i][0] + (C[i + 1][0] - C[i][0]) * k;
+            *g = C[i][1] + (C[i + 1][1] - C[i][1]) * k;
+            *b = C[i][2] + (C[i + 1][2] - C[i][2]) * k;
+            return;
+        }
+}
+
+#define EMBLEM_K    0.75f            /* the icon's star at this size in its square: room for the halo */
+#define EMBLEM_SIDE 88.9f            /* the square, units: the star 56 tall */
+
+/* the star and its two sparkles (supersampled), and a soft gold halo on its own so it can breathe */
+static void emblem_make(int n) {
+    if (n < 16) n = 16;
+    if (emblem_tex && n == emblem_n) return;
+    if (emblem_tex) SDL_DestroyTexture(emblem_tex);
+    if (halo_tex) SDL_DestroyTexture(halo_tex);
+    emblem_tex = halo_tex = NULL;
+    emblem_n = n;
+    uint32_t *px = malloc((size_t)n * (size_t)n * 4);
+    if (!px) return;
+    static const struct { float cx, cy, a, b, alpha; int lit; } STARS[3] = {
+        {0.0f, 0.0f, 0.70f * EMBLEM_K, 0.84f * EMBLEM_K, 1.0f, 1},
+        {0.50f * EMBLEM_K, -0.52f * EMBLEM_K, 0.16f * EMBLEM_K, 0.20f * EMBLEM_K, 0.95f, 0},
+        {-0.52f * EMBLEM_K, 0.55f * EMBLEM_K, 0.11f * EMBLEM_K, 0.14f * EMBLEM_K, 0.80f, 0},
+    };
+    const int ss = 3;
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++) {
+            float r = 0, g = 0, b = 0, w = 0;
+            for (int sy = 0; sy < ss; sy++)
+                for (int sx = 0; sx < ss; sx++) {
+                    float u = ((float)x + ((float)sx + 0.5f) / (float)ss) / (float)n * 2.0f - 1.0f;
+                    float v = ((float)y + ((float)sy + 0.5f) / (float)ss) / (float)n * 2.0f - 1.0f;
+                    for (int k = 0; k < 3; k++) {
+                        float du = (u - STARS[k].cx) / STARS[k].a, dv = (v - STARS[k].cy) / STARS[k].b;
+                        if (fabsf(du) >= 1.0f || fabsf(dv) >= 1.0f) continue;
+                        if (powf(fabsf(du), 0.46f) + powf(fabsf(dv), 0.46f) >= 1.0f) continue;
+                        float cr = 255.0f, cg = 255.0f, cb = 218.0f;            /* the sparkles: pale gold */
+                        if (STARS[k].lit) star_ramp(powf(hypotf(du, dv), 0.8f), &cr, &cg, &cb);
+                        r += cr * STARS[k].alpha;
+                        g += cg * STARS[k].alpha;
+                        b += cb * STARS[k].alpha;
+                        w += STARS[k].alpha;
+                        break;
+                    }
+                }
+            uint32_t out = 0;
+            if (w > 0.0f)
+                out = (uint32_t)(w / (float)(ss * ss) * 255.0f + 0.5f) << 24 | (uint32_t)(r / w) << 16 |
+                      (uint32_t)(g / w) << 8 | (uint32_t)(b / w);
+            px[(size_t)y * (size_t)n + (size_t)x] = out;
+        }
+    emblem_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, n, n);
+    if (emblem_tex) {
+        SDL_UpdateTexture(emblem_tex, NULL, px, n * 4);
+        SDL_SetTextureBlendMode(emblem_tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(emblem_tex, SDL_SCALEMODE_LINEAR);
+    }
+    int hn = n / 4 < 32 ? 32 : n / 4;                /* the halo: a gaussian, small and smoothed up */
+    const float sg = 0.36f, edge = expf(-1.0f / (2.0f * sg * sg));
+    for (int y = 0; y < hn; y++)
+        for (int x = 0; x < hn; x++) {
+            float u = ((float)x + 0.5f) / (float)hn * 2.0f - 1.0f, v = ((float)y + 0.5f) / (float)hn * 2.0f - 1.0f;
+            float d2 = u * u + v * v, h = d2 >= 1.0f ? 0.0f : (expf(-d2 / (2.0f * sg * sg)) - edge) / (1.0f - edge);
+            px[(size_t)y * (size_t)hn + (size_t)x] = (uint32_t)(h * 0.42f * 255.0f + 0.5f) << 24 | 0xFFD45Au;
+        }
+    halo_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, hn, hn);
+    if (halo_tex) {
+        SDL_UpdateTexture(halo_tex, NULL, px, hn * 4);
+        SDL_SetTextureBlendMode(halo_tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(halo_tex, SDL_SCALEMODE_LINEAR);
+    }
+    free(px);
+}
+
+/* the stars behind: twinkling, drifting slowly (the near ones faster); the
+ * brightest with four small points, like the emblem's */
+typedef struct { float x, y, size, drift, phase, rate; float r, g, b; } BgStar;
+#define N_BG_STARS 240
+static BgStar bg_stars[N_BG_STARS];
+
+static void stars_init(void) {
+    uint32_t s = 0x2545F491u;
+    for (int i = 0; i < N_BG_STARS; i++) {
+        BgStar *st = &bg_stars[i];
+        float f[6];
+        for (int k = 0; k < 6; k++) {
+            s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+            f[k] = (float)(s & 0xFFFFFF) / 16777216.0f;
+        }
+        st->x = f[0];
+        st->y = f[1];
+        st->size = 0.25f + 1.0f * f[2] * f[2] * f[2];            /* mostly small */
+        st->drift = 0.0012f + 0.004f * f[2];                       /* of the width, a second */
+        st->phase = f[3] * 6.2831853f;
+        st->rate = 0.5f + 1.8f * f[4];
+        st->r = 1.0f; st->g = 1.0f; st->b = 1.0f;
+        if (f[5] < 0.12f) { st->g = 0.89f; st->b = 0.63f; }       /* warm */
+        else if (f[5] > 0.55f) { st->r = 0.75f; st->g = 0.82f; }   /* cool */
+    }
+}
+
+static void quad(SDL_Vertex *v, int *ix, int *nv, int *ni, float x0, float y0, float x1, float y1, SDL_FColor c) {
+    static const int Q[6] = {0, 1, 2, 0, 2, 3};
+    const float xs[4] = {x0, x1, x1, x0}, ys[4] = {y0, y0, y1, y1};
+    for (int k = 0; k < 4; k++) {
+        v[*nv + k].position.x = xs[k];
+        v[*nv + k].position.y = ys[k];
+        v[*nv + k].color = c;
+        v[*nv + k].tex_coord.x = v[*nv + k].tex_coord.y = 0.0f;
+    }
+    for (int k = 0; k < 6; k++) ix[*ni + k] = *nv + Q[k];
+    *nv += 4;
+    *ni += 6;
+}
+
+/* deep space, the stars, the emblem at (ex, ey) render pixels; S render pixels per unit, t seconds */
+static void launcher_backdrop(int ow, int oh, float S, float t, float ex, float ey) {
+    static SDL_Vertex v[N_BG_STARS * 12];
+    static int ix[N_BG_STARS * 18];
+    int nv = 0, ni = 0;
+    SDL_FColor top = {0.047f, 0.086f, 0.25f, 1.0f}, low = {0.008f, 0.012f, 0.047f, 1.0f};
+    quad(v, ix, &nv, &ni, 0, 0, (float)ow, (float)oh, top);
+    v[2].color = v[3].color = low;                    /* a navy sky, darker below */
+    SDL_RenderGeometry(renderer, NULL, v, nv, ix, ni);
+    nv = ni = 0;
+    for (int i = 0; i < N_BG_STARS; i++) {
+        const BgStar *st = &bg_stars[i];
+        float x = st->x - t * st->drift;
+        x = (x - floorf(x)) * (float)ow;
+        float y = st->y * (float)oh, tw = 0.5f + 0.5f * sinf(t * st->rate + st->phase);
+        float h = fmaxf(0.6f, st->size * S * 0.32f);
+        SDL_FColor c = {st->r, st->g, st->b, (0.25f + 0.75f * tw) * (0.35f + 0.65f * fminf(1.0f, st->size))};
+        quad(v, ix, &nv, &ni, x - h, y - h, x + h, y + h, c);
+        if (st->size > 0.9f) {
+            float L = h * 4.0f * (0.7f + 0.3f * tw), w = fmaxf(0.5f, h * 0.3f);
+            c.a *= 0.55f;
+            quad(v, ix, &nv, &ni, x - L, y - w, x + L, y + w, c);
+            quad(v, ix, &nv, &ni, x - w, y - L, x + w, y + L, c);
+        }
+    }
+    SDL_RenderGeometry(renderer, NULL, v, nv, ix, ni);
+    float side = EMBLEM_SIDE * S;
+    emblem_make((int)ceilf(side));
+    if (halo_tex) {
+        float hs = side * 1.9f;
+        SDL_FRect d = {ex - hs / 2, ey - hs / 2, hs, hs};
+        SDL_SetTextureAlphaModFloat(halo_tex, 0.75f + 0.25f * sinf(t * 1.3f + 0.8f));
+        SDL_RenderTexture(renderer, halo_tex, NULL, &d);
+    }
+    if (emblem_tex) {
+        float es = side * (1.0f + 0.015f * sinf(t * 1.3f));
+        SDL_FRect d = {ex - es / 2, ey - es / 2, es, es};
+        SDL_RenderTexture(renderer, emblem_tex, NULL, &d);
+    }
+}
+
+/* the launcher's picture; shade: black over it, 0..1 (the fades in and out) */
+static void launcher_present(uint64_t t0, float shade) {
+    int ow, oh;
+    SDL_GetRenderOutputSize(renderer, &ow, &oh);
+    float S = launch_scale(ow, oh), oy = ((float)oh / S - 224.0f) / 2.0f;
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+    launcher_backdrop(ow, oh, S, (float)(SDL_GetTicks() - t0) / 1000.0f, (float)ow / 2.0f, (oy + LAUNCH_EMBLEM_Y) * S);
+    menu_draw();
+    if (shade > 0.0f) {
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)(fminf(shade, 1.0f) * 255.0f));
+        SDL_FRect all = {0, 0, (float)ow, (float)oh};
+        SDL_RenderFillRect(renderer, &all);
+    }
+    test_shots();
+    SDL_RenderPresent(renderer);
+}
+
+/* until Start game is chosen with a ROM in hand (Quit ends the program) */
+static void launcher(void) {
+    in_launcher = 1;
+    touch_suspend(1);                                /* no on-screen pad here: every touch a tap */
+    menu_screen = MENU_LAUNCHER;
+    menu_sel = L_START;
+    menu_opened = 0;
+    stars_init();
+    uint64_t t0 = SDL_GetTicks();
+    for (;;) {
+        handle_events(NULL, 0, 0);
+        if (launcher_go) {
+            launcher_go = 0;
+            if (rom_ensure()) break;                 /* the ROM's there (or just chosen): off we go */
+        }
+        if (test_menu_script) menu_script_step();
+        rumble_output();                             /* the Rumble setting's sample */
+        float in = test_menu_script ? 1.0f : fminf(1.0f, (float)(SDL_GetTicks() - t0) / 450.0f);
+        launcher_present(t0, 1.0f - in);             /* out of black (a test's shots: at once) */
+        SDL_Delay(16);
+    }
+    for (uint64_t f0 = SDL_GetTicks(); !test_menu_script;) {   /* into black, then the game */
+        float k = (float)(SDL_GetTicks() - f0) / 260.0f;
+        if (k >= 1.0f) break;
+        launcher_present(t0, k);
+        SDL_Delay(16);
+    }
+    touch_suspend(0);
+    in_launcher = 0;
+    menu_screen = MENU_CLOSED;
+    input_hold = 1;                                  /* the button that started it isn't the game's */
+}
+
 /* ------------------------------------------------------------------ main */
 int main(int argc, char **argv) {
-    const char *rom_arg = NULL;
+    int play_now = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--rom") && i + 1 < argc) rom_arg = argv[++i];
         else if (!strcmp(argv[i], "--save") && i + 1 < argc) save_arg = argv[++i];
+        else if (!strcmp(argv[i], "--play")) play_now = 1;              /* no launcher: straight into the game */
         /* testing: --menu F[:settings[:PAGE[:ROW]]] opens the system menu at
          * frame F (Settings on that page, that row highlighted; -1 the page
          * bar); --capture F:FILE.bmp saves the rendered window at frame F and
@@ -1929,16 +2320,15 @@ int main(int argc, char **argv) {
 #endif
     if (setting_int("video.fullscreen")) SDL_SetWindowFullscreen(window, true);
 
-    static uint8_t rom[0x400000];
-    uint32_t rom_size = 0;
-    char path[1100], err[1500];
-    if (rom_arg) snprintf(path, sizeof path, "%s", rom_arg);
-    else path_in_home(path, sizeof path, "rom/psiv.bin");
-    if (!read_rom(path, rom, &rom_size, err, sizeof err)) {
-        if (rom_arg || file_exists(path)) message(SDL_MESSAGEBOX_ERROR, err, window);
-        if (!rom_arg && find_rom_nearby(rom, &rom_size)) install_rom(rom, rom_size);   /* dropped in the folder */
-        else if (!pick_rom(rom, &rom_size)) quit(0);
-    }
+    /* the launcher first -- unless told to play at once (--play), or a test
+     * drives the game from its first frame (--menu, --test-keys, --test-click,
+     * --test-rumble, or --capture without a --menu-script for the launcher) */
+    rom_look();                                          /* the installed ROM, or one dropped in the folder */
+    if (!play_now && !test_menu_frame && !n_test_keys && !test_click_frame && !test_rumble_frame &&
+        (!test_capture_path || test_menu_script))
+        launcher();                                      /* until Start game, with a ROM */
+    else if (!rom_ensure())
+        quit(0);
 
     /* the game's native rate; SDL resamples to the output device */
     SDL_AudioSpec spec = {SDL_AUDIO_S16, 2, SOUND_RATE};
@@ -1950,7 +2340,7 @@ int main(int argc, char **argv) {
         SDL_Log("no audio: %s", SDL_GetError());
     }
 
-    bus_init(rom, rom_size);
+    bus_init(rom_buf, rom_size);
     sram_load();
     SDL_Log("side panels: %d portraits from the ROM", panels_init());
     next_deadline = SDL_GetTicksNS();

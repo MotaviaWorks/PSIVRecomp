@@ -20,7 +20,7 @@ typedef struct {
 typedef struct { float x, y, r; } Circle;
 
 static Finger fingers[MAX_FINGERS];
-static int visible, menu_pressed;
+static int visible, menu_pressed, suspended;
 static uint8_t held;
 static Circle dpad, button[4], menu;     /* button: A, B, C, Start */
 static float unit;                       /* a sixth of the screen's short side */
@@ -99,6 +99,12 @@ void touch_hide(void) {
     held = 0;
 }
 
+void touch_suspend(int on) {
+    suspended = on;
+    SDL_zeroa(fingers);
+    held = 0;
+}
+
 int touch_event(const SDL_Event *e, int ow, int oh, float *tap_x, float *tap_y) {
     if (ow <= 0 || oh <= 0) return 0;
     layout(ow, oh);
@@ -115,8 +121,9 @@ int touch_event(const SDL_Event *e, int ow, int oh, float *tap_x, float *tap_y) 
         if (!f) return 0;
         f->used = 1;
         f->id = e->tfinger.fingerID;
-        /* the first touch only shows the pad: it presses nothing */
-        f->ctl = was ? control_at(x, y) : CTL_FREE;
+        /* the first touch only shows the pad: it presses nothing (and while
+         * suspended, no touch does) */
+        f->ctl = was && !suspended ? control_at(x, y) : CTL_FREE;
         f->x0 = f->x = x;
         f->y0 = f->y = y;
         f->t0 = SDL_GetTicks();
