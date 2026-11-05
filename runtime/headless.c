@@ -39,8 +39,9 @@
  *     --algol-bank ROM   with the instruments of a SNES game you own (snesbank.h)
  *     --custom-music DIR your own music files in place of the game's songs (music.h)
  *     --fpview S         first-person dungeons (fpview.h); shots at S x
- *     --click F:X,Y      with --movie: a mouse click at logical frame F on frame
- *                        pixel (X, Y) -- click to walk (walkto.h); repeatable
+ *     --click F:X,Y[,R]  with --movie: a mouse click at logical frame F on frame
+ *                        pixel (X, Y) -- click to walk (walkto.h), battle menus
+ *                        (battleui.h); R: the right button; repeatable
  *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
  *                        (next to the trace, or build/bizhawk/port.*)
  *
@@ -75,7 +76,7 @@ typedef struct { uint64_t frame; const char *path; } Shot;
 static Press presses[256];
 static Shot shots[64];
 static int npress, nshot;
-static struct { uint64_t frame; int x, y; } clicks[16];   /* --click */
+static struct { uint64_t frame; int x, y, right; } clicks[16];   /* --click */
 static int nclick;
 static Press *movie;                 /* --movie: events by logical frame */
 static int nmovie;
@@ -712,14 +713,17 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         for (int i = 0; i < nclick; i++)                   /* click to walk (walkto.h) */
             if (clicks[i].frame == logical) {
                 int cx = -1, cy = -1, slot = -1, ok;
-                if (walkto_click_button(0)) ok = 2;        /* text up: C */
+                if (battleui_active()) ok = battleui_click((float)clicks[i].x, (float)clicks[i].y, clicks[i].right) ? 3 : 0;
+                else if (clicks[i].right) { ok = walkto_click_button(1) ? 2 : 0; walkto_cancel(); }
+                else if (walkto_click_button(0)) ok = 2;   /* text up: C */
                 else if (fpview_active() && fpview_pick((float)clicks[i].x, (float)clicks[i].y, width, height, &cx, &cy, &slot))
                     ok = walkto_go(cx, cy, slot);
                 else ok = walkto_click_screen(clicks[i].x + vdp_view_x0, clicks[i].y);
                 printf("logical %llu: click %d,%d (first person: cell %d,%d object %d): %s\n", (unsigned long long)logical,
-                       clicks[i].x, clicks[i].y, cx, cy, slot, ok == 2 ? "C (text up)" : ok ? "walking" : "nowhere to go");
+                       clicks[i].x, clicks[i].y, cx, cy, slot,
+                       ok == 3 ? "a battle menu pick" : ok == 2 ? "C (text up)" : ok ? "walking" : "nowhere to go");
             }
-        bus_pad[0] = walkto_pad(keys, keys);
+        bus_pad[0] = battleui_pad(keys, walkto_pad(keys, keys));
     }
     /* Sound_Index: a request only beats what is playing if its priority is at
      * least as high, so stop everything ($FE) first, then ask for the song */
@@ -845,6 +849,7 @@ int main(int argc, char **argv) {
             clicks[nclick].frame = strtoull(argv[++i], &e, 10);
             if (*e == ':') clicks[nclick].x = (int)strtol(e + 1, &e, 10);
             if (*e == ',') clicks[nclick].y = (int)strtol(e + 1, &e, 10);
+            clicks[nclick].right = *e == ',' && (e[1] == 'R' || e[1] == 'r');
             nclick++;
         } else if (!strcmp(argv[i], "--fpview") && i + 1 < argc) {
             fpview_set_enabled(1);                         /* first-person dungeons (fpview.h) */

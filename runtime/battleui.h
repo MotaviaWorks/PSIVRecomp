@@ -45,4 +45,13 @@ int  battleui_active(void);
  * out holds the view as frame_run drew it, view_w x h game pixels */
 void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h);
 
+/* The mouse: a click at (fx, fy), the frame's pixels as last drawn, on a
+ * menu entry, a command, a page arrow or a target picks it -- played as the
+ * pad: the game's own cursor is walked there a press at a time, then C. A
+ * right click is B (back). 1 if the click was taken. */
+int  battleui_click(float fx, float fy, int right);
+/* the pad the game sees this frame: `user` what the player holds (any of it
+ * stops a click's presses), `pad` what would go to the game otherwise */
+uint8_t battleui_pad(uint8_t user, uint8_t pad);
+
 #endif

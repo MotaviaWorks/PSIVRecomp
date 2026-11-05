@@ -368,8 +368,19 @@ and a BFS over the game's own collision finds the way:
   mapping, the marker) through `--test-keys` / `--test-click` with
   SDL_VIDEO_DRIVER=offscreen, both views. Movies and the 24,635-frame
   session are unchanged.
+- **Battles (v2):** the modern menus record where each choice was drawn
+  (frame pixels): the main options, the command strip, list entries and page
+  arrows, and the targets (a band round each enemy present, through the depth
+  camera; each party card, a band round where each member stands). A click
+  is played as the pad, closed-loop on the game's own cursors: main options
+  Up/Down (Battle_UpdateRedCursor2), commands and targets Left/Right
+  (Battle_UpdateCursor), lists Up/Down within a page of four and Right/Left
+  to the next page's top (the page turn ignores presses: pressed again);
+  each press held 2 frames and let go 2 (the menus act on new presses), then
+  C. Checked in the Plate System: Command -> Technique -> Tsu (page 2) ->
+  the Seeker; Res -> Gryz's card; a right click backs out of the list.
 - **Next:** vehicles (2x2 cells, their own collision tables); click to
-  choose in the camp menu and battles; drag to keep walking.
+  choose in the camp menu and shops; drag to keep walking.
 
 ### Your own music (PsiLok, 2026-11-04) -- v1 done (`runtime/music.c`)
 PsiLok's Meet Them Head-On rearrangement as a bonus without shipping it (it is

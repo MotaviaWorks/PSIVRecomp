@@ -3,6 +3,7 @@
  */
 #include "battleui.h"
 #include "battledesc.h"
+#include "bus.h"
 #include "fpview.h"
 #include "depth.h"
 #include "frame.h"
@@ -739,7 +740,7 @@ static void draw_motes(uint32_t rgb) {
 }
 
 /* ------------------------------------------------------------------ the party bar */
-typedef struct { float x0, x1; int id; } Card;
+typedef struct { float x0, x1; int id; float stand; } Card;   /* stand: where they stand, game x */
 static Card cards[5];
 static int ncards;
 
@@ -767,6 +768,7 @@ static void card_layout(int view_w) {
         cards[k].x0 = x + (float)k * (cw + gap);
         cards[k].x1 = cards[k].x0 + cw;
         cards[k].id = ids[k];
+        cards[k].stand = (float)xs[k] - 128.0f + 8.0f;
     }
     ncards = n;
 }
@@ -857,6 +859,24 @@ static void draw_hud(int acting, int target_id, int show_commands, int frame, fl
     }
 }
 
+/* ------------------------------------------------------------------ the mouse */
+/* What a click can pick, where it was drawn this frame (frame pixels): a main
+ * option, a command, a list entry or a page arrow, a target. A click is
+ * played as the pad: the game's own cursor is walked to it a press at a time
+ * (each press let go before the next: the menus act on new presses), then C. */
+typedef struct { float x0, y0, x1, y1; int menu, index, confirm; } Hit;
+#define MAX_HITS 64
+static Hit hits[MAX_HITS];
+static int nhits;
+
+static void hit_add(float x0, float y0, float x1, float y1, int menu, int index, int confirm) {
+    if (nhits < MAX_HITS) {
+        Hit *h = &hits[nhits++];
+        h->x0 = x0 + OX; h->y0 = y0; h->x1 = x1 + OX; h->y1 = y1;
+        h->menu = menu; h->index = index; h->confirm = confirm;
+    }
+}
+
 /* ------------------------------------------------------------------ menus */
 static float menu_alpha;          /* fades a menu in */
 static float actor_sx = 160.0f;   /* where the character choosing stands on screen, game x */
@@ -885,6 +905,7 @@ static void draw_main(float alpha) {
     panel(x0, y0, x1, y1, alpha);
     for (int i = 0; i < 3; i++) {
         float ry = y0 + 3.0f + (float)i * row;
+        hit_add(x0 + 3.0f, ry, x1 - 3.0f, ry + row, M_MAIN, i, 1);
         if (i == cur) highlight(x0 + 3.0f, ry, x1 - 3.0f, ry + row, alpha);
         int on = i == cur;
         text(x0 + 9.0f, ry + 8.0f, 5.0f, label[i], on ? 0x1A1406 : 0xFFFFFF, alpha);
@@ -934,6 +955,7 @@ static void draw_commands(int fighter, int chosen, const char *prompt, float alp
     float bx = x;
     for (int i = 0; i < 5; i++) {
         int on = i == cur;
+        if (chosen < 0) hit_add(bx, y0, bx + w[i], y0 + h, M_COMMAND, i, 1);
         if (on) highlight_on(&hl_strip, bx, y0 + 0.5f, bx + w[i], y0 + h - 0.5f, alpha);
         text_center(bx + w[i] / 2.0f, y0 + 7.6f, cap, COMMANDS[i],
                     on ? 0x1A1406 : chosen >= 0 ? 0x6F7FA8 : 0xFFFFFF, alpha);
@@ -959,7 +981,7 @@ static void draw_commands(int fighter, int chosen, const char *prompt, float alp
 typedef struct { char name[24]; char cost[12]; int usable; const char *desc; } Entry;
 
 /* a list in pages of four: the pages side by side, as many as fit */
-static void draw_list(const char *title, const char *info, const Entry *e, int count, int cur, float alpha) {
+static void draw_list(int menu, const char *title, const char *info, const Entry *e, int count, int cur, float alpha) {
     int pages = (count + 3) / 4;
     if (pages < 1) pages = 1;
     int cols = pages > 3 ? 3 : pages;
@@ -999,9 +1021,14 @@ static void draw_list(const char *title, const char *info, const Entry *e, int c
     panel(x0, y0, x1, y1, alpha);
     text(x0 + 6.0f, y0 + 9.0f, 4.2f, title, 0xFFE08A, alpha);
     if (info && *info) text_right(x1 - 6.0f, y0 + 9.0f, 3.8f, info, 0x9FB4E8, alpha);
-    if (first > 0) ui_triangle(&cv, SX(x0 + 3.0f), SY(y0 + 14.0f + 2.0f * row), 4.0f * S, 3, 0xFFE08A, AL(220 * alpha));
-    if (first + cols < pages)
+    if (first > 0) {
+        ui_triangle(&cv, SX(x0 + 3.0f), SY(y0 + 14.0f + 2.0f * row), 4.0f * S, 3, 0xFFE08A, AL(220 * alpha));
+        hit_add(x0, y0 + 12.0f, x0 + 5.0f, y0 + 13.0f + 4.0f * row, menu, (first - 1) * 4, 0);   /* the page before */
+    }
+    if (first + cols < pages) {
         ui_triangle(&cv, SX(x1 - 3.0f), SY(y0 + 14.0f + 2.0f * row), 4.0f * S, 2, 0xFFE08A, AL(220 * alpha));
+        hit_add(x1 - 5.0f, y0 + 12.0f, x1, y0 + 13.0f + 4.0f * row, menu, (first + cols) * 4, 0);  /* the page after */
+    }
     for (int c = 0; c < cols; c++)
         for (int r = 0; r < 4; r++) {
             int i = (first + c) * 4 + r;
@@ -1009,6 +1036,7 @@ static void draw_list(const char *title, const char *info, const Entry *e, int c
             int on = i == cur;
             if (on) highlight(ex, ey, ex + colw - 2.0f, ey + row - 1.0f, alpha);
             if (i >= count || !e[i].name[0]) continue;
+            hit_add(ex, ey, ex + colw - 2.0f, ey + row - 1.0f, menu, i, 1);
             uint32_t col = on ? 0x1A1406 : e[i].usable ? 0xFFFFFF : 0x6F7FA8;
             text(ex + 4.0f, ey + 7.0f, cap, e[i].name, col, alpha);
             if (e[i].cost[0]) text_right(ex + colw - 6.0f, ey + 7.0f, 3.8f, e[i].cost, on ? 0x3A2A08 : 0x9FB4E8, alpha);
@@ -1040,7 +1068,7 @@ static void draw_techs(int fighter, int id, float alpha) {
         unsigned base = CHAR_STATS + (unsigned)id * 0x80;
         snprintf(info, sizeof info, "TP %u/%u", r16(base + 0x12), r16(base + 0x14));
     }
-    draw_list("Techniques", info, entries, n, (int)r16(TECH_INDEX + (unsigned)fighter * 2) & 15, alpha);
+    draw_list(M_TECH, "Techniques", info, entries, n, (int)r16(TECH_INDEX + (unsigned)fighter * 2) & 15, alpha);
 }
 
 static void draw_skills(int fighter, float alpha) {
@@ -1056,7 +1084,7 @@ static void draw_skills(int fighter, float alpha) {
         e->desc = battledesc_skill((int)s);
         n = i + 1;
     }
-    draw_list("Skills", "uses left", entries, n, (int)r16(SKILL_INDEX + (unsigned)fighter * 2) & 7, alpha);
+    draw_list(M_SKILL, "Skills", "uses left", entries, n, (int)r16(SKILL_INDEX + (unsigned)fighter * 2) & 7, alpha);
 }
 
 static void draw_items(int fighter, int id, float alpha) {
@@ -1077,7 +1105,7 @@ static void draw_items(int fighter, int id, float alpha) {
     int cur = (int)r16(ITEM_INDEX + (unsigned)fighter * 2);
     char info[24];
     snprintf(info, sizeof info, "page %d/%d", cur / 4 + 1, (n + 3) / 4 > 0 ? (n + 3) / 4 : 1);
-    draw_list("Items", info, entries, n, cur, alpha);
+    draw_list(M_ITEM, "Items", info, entries, n, cur, alpha);
 }
 
 /* a chevron over what the game's cursor pointed at */
@@ -1156,9 +1184,47 @@ static void draw_window(const Win *w, int names, float alpha) {
     }
 }
 
+/* the targets a click can pick, as the game counts them: each enemy present
+ * (a band round where it stands, the depth camera's drift included), or each
+ * member of the party (their card, or a band round where they stand) */
+static void band_hits(const float *xs, int n, float y0, float y1, int menu) {
+    for (int i = 0; i < n; i++) {
+        float l = -OX, r = (float)cv.x1 / S - OX;
+        for (int j = 0; j < n; j++) {
+            if (j == i) continue;
+            float mid = (xs[i] + xs[j]) / 2.0f;
+            if (xs[j] < xs[i] && mid > l) l = mid;
+            if (xs[j] > xs[i] && mid < r) r = mid;
+        }
+        hit_add(l, y0, r, y1, menu, i, 1);
+    }
+}
+
+static void target_hits(int menu) {
+    float xs[6], sx, sy;
+    int n = 0;
+    if (menu == M_TARGET_ENEMY) {
+        for (int f; n < 6 && (f = nth_fighter(5, 10, n)) >= 0; n++) {
+            float gx = (float)r16(FIGHTERS + (unsigned)f * 0x40 + 0x0C) - 128.0f + 8.0f;
+            depth_to_screen(0, gx + OX, 60.0f, &sx, &sy);
+            xs[n] = sx - OX;
+        }
+        band_hits(xs, n, 0.0f, DOCK_Y, M_TARGET_ENEMY);
+    } else if (menu == M_TARGET_ALLY) {
+        float y0 = HUD_Y0 + (HUD_Y0_STRIP - HUD_Y0) * strip_in, y1 = HUD_Y1 + (HUD_Y1_STRIP - HUD_Y1) * strip_in;
+        for (int k = 0; k < ncards; k++) {
+            hit_add(cards[k].x0, y0, cards[k].x1, y1, M_TARGET_ALLY, k, 1);
+            depth_to_screen(1, cards[k].stand + OX, 120.0f, &sx, &sy);
+            xs[n++] = sx - OX;
+        }
+        band_hits(xs, n, 32.0f, DOCK_Y, M_TARGET_ALLY);
+    }
+}
+
 /* ------------------------------------------------------------------ the frame */
 void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) {
     static int frame, last_key = -1;
+    nhits = 0;
     if (!active) return;
     frame++;
     cv.px = out; cv.stride = out_stride; cv.x0 = 0; cv.y0 = 0; cv.x1 = view_w * scale; cv.y1 = h * scale;
@@ -1273,4 +1339,80 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     }
     default: break;
     }
+    target_hits(menu);
+}
+
+/* ------------------------------------------------------------------ clicks, as the pad */
+static struct {
+    int on, menu, fighter, target, confirm;
+    int hold, rest, presses, waited;
+    uint8_t press;
+} drive;
+static int pulse_b;
+
+int battleui_click(float fx, float fy, int right) {
+    if (!active) return 0;
+    if (right) { drive.on = 0; pulse_b = 3; return 1; }   /* back */
+    for (int i = nhits - 1; i >= 0; i--) {                 /* the last drawn is on top */
+        const Hit *h = &hits[i];
+        if (fx < h->x0 || fx >= h->x1 || fy < h->y0 || fy >= h->y1) continue;
+        memset(&drive, 0, sizeof drive);
+        drive.on = 1;
+        drive.menu = h->menu;
+        drive.fighter = (int)r16(COMD_INPUT);
+        drive.target = h->index;
+        drive.confirm = h->confirm;
+        return 1;
+    }
+    return 0;
+}
+
+/* the cursor of the menu being driven, and the press that moves it towards
+ * the target (0: it's there) */
+static uint8_t drive_step(void) {
+    unsigned f = (unsigned)drive.fighter * 2;
+    int t = drive.target, cur;
+    switch (drive.menu) {
+    case M_MAIN:                                        /* up / down */
+        cur = (int)r16(MAIN_OPTION) & 3;
+        return cur < t ? PAD_DOWN : cur > t ? PAD_UP : 0;
+    case M_COMMAND:                                     /* left / right */
+        cur = (int)r16(COMD_INDEX + f) % 5;
+        return cur < t ? PAD_RIGHT : cur > t ? PAD_LEFT : 0;
+    case M_TARGET_ENEMY: case M_TARGET_ALLY:
+        cur = (int)r16(drive.menu == M_TARGET_ENEMY ? ENEMY_INDEX : CHAR_INDEX);
+        return cur < t ? PAD_RIGHT : cur > t ? PAD_LEFT : 0;
+    default:                                            /* the lists: pages of four */
+        cur = (int)r16((drive.menu == M_TECH ? TECH_INDEX : drive.menu == M_SKILL ? SKILL_INDEX : ITEM_INDEX) + f);
+        if (cur >> 2 != t >> 2) return cur >> 2 < t >> 2 ? PAD_RIGHT : PAD_LEFT;   /* another page: its top */
+        return (cur & 3) < (t & 3) ? PAD_DOWN : (cur & 3) > (t & 3) ? PAD_UP : 0;
+    }
+}
+
+uint8_t battleui_pad(uint8_t user, uint8_t pad) {
+    if (pulse_b > 0) {                                  /* a right click: B */
+        if (user) pulse_b = 0;
+        else return --pulse_b > 0 ? PAD_B : 0;
+    }
+    if (!drive.on) return pad;
+    if (user || !active) { drive.on = 0; return pad; }  /* the player takes over */
+    if (drive.hold > 0) { drive.hold--; return drive.press; }
+    if (drive.rest > 0) { drive.rest--; return 0; }     /* let go: the menus act on new presses */
+    if (drive.press == PAD_C) { drive.on = 0; return 0; }   /* chosen */
+    int menu = menu_of((int)(r16(BATTLE_ROUTINE_2) & 0x7FFF));
+    if (menu != drive.menu || (int)r16(COMD_INPUT) != drive.fighter) {
+        if (++drive.waited > 40) drive.on = 0;          /* a page turning, a window opening: wait */
+        return 0;
+    }
+    drive.waited = 0;
+    uint8_t p = drive_step();
+    if (!p) {
+        if (!drive.confirm) { drive.on = 0; return 0; } /* a page arrow: just there */
+        p = PAD_C;
+    }
+    if (++drive.presses > 48) { drive.on = 0; return 0; }
+    drive.press = p;
+    drive.hold = 1;
+    drive.rest = 2;
+    return p;
 }

@@ -129,8 +129,13 @@ original game, unchanged; **Enhanced** turns on the additions:
   you can; click a cave or a town's entrance to go in. It works in first
   person too (the floor or the person under the cursor). A marker shows
   where you're going; your own keys take over at once, a right click stops.
-  While text is up, a click is C (next) and a right click B.
-  `psiv_headless --click F:X,Y` clicks frame pixel (X, Y) at logical frame F.
+  While text is up, a click is C (next) and a right click B. In battles
+  (the modern menus) a click picks what it is on -- Command / Macro / Run, a
+  command, a technique, skill or item (on any page), an enemy or a member of
+  the party as the target -- by walking the game's own cursor there a press
+  at a time and pressing C; a right click is B (back).
+  `psiv_headless --click F:X,Y[,R]` clicks frame pixel (X, Y) at logical
+  frame F (R: the right button).
 
 - **Your music** (on / off): audio files of your own -- a remix, say -- play
   in place of the game's songs. Put WAVs (16/24-bit or float, any rate) in

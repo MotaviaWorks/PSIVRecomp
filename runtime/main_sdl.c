@@ -309,7 +309,11 @@ void platform_fatal(const char *text) {
 }
 
 /* Watchdog: a frame normally arrives every 1/60 s. If none comes for
- * HANG_SECONDS while not paused, the game is stuck in a loop: report where. */
+ * HANG_SECONDS while not paused, the game is stuck in a loop: report where.
+ * The game held on purpose -- F10, or the system menu open (`holding`) -- is
+ * no hang. */
+static volatile int holding;
+
 static int SDLCALL watchdog(void *unused) {
     (void)unused;
     uint64_t last = frame_count, since = SDL_GetTicks();
@@ -317,7 +321,7 @@ static int SDLCALL watchdog(void *unused) {
     for (;;) {
         SDL_Delay(500);
         uint64_t now_frames = *(volatile uint64_t *)&frame_count;
-        if (now_frames != last || paused) {
+        if (now_frames != last || paused || holding) {
             last = now_frames;
             since = SDL_GetTicks();
             reported = 0;
@@ -546,7 +550,11 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
         }
         SDL_UpdateTexture(texture, NULL, pixels, VDP_MAX_W * 4);
     }
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    /* round a picture that doesn't fill the window: the backdrop colour, as a
+     * TV's border shows it -- the SEGA screen's blue reaches the window's edges
+     * and fades with it */
+    uint32_t bd = vdp_color(vdp.reg[7] & 63);
+    SDL_SetRenderDrawColor(renderer, (Uint8)(bd >> 16), (Uint8)(bd >> 8), (Uint8)bd, 255);
     SDL_RenderClear(renderer);
     SDL_RenderTexture(renderer, depth_shown ? depth_texture : texture, NULL, &dst);
     draw_walk_marker(&dst, fw, pm, w, h);
@@ -903,18 +911,23 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             break;
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {                /* click to walk (walkto.h) */
-            if (menu_is_open() || paused || !walkto_enabled()) break;
-            if (e.button.button == SDL_BUTTON_RIGHT) {     /* stop walking; with text up, B */
-                if (!walkto_active()) walkto_click_button(1);
-                walkto_cancel();
-                break;
-            }
-            if (e.button.button != SDL_BUTTON_LEFT || pic_dst.w <= 0) break;
-            if (walkto_click_button(0)) break;             /* text up: C, next */
+            if (menu_is_open() || paused || !walkto_enabled() || pic_dst.w <= 0) break;
             float rx, ry;
             SDL_RenderCoordinatesFromWindow(renderer, e.button.x, e.button.y, &rx, &ry);
             float gx = (rx - pic_dst.x) / pic_dst.w * (float)pic_fw - (float)pic_pm;   /* the game's frame pixels */
             float gy = (ry - pic_dst.y) / pic_dst.h * (float)pic_h;
+            int right = e.button.button == SDL_BUTTON_RIGHT;
+            if (battleui_active()) {                       /* the battle menus: pick, or back */
+                if (right || e.button.button == SDL_BUTTON_LEFT) battleui_click(gx, gy, right);
+                break;
+            }
+            if (right) {                                   /* stop walking; with text up, B */
+                if (!walkto_active()) walkto_click_button(1);
+                walkto_cancel();
+                break;
+            }
+            if (e.button.button != SDL_BUTTON_LEFT) break;
+            if (walkto_click_button(0)) break;             /* text up: C, next */
             if (gx < 0 || gy < 0 || gx >= (float)pic_w || gy >= (float)pic_h) break;   /* off the picture, or a panel */
             int cx, cy, slot;
             if (fpview_active()) {
@@ -939,11 +952,13 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         if (test_menu_settings) { menu_screen = MENU_SETTINGS; menu_sel = 1; }
     }
     while (paused || menu_is_open()) {                   /* F10 or the menu: hold here, keep the window alive */
+        holding = 1;                                     /* (the watchdog knows it's on purpose) */
         present(pixels, w, h, 0);
         SDL_Delay(16);
         handle_events(pixels, w, h);
         next_deadline = SDL_GetTicksNS();
     }
+    holding = 0;
     uint8_t user = read_input();
     for (int i = 0; i < n_test_keys; i++)                /* testing: scripted keys */
         if (frame_count >= test_keys[i].frame && frame_count < test_keys[i].frame + test_keys[i].len) user |= test_keys[i].keys;
@@ -958,8 +973,9 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
                                       pic_dst.y + test_click_y * pic_dst.h / (float)pic_h, &c.button.x, &c.button.y);
         SDL_PushEvent(&c);
     }
-    bus_pad[0] = walkto_pad(user, fpview_remap_pad(user));   /* first person: the d-pad turns with the view;
-                                                                 a click's walk holds it while it runs */
+    /* first person: the d-pad turns with the view; a click's walk, or its
+     * presses in a battle menu, hold it while they run */
+    bus_pad[0] = battleui_pad(user, walkto_pad(user, fpview_remap_pad(user)));
     if (input_hold) {
         if (bus_pad[0]) bus_pad[0] = 0;
         else input_hold = 0;
