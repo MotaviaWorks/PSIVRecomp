@@ -95,6 +95,26 @@ original game, unchanged; **Enhanced** turns on the additions:
   them); `psiv_headless --algol-bank ROM` renders with it. Adding a game
   means finding how it stores its samples: `tools/snes/sound_ram.py`.
 
+- **Your music** (on / off): audio files of your own -- a remix, say -- play
+  in place of the game's songs. Put WAVs (16/24-bit or float, any rate) in
+  `music/` (git-ignored), named by the song's ID: `music/8F.wav` for Meet
+  Them Head-On (`PSIV_MUSIC_LOG=1` prints each song's ID and name as it
+  starts: 8F battles, 95 bosses, AA Zio, A0 Dark Force, 96 vehicle battles,
+  AC the title, 8C the Motavia field). Or name them in `music/music.ini`,
+  which also sets the loop (the WAV's own loop markers count too), where a
+  file starts (by default at its first sound) and its level:
+
+  ```
+  8F = Meet Them Head-On (my remix).wav
+  8F loop 19.76 212.08      ; at 212.08 s, back to 19.76 s
+  8F gain -2                ; dB
+  ```
+
+  The game's sound effects keep playing on the chips; the file starts with
+  its song, follows the game's fade-outs and pauses, and stops when the music
+  does. Over Algol or the original chip alike. `psiv_headless --custom-music
+  DIR` renders with it.
+
 - **Sound effects** (modern / your samples / original): *modern* is the port's
   own set, synthesized at startup (`runtime/sfxsynth.c`), so nothing is
   shipped: blade hits (a short swing, a slice, a ringing edge, a thump; hits

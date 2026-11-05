@@ -25,6 +25,7 @@
 #include "panels.h"
 #include "battleui.h"
 #include "algol.h"
+#include "music.h"
 #include "sfx.h"
 #include "diag.h"
 #include "frame.h"
@@ -99,7 +100,7 @@ static void open_log(void) {
 }
 
 /* ------------------------------------------------------------------ settings */
-typedef struct { const char *key; char value[64]; const char *comment; } Setting;
+typedef struct { const char *key; char value[300]; const char *comment; } Setting;   /* room for a path */
 static Setting settings[] = {
     {"video.scale", "3", "window size at start, in multiples of the game's resolution"},
     {"video.fullscreen", "0", "1 = start fullscreen (F11 toggles)"},
@@ -115,6 +116,7 @@ static Setting settings[] = {
     {"enhance.text_font", "C:/Windows/Fonts/segoeui.ttf", "TrueType/OpenType font for modern text"},
     {"enhance.sfx", "modern", "sound effects: modern = the port's own, synthesized; custom = your samples, mapped in sfx/sfx.ini (the rest modern); original = the game's own"},
     {"enhance.music", "original", "music: algol = the port's modern sound chip plays the game's music (new instruments, drums and reverb); original = the YM2612 and PSG"},
+    {"enhance.custom_music", "on", "your music: on = audio files in the music folder play in place of the game's songs (music/8F.wav, or named in music/music.ini; see runtime/music.h); off = the game's"},
     {"enhance.music_bank", "", "with Algol: a SNES game you own whose instruments play the music instead of Algol's (the path to its ROM, e.g. Lufia II); empty = Algol's own"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
     {"enhance.battle_fx", "1", "attack and technique effects light the scene; sparks, flashes, embers, lens flares: 0 off, 1 subtle, 2 full"},
@@ -168,7 +170,7 @@ static void write_settings(const char *path) {
 }
 
 static void load_settings(void) {
-    char path[1100], line[256], section[32] = "";
+    char path[1100], line[600], section[32] = "";
     path_in_home(path, sizeof path, "psiv.ini");
     FILE *f = fopen(path, "r");
     if (!f) { write_settings(path); return; }
@@ -586,6 +588,12 @@ static void apply_enhancements(void) {
     hdtext_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.text"), "original") != 0);
     battleui_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_ui"), "original") != 0);
     algol_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.music"), "algol"));
+    /* your own music files (music.h), from the music folder */
+    {
+        char dir[1100];
+        path_in_home(dir, sizeof dir, "music");
+        music_set_folder(!classic_mode() && SDL_strcasecmp(setting("enhance.custom_music"), "off") ? dir : NULL);
+    }
     /* the instrument bank: decoded from that ROM when the setting changes */
     static char bank_now[1100];
     const char *bank = setting("enhance.music_bank");
@@ -631,6 +639,7 @@ static const MenuItem SETTINGS_ITEMS[] = {
     {"Battle fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Music", "enhance.music", {"original", "algol"}, {"Original chip", "Algol (modern)"}, 0, 0, 0, 1, NULL, apply_enhancements},
+    {"Your music", "enhance.custom_music", {"on", "off"}, {"On (music folder)", "Off"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Sound effects", "enhance.sfx", {"modern", "custom", "original"}, {"Modern", "Your samples", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},
     {"Battle menus", "enhance.battle_ui", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1, NULL, apply_enhancements},

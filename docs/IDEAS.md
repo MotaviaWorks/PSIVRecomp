@@ -244,6 +244,26 @@ crash are synthesized; 7 (a pitched instrument, Ryucross Field), 8 (a voice),
   delay; a MIDI export of the decoded notes (for remixing); a "your bank"
   mode (an SF2 or samples you provide, like the sound effects).
 
+### Your own music (PsiLok, 2026-11-04) -- v1 done (`runtime/music.c`)
+PsiLok's Meet Them Head-On rearrangement as a bonus without shipping it (it is
+a derivative of Sega's composition): players put their own files in
+`music/`, by song ID or named in `music/music.ini`. The song is known from
+$FF5020 (the voice table PlayMusic leaves; unique for all 52), a restart
+from the music tracks coming back on. The driver's sound command $FB
+(Sound_StopMusic in the disassembly) is a fade-out: $FF5004 counts 15 steps
+down, one every other tick, each track +1 attenuation, then StopAllSound; the
+file follows it (~1.5 dB a step). $FF5007 pauses. While a file plays, the
+chips play only the channels the effect tracks hold, as under Algol. WAV
+only (no decoder to fetch): PCM 8/16/24/32-bit or float, the "smpl" loop;
+three files cached (battle, field, one more). A file starts at its first
+sound unless music.ini says otherwise (an MP3's encoder delay held up the
+battle by 1.7 s). Tested with PsiLok's render 2 (3:35, 146 BPM): battles from
+fan save 8, all 7 battles of his session (24,635 frames still match), level
+within ~1-2 dB of the original song, loops sample-exact with no click.
+- **Next:** OGG / MP3 (stb_vorbis / dr_mp3, single-file public-domain
+  decoders: ask before fetching); a fade-in to follow the driver's ($FF5028);
+  the menu could list which songs have a file.
+
 ### Instrument banks from SNES games you own (PsiLok, 2026-11-04) -- v1: Lufia II (`runtime/snesbank.c`)
 Players with a copy of a SNES game can have PSIV's music played on that
 game's instruments: decoded from their ROM at startup, nothing shipped (no

@@ -13,6 +13,7 @@
  */
 #include "sound.h"
 #include "algol.h"
+#include "music.h"
 #include "m68k.h"
 #include "ym2612.h"
 
@@ -73,6 +74,7 @@ static uint64_t sound_ticks;
 void psiv_sound_tick(void) {
     sound_ticks++;
     if (algol_enabled()) algol_driver_tick();
+    music_tick();
 }
 
 static void psg_write(uint8_t v, int from_z80) {
@@ -186,13 +188,24 @@ static void advance(double n) {
             static int solo_read;
             static unsigned solo = 0xFFF;                  /* PSIV_CHANNELS: see algol.c */
             if (!solo_read) { const char *e = getenv("PSIV_CHANNELS"); if (e && *e) solo = (unsigned)strtoul(e, NULL, 16); solo_read = 1; }
-            unsigned psg_mask = algol_enabled() ? algol_psg_effects() : (solo >> 6 & 0xF);
+            int custom = music_active();                   /* your own file plays the music (music.h) */
+            unsigned psg_mask = custom ? music_fx_psg() : algol_enabled() ? algol_psg_effects() : (solo >> 6 & 0xF);
             for (psg_phase += PSG_PER_SAMPLE; psg_phase >= 1; psg_phase -= 1, ticks++) {
                 psg_clock();
                 p += psg_level(psg_mask);
             }
             if (ticks) p /= ticks;
-            if (algol_enabled()) {
+            if (custom) {
+                /* your file in place of the song; the chips play the effects */
+                float ml, mr;
+                ym_generate_mask(&l, &r, music_fx_fm());
+                music_render(&ml, &mr);
+                float fl = (float)((l + p) * 9 / 4) + ml, fr = (float)((r + p) * 9 / 4) + mr;
+                if (fabsf(fl) > 28000.0f) fl = (fl > 0 ? 1.0f : -1.0f) * (28000.0f + 4700.0f * tanhf((fabsf(fl) - 28000.0f) / 4700.0f));
+                if (fabsf(fr) > 28000.0f) fr = (fr > 0 ? 1.0f : -1.0f) * (28000.0f + 4700.0f * tanhf((fabsf(fr) - 28000.0f) / 4700.0f));
+                l = (int32_t)fl;
+                r = (int32_t)fr;
+            } else if (algol_enabled()) {
                 /* the music on Algol; the original chips only for the
                  * channels a sound effect holds */
                 float ml, mr;
@@ -236,6 +249,7 @@ void sound_init(void) {
     ym_init();
     psg_init();
     algol_reset();
+    music_reset();
 }
 
 uint8_t sound_68k_read(uint32_t a) {

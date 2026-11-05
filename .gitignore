@@ -39,3 +39,6 @@ imported saves/
 custom soundtrack ideas/
 *.smc
 *.sfc
+
+# Your own music files in place of the game's songs (runtime/music.h)
+music/

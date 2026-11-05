@@ -37,6 +37,7 @@
  *                        (hex, e.g. 84) the way the game does, via Sound_Index ($FF500A)
  *     --algol            the music on Algol, the port's modern sound chip (algol.h)
  *     --algol-bank ROM   with the instruments of a SNES game you own (snesbank.h)
+ *     --custom-music DIR your own music files in place of the game's songs (music.h)
  *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
  *                        (next to the trace, or build/bizhawk/port.*)
  *
@@ -50,6 +51,7 @@
 #include "panels.h"
 #include "battleui.h"
 #include "algol.h"
+#include "music.h"
 #include "sfx.h"
 #include "frame.h"
 #include "m68k.h"
@@ -820,6 +822,8 @@ int main(int argc, char **argv) {
             if (depth_scale > 4) depth_scale = 4;
         } else if (!strcmp(argv[i], "--algol")) {
             algol_set_enabled(1);                          /* the music on the modern chip */
+        } else if (!strcmp(argv[i], "--custom-music") && i + 1 < argc) {
+            music_set_folder(argv[++i]);                   /* your own music files (music.h) */
         } else if (!strcmp(argv[i], "--algol-bank") && i + 1 < argc) {
             const char *rom = argv[++i];                   /* a SNES game's instruments (snesbank.h) */
             if (!algol_set_bank(rom)) { fprintf(stderr, "no instrument bank in %s\n", rom); return 1; }
