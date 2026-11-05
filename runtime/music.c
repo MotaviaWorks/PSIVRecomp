@@ -280,19 +280,45 @@ int music_active(void) { return enabled && cur != NULL; }
 unsigned music_fx_fm(void) { return fx_fm; }
 unsigned music_fx_psg(void) { return fx_psg; }
 
+/* a stereo frame of the file at position p (frames, interpolated) */
+static void frame_at(const Track *t, double p, float *l, float *r) {
+    int i = (int)p;
+    if (i < 0) i = 0;
+    if (i + 2 > t->frames) i = t->frames - 2;
+    float f = (float)(p - (double)i);
+    const int16_t *a = t->pcm + (size_t)i * 2, *b = a + 2;
+    *l = (float)a[0] + ((float)b[0] - (float)a[0]) * f;
+    *r = (float)a[1] + ((float)b[1] - (float)a[1]) * f;
+}
+
+#define LOOP_XFADE 0.015                  /* s: the end of a pass slides into the same point a pass earlier */
+
 void music_render(float *left, float *right) {
     *left = *right = 0.0f;
     if (!cur || paused) return;
     Track *t = cur;
-    if (t->loop_end > 0 && pos >= (double)t->loop_end) pos -= (double)(t->loop_end - t->loop_start);
-    int i = (int)pos;
-    if (i + 1 >= t->frames) { cur = NULL; return; }           /* the end, no loop */
-    float f = (float)(pos - (double)i);
-    const int16_t *a = t->pcm + (size_t)i * 2, *b = a + 2;
+    double len = (double)(t->loop_end - t->loop_start);
+    if (t->loop_end > 0 && pos >= (double)t->loop_end) pos -= len;
+    if ((int)pos + 1 >= t->frames) { cur = NULL; return; }     /* the end, no loop */
+    float l, r;
+    frame_at(t, pos, &l, &r);
+    /* the loop's seam: a rendered loop's two sides seldom meet sample for
+     * sample (a synth's free-running phase, a tail cut off), so the last
+     * moments of each pass are blended into what plays a pass earlier --
+     * where the jump lands -- and the jump makes no click */
+    if (t->loop_end > 0) {
+        double xf = LOOP_XFADE * t->rate, into = pos - ((double)t->loop_end - xf);
+        if (into > 0.0 && pos - len >= 0.0) {
+            float w = (float)(into / xf), l2, r2;
+            frame_at(t, pos - len, &l2, &r2);
+            l += (l2 - l) * w;
+            r += (r2 - r) * w;
+        }
+    }
     ramp += (ramp_to - ramp) * (ramp_to > ramp ? 0.004f : 0.0012f);   /* a click-free start, a short fade at a stop */
     if (ramp_to == 0.0f && ramp < 0.0005f) { cur = NULL; return; }
     float g = t->gain * fade * ramp * LEVEL;
-    *left = ((float)a[0] + ((float)b[0] - (float)a[0]) * f) * g;
-    *right = ((float)a[1] + ((float)b[1] - (float)a[1]) * f) * g;
+    *left = l * g;
+    *right = r * g;
     pos += (double)t->rate / (double)SOUND_RATE;
 }

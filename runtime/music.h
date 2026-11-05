@@ -11,6 +11,12 @@
  *       8F loop 12.5 98.0        from 98.0 s); a WAV's own loop (its
  *                                "smpl" chunk) is used if there is one
  *       8F gain -3               dB
+ *       8F start 0.025           where it begins (default: its first sound;
+ *                                an MP3 decoded to WAV keeps the encoder's
+ *                                ~25 ms delay: add it to the loop points too)
+ *
+ * A loop's seam is blended over its last 15 ms into the same point a pass
+ * earlier, so a rendered loop jumps without a click.
  *
  * WAV: 16/24/32-bit PCM or float, any rate, mono or stereo. The game's music
  * driver still runs; while a file plays, the chips (or Algol) play only the
