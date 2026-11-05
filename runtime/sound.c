@@ -184,7 +184,7 @@ static void advance(double n) {
             int32_t l, r, p = 0;
             int ticks = 0;
             static int solo_read;
-            static unsigned solo = 0x7FF;                  /* PSIV_CHANNELS: see algol.c */
+            static unsigned solo = 0xFFF;                  /* PSIV_CHANNELS: see algol.c */
             if (!solo_read) { const char *e = getenv("PSIV_CHANNELS"); if (e && *e) solo = (unsigned)strtoul(e, NULL, 16); solo_read = 1; }
             unsigned psg_mask = algol_enabled() ? algol_psg_effects() : (solo >> 6 & 0xF);
             for (psg_phase += PSG_PER_SAMPLE; psg_phase >= 1; psg_phase -= 1, ticks++) {

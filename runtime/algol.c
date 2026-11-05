@@ -309,7 +309,8 @@ static void noise_run(Voice *v, float *l, float *r, float *rev) {
 /* Drum styles, per song: standard, or hard rock -- a kick with a beater
  * knock and drive, a snare with a crack and long wires, deeper toms,
  * brighter cymbals, all through a room and a punchy bus compressor, and a
- * hi-hat on the eighths locked to the song's own backbeat */
+ * hi-hat on the eighths locked to the song's own backbeat, a ride in its
+ * place in the louder sections */
 enum { STYLE_STANDARD, STYLE_ROCK };
 static const uint8_t ROCK_SONGS[] = {
     0xAC,                         /* The End of the Millennium (the title) */
@@ -318,9 +319,13 @@ static const uint8_t ROCK_SONGS[] = {
     0xA0,                         /* The King of Terrors */
     0x98,                         /* Edge of Darkness */
     0xA9,                         /* Red Alert */
+    0xAA,                         /* Laughter (the battles with Zio) */
 };
 static uint8_t song_style[0x34];                       /* songs $81-$B4 */
 static int song, style;                                /* the one playing (0 = unknown) and its drums */
+/* where the song is: driver ticks since it started (-1: not known, Algol
+ * having been switched on partway through it) */
+static int song_tick = -1, music_on, fresh = 1;
 
 static void song_tables(void);
 
@@ -583,7 +588,7 @@ static const struct { int kind; float tone, decay, level; } KIT[18] = {
 static const uint8_t BANK_TBL[17][2] = {{0,0},{0,1},{0,2},{0,3},{0,4},{0,5},{1,0},{0,7},{2,0},{1,1},{0,8},{2,1},{0,9},{2,2},{0,6},{3,0},{2,3}};
 
 typedef struct {
-    int on, kind, rock;
+    int on, kind, rock, added;    /* added: Algol's own (the rock hat, a crash into the ride) */
     float t, tone, decay, gain, pl, pr, ph, room;
     float m[6];                   /* metallic oscillators: cycles per sample */
     float hp1, hp2, lp1, bp1;
@@ -623,10 +628,12 @@ static void drum_metal(Drum *d, float scale) {
 
 /* The hi-hat that follows the backbeat (hard rock style). The snare on two
  * and four gives the pulse: the time between backbeats is the commonest gap
- * between snares (gaps under 0.4 s -- rolls, flams -- don't count, nor do
- * the odd syncopated ones, being outvoted), an eighth a quarter of it. The
- * hat plays every eighth, re-locked to each snare that lands on that grid,
- * and stops when the drums do. */
+ * between snares (gaps under 0.4 s -- rolls, flams -- don't count), when at
+ * least half the recent gaps agree on it -- a syncopated part (Red Alert's)
+ * has no backbeat, and gets no hat. An eighth is a quarter of it, and that
+ * tempo then holds: a run of fills doesn't move it. The hat plays every
+ * eighth, re-locked to each snare that lands on that grid, and stops when
+ * the drums do. */
 #define SN_N 12
 static double sn_gap[SN_N], sn_last, hat_p8, hat_anchor, hat_last_drum, hat_last;
 static int sn_n, hat_k, hat_running;
@@ -635,26 +642,27 @@ static void hat_follow_snare(void) {
     double t = now, gap = t - sn_last;
     sn_last = t;
     if (gap >= 0.4 * SR && gap <= 2.0 * SR) sn_gap[sn_n++ % SN_N] = gap;
-    int n = sn_n < SN_N ? sn_n : SN_N, best = 0;
-    double beat2 = 0.0;
-    for (int i = 0; i < n; i++) {                       /* the gap most others agree with */
-        int votes = 0;
-        double sum = 0.0;
-        for (int j = 0; j < n; j++)
-            if (fabs(sn_gap[j] - sn_gap[i]) < 0.03 * sn_gap[i]) { votes++; sum += sn_gap[j]; }
-        /* a tie: the one nearer a rock backbeat (~0.85 s, two beats at 140) */
-        if (votes > best || (votes == best && fabs(sum / votes - 0.85 * SR) < fabs(beat2 - 0.85 * SR))) {
-            best = votes;
-            beat2 = sum / votes;
+    if (!hat_running) {
+        int n = sn_n < SN_N ? sn_n : SN_N, best = 0;
+        double beat2 = 0.0;
+        for (int i = 0; i < n; i++) {                   /* the gap most others agree with */
+            int votes = 0;
+            double sum = 0.0;
+            for (int j = 0; j < n; j++)
+                if (fabs(sn_gap[j] - sn_gap[i]) < 0.03 * sn_gap[i]) { votes++; sum += sn_gap[j]; }
+            /* a tie: the one nearer a rock backbeat (~0.85 s, two beats at 140) */
+            if (votes > best || (votes == best && fabs(sum / votes - 0.85 * SR) < fabs(beat2 - 0.85 * SR))) {
+                best = votes;
+                beat2 = sum / votes;
+            }
         }
-    }
-    if (best < 2) return;
-    double p8 = beat2 / 4.0;
-    if (!hat_running || fabs(p8 - hat_p8) > 0.02 * hat_p8) {
-        if (log_on >= 2) printf("algol: backbeat %.3f s, eighth %.3f s\n", beat2 / SR, p8 / SR);
-        if (!hat_running) { hat_anchor = t; hat_k = 0; }
-        hat_p8 = p8;
+        if (best < 2 || best * 2 < n) return;           /* no backbeat (yet) */
+        hat_p8 = beat2 / 4.0;
+        hat_anchor = t;
+        hat_k = 0;
         hat_running = 1;
+        if (log_on >= 2) printf("algol: backbeat %.3f s, eighth %.3f s\n", beat2 / SR, hat_p8 / SR);
+        return;
     }
     double ph = (t - hat_anchor) / hat_p8, err = ph - floor(ph + 0.5);
     if (fabs(err) < 0.3) {                              /* on the grid: re-lock here */
@@ -668,12 +676,135 @@ static void rock_hat(float accent) {
     if (log_on >= 2) printf("algol: hat %.3f s (eighth %.3f s)\n", now / SR, hat_p8 / SR);
     Drum *d = drum_new();
     d->kind = D_HAT;
-    d->rock = 1;
+    d->rock = d->added = 1;
     d->decay = 0.03f + 0.012f * accent;
     d->gain = (0.30f + 0.20f * accent) * (0.92f + 0.08f * rnd(&d->rng));
     d->room = 0.05f;
     drum_pan(d, 0.64f);
     drum_metal(d, 2.9f);
+}
+
+/* The ride, in place of the hat in the louder sections of the rock songs.
+ * One cymbal struck again and again: each stroke adds to the wash still
+ * ringing from the ones before, over the stick's ping, and the strokes on
+ * the beat are harder and catch some of the bell. A crash marks the way in,
+ * where the game's own drums have none. */
+typedef struct { uint16_t from, to; uint8_t crash; } RideRange;
+typedef struct { uint8_t song; uint16_t loop, end; RideRange r[6]; } RideMap;
+/* driver ticks from each song's start (tools/algol_sections.py lists the
+ * bars); from `end` the song plays on from `loop` */
+static const RideMap RIDE_MAP[] = {
+    {0x8F, 288, 4320, {{1824, 2592, 1}}},         /* Meet Them Head-On: the melody (riff, build, melody, bridge) */
+    {0xAC,   0,    0, {{2048, 2764, 1}}},         /* the title: the break, over the falling bass */
+    {0x95,  72, 2016, {{1152, 2016, 1}}},         /* Defeat at a Blow: the second half */
+    {0xA0, 144, 4608, {{1440, 2592, 1}}},         /* The King of Terrors: the middle */
+};
+#define RIDE_AHEAD 2                  /* ticks: the switch comes just before the downbeat's stroke */
+static const RideMap *ride_map;
+static int ride_on, ride_crash;
+static struct {
+    float lo, hi, ping, bell;         /* envelopes: the wash (body, sizzle), the stick, the bell */
+    float ph[6], bph[3];
+    float hp1, hp2, lp1, php, nhp, nlp;
+    uint32_t rng;
+} ride;
+
+static void ride_reset(void) {
+    ride_map = NULL;
+    for (size_t i = 0; i < sizeof RIDE_MAP / sizeof RIDE_MAP[0]; i++)
+        if (RIDE_MAP[i].song && RIDE_MAP[i].song == song) ride_map = &RIDE_MAP[i];
+    ride_on = ride_crash = 0;
+}
+
+/* each driver tick: in a louder section or not */
+static void ride_follow_song(void) {
+    int on = 0, crash = 0;
+    const RideMap *m = ride_map;
+    if (style == STYLE_ROCK && m && song_tick >= 0) {
+        int t = song_tick + RIDE_AHEAD;
+        if (t >= m->end && m->end > m->loop) t = m->loop + (t - m->loop) % (m->end - m->loop);
+        for (int i = 0; i < 6 && m->r[i].to; i++)
+            if (t >= m->r[i].from && t < m->r[i].to) { on = 1; crash = m->r[i].crash; }
+    }
+    if (on && !ride_on) ride_crash = crash;
+    ride_on = on;
+}
+
+static void ride_hit(float accent) {
+    hat_last = now;
+    if (log_on >= 2) printf("algol: ride %.3f s (song tick %d)\n", now / SR, song_tick);
+    if (!ride.rng) ride.rng = 0x2545F491u;
+    float g = (0.75f + 0.35f * accent) * (0.94f + 0.06f * rnd(&ride.rng));
+    ride.lo = ride.lo * 0.65f + g;    /* the stick damps the ringing a little, and adds to it */
+    ride.hi = ride.hi * 0.5f + g;
+    ride.ping = g;
+    ride.bell = 0.6f * accent * g;
+}
+
+static void rock_crash(void) {
+    hat_last = now;
+    if (log_on >= 2) printf("algol: crash %.3f s (song tick %d)\n", now / SR, song_tick);
+    Drum *d = drum_new();
+    d->kind = D_CRASH;
+    d->rock = d->added = 1;
+    d->decay = KIT[6].decay * 1.25f;
+    d->gain = KIT[6].level * 2.6f;                         /* over the ride it leads into */
+    d->room = 0.15f;
+    drum_pan(d, 0.32f);
+    drum_metal(d, 2.3f);
+}
+
+static void ride_run(float *l, float *r, float *room) {
+    if (ride.lo + ride.hi + ride.ping + ride.bell < 1e-4f) return;
+    static float k_lo, k_hi, k_ping, k_bell, mf[6], bf[3], pl, pr;
+    if (k_lo == 0.0f) {
+        k_lo = expf(-1.0f / (1.5f * SR));
+        k_hi = expf(-1.0f / (0.45f * SR));
+        k_ping = expf(-1.0f / (0.03f * SR));
+        k_bell = expf(-1.0f / (0.22f * SR));
+        static const float METAL[6] = {205.3f, 304.4f, 369.6f, 522.7f, 540.0f, 800.0f};
+        for (int i = 0; i < 6; i++) mf[i] = METAL[i] * 1.7f / SR;
+        static const float BELL[3] = {742.0f, 1187.0f, 1663.0f};
+        for (int i = 0; i < 3; i++) bf[i] = BELL[i] / SR;
+        pl = cosf(0.34f * 1.5707963f) * 1.41421356f;
+        pr = sinf(0.34f * 1.5707963f) * 1.41421356f;
+    }
+    float x = 0.0f;                                         /* six square waves: the metal */
+    for (int i = 0; i < 6; i++) {
+        ride.ph[i] += mf[i];
+        if (ride.ph[i] >= 1.0f) ride.ph[i] -= 1.0f;
+        x += ride.ph[i] < 0.5f ? 1.0f : -1.0f;
+    }
+    x /= 6.0f;
+    /* the wash: the metal's partials each smeared into a band (times noise
+     * low-passed ~1.5 kHz), so it shimmers instead of holding a chord */
+    float n = rnd(&ride.rng);
+    ride.nlp += (n - ride.nlp) * 0.17f;
+    float src = 1.6f * x * ride.nlp + 0.3f * n;
+    ride.hp1 += (src - ride.hp1) * 0.26f;                   /* high-pass ~2.5 kHz */
+    float h = src - ride.hp1;
+    ride.hp2 += (h - ride.hp2) * 0.26f;
+    h -= ride.hp2;
+    ride.lp1 += (h - ride.lp1) * 0.55f;                     /* split ~7 kHz: body below, sizzle above */
+    float s = ride.lp1 * ride.lo * 0.55f + (h - ride.lp1) * ride.hi * 0.45f;
+    ride.php += (x - ride.php) * 0.5f;                      /* the ping: the metal's top and a tick */
+    ride.nhp += (n - ride.nhp) * 0.6f;
+    s += (0.9f * (x - ride.php) + 0.5f * (n - ride.nhp)) * ride.ping;
+    float b = 0.0f;                                         /* the bell */
+    for (int i = 0; i < 3; i++) {
+        ride.bph[i] += bf[i];
+        if (ride.bph[i] >= 1.0f) ride.bph[i] -= 1.0f;
+        b += sinf(TWO_PI * ride.bph[i]) * (i == 0 ? 1.0f : i == 1 ? 0.6f : 0.4f);
+    }
+    s += b * ride.bell * 0.07f;
+    ride.lo *= k_lo;
+    ride.hi *= k_hi;
+    ride.ping *= k_ping;
+    ride.bell *= k_bell;
+    s *= 0.2f * 0.68f;                                      /* with the kit (drum_run's scale), a ride's level */
+    *l += s * pl;
+    *r += s * pr;
+    *room += s * 0.12f;
 }
 
 void algol_dac_hit(int sample, int pitch, int volume, int pan) {
@@ -683,6 +814,7 @@ void algol_dac_hit(int sample, int pitch, int volume, int pan) {
     if (now - last_hit[sample] < 0.004 * SR && last_hit[sample] > 0.0) return;
     last_hit[sample] = now;
     hat_last_drum = now;
+    if (log_on >= 2) printf("algol: drum %d at %.3f s, song tick %d\n", sample, now / SR, song_tick);
     int rock = style == STYLE_ROCK;
     Drum *d = drum_new();
     d->kind = KIT[sample].kind;
@@ -984,6 +1116,9 @@ static void silence(void) {
     sn_n = 0;
     sn_last = -1e9;
     memset(last_hit, 0, sizeof last_hit);
+    memset(&ride, 0, sizeof ride);
+    ride_on = ride_crash = 0;
+    fresh = 1;
 }
 
 /* the console reset: the chips start over too */
@@ -1001,6 +1136,19 @@ void algol_reset(void) {
 unsigned algol_fm_effects(void) { return fx_fm; }
 unsigned algol_psg_effects(void) { return fx_psg; }
 
+static void song_start(int id, int tick) {
+    song = id;
+    song_tick = tick;
+    style = song ? song_style[song - 0x81] : STYLE_STANDARD;
+    hat_running = 0;
+    sn_n = 0;
+    sn_last = -1e9;
+    ride_reset();
+    if (log_on < 0) { const char *v = getenv("PSIV_ALGOL_LOG"); log_on = v ? atoi(v) : 0; }
+    if (log_on) printf("algol: song %02X, %s drums (at %.3f s%s)\n", song, style == STYLE_ROCK ? "rock" : "standard",
+                       now / SR, tick < 0 ? ", partway" : "");
+}
+
 /* which channels the driver's sound-effect tracks hold: the music has the rest */
 void algol_driver_tick(void) {
     /* the song: PlayMusic leaves its voice table's address at $FF5020 */
@@ -1009,15 +1157,13 @@ void algol_driver_tick(void) {
     uint32_t vt = (uint32_t)m68k_ram[0x5021] << 16 | (uint32_t)m68k_ram[0x5022] << 8 | m68k_ram[0x5023];
     int now_song = 0;
     for (int i = 0; i < 0x34; i++) if (song_vt[i] && song_vt[i] == vt) { now_song = 0x81 + i; break; }
-    if (now_song != song) {
-        song = now_song;
-        style = song ? song_style[song - 0x81] : STYLE_STANDARD;
-        hat_running = 0;
-        sn_n = 0;
-        sn_last = -1e9;
-        if (log_on < 0) { const char *v = getenv("PSIV_ALGOL_LOG"); log_on = v ? atoi(v) : 0; }
-        if (log_on) printf("algol: song %02X, %s drums\n", song, style == STYLE_ROCK ? "rock" : "standard");
-    }
+    int playing = 0;                                       /* the ten music tracks, $FF5040 on */
+    for (int i = 0; i < 10; i++) if (m68k_ram[0x5040u + (unsigned)i * 0x30u] & 0x80) playing = 1;
+    if (fresh) { fresh = 0; song_start(now_song, playing ? -1 : 0); }   /* just switched on */
+    else if (now_song != song || (playing && !music_on)) song_start(now_song, 0);   /* a song (re)starts */
+    else if (song_tick >= 0) song_tick++;
+    music_on = playing;
+    ride_follow_song();
     unsigned fm = 0, psg = 0;
     for (int i = 0; i < 9; i++) {
         unsigned a = 0x5220u + (unsigned)i * 0x30u;
@@ -1034,10 +1180,11 @@ void algol_driver_tick(void) {
 }
 
 /* PSIV_CHANNELS=hex (for tuning): only these are heard -- bits 0-5 FM 1-6,
- * 6-8 PSG 1-3, 9 noise, 10 drums; sound.c applies the same to the chips */
+ * 6-8 PSG 1-3, 9 noise, 10 the game's drums, 11 the cymbals Algol adds (the
+ * rock hat, ride and crash); sound.c applies the same to the chips */
 static unsigned solo_mask(void) {
     static int read;
-    static unsigned mask = 0x7FF;
+    static unsigned mask = 0xFFF;
     if (!read) { const char *v = getenv("PSIV_CHANNELS"); if (v && *v) mask = (unsigned)strtoul(v, NULL, 16); read = 1; }
     return mask;
 }
@@ -1055,16 +1202,34 @@ void algol_render(float *left, float *right) {
         if (!(solo >> i & 1)) continue;
         l += vl; r += vr; rev += vrev; dly += vdly; cho += vcho;
     }
-    /* the hat on the eighths (rock style), then the kit through its bus */
+    /* the eighths (rock style): the hat, or in a louder section the ride
+     * (a crash on the way in); then the kit through its bus */
     if (style == STYLE_ROCK && hat_running) {
         if (now - hat_last_drum > 8.0 * hat_p8) hat_running = 0;           /* the drums stopped */
-        else if (now >= hat_anchor + (double)hat_k * hat_p8) { rock_hat(hat_k % 2 == 0 ? 1.0f : 0.0f); hat_k++; }
+        else if (now >= hat_anchor + (double)hat_k * hat_p8) {
+            float accent = hat_k % 2 == 0 ? 1.0f : 0.0f;
+            if (ride_crash) { rock_crash(); ride_crash = 0; }
+            else if (ride_on) ride_hit(accent);
+            else rock_hat(accent);
+            hat_k++;
+        }
     }
     now += 1.0;
     float bl = 0.0f, br = 0.0f, room = 0.0f, brev = 0.0f;
-    for (int i = 0; i < NDRUMS; i++) if (drums[i].on) drum_run(&drums[i], &bl, &br, &room);
+    for (int i = 0; i < NDRUMS; i++) {
+        if (!drums[i].on) continue;
+        float dl = 0.0f, dr = 0.0f, dm = 0.0f;
+        int added = drums[i].added;
+        drum_run(&drums[i], &dl, &dr, &dm);
+        if (solo >> (added ? 11 : 10) & 1) { bl += dl; br += dr; room += dm; }
+    }
+    {
+        float dl = 0.0f, dr = 0.0f, dm = 0.0f;
+        ride_run(&dl, &dr, &dm);
+        if (solo >> 11 & 1) { bl += dl; br += dr; room += dm; }
+    }
     drum_bus(&bl, &br, room, &brev);
-    if (solo >> 10 & 1) { l += bl; r += br; rev += brev; }
+    l += bl; r += br; rev += brev;
     float el = 0.0f, er = 0.0f;
     reverb(rev, &el, &er);
     chorus(cho, &el, &er);

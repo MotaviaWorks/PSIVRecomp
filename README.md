@@ -72,7 +72,12 @@ original game, unchanged; **Enhanced** turns on the additions:
   The tense songs -- the title, Meet Them Head-On and the battle and boss
   themes -- get hard rock drums: a kick with a beater knock, a snare with a
   crack, deeper toms, brighter cymbals, a room and a punchy bus compressor,
-  and a hi-hat on the eighths locked to the song's own backbeat.
+  and a hi-hat on the eighths locked to the song's own backbeat. In the
+  louder sections a ride takes over from the hat, with a crash on the way
+  in: Meet Them Head-On's melody, the title's break, the second half of
+  Defeat at a Blow, the middle of The King of Terrors (`RIDE_MAP` in
+  `algol.c`, positions in driver ticks from the song's start, found with
+  `python tools/algol_sections.py 8F`, which lists a song bar by bar).
   `algol.ini` in the working folder overrides the instrument of any patch
   (`PSIV_ALGOL_LOG=1` lists them) and the drums of any song (`song 8F =
   rock` or `= standard`); `psiv_headless --algol` renders with it.

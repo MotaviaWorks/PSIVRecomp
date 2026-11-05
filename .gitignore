@@ -31,3 +31,6 @@ sfx/**/*.wav
 characters/
 # converted portraits (game art, never committed)
 portraits/
+
+# Save files you collect for testing (third-party saves, never committed)
+imported saves/

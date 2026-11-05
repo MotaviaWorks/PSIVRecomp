@@ -196,7 +196,7 @@ crash are synthesized; 7 (a pitched instrument, Ryucross Field), 8 (a voice),
 - **Hard rock drums for the tense songs** (PsiLok, 2026-11-04; done): the song
   playing is known from $FF5020, where PlayMusic leaves its voice table's
   address (unique for all 52; table MusicPtrs at ROM $D1C40). Rock style
-  for $AC (the title), $8F, $95, $A0, $98, $A9 (algol.ini: `song XX = rock /
+  for $AC (the title), $8F, $95, $A0, $98, $A9, $AA (algol.ini: `song XX = rock /
   standard`): rock variants of each drum, a four-line room and a parallel
   bus compressor, and a closed hat on the eighths -- the backbeat is the
   commonest gap between snares (rolls under 0.4 s ignored, ties to the one
@@ -204,6 +204,24 @@ crash are synthesized; 7 (a pitched instrument, Ryucross Field), 8 (a voice),
   eighths; the title: 0.213 s). The game's two drum tracks can write the
   same sample in one tick: deduplicated (the console plays one sample at a
   time; Algol's kit rings together).
+- **The ride in the louder sections** (PsiLok, 2026-11-04; done): the battle
+  and boss themes are sectioned (8F: riff, build, melody, bridge; loop 42
+  bars) but evenly loud -- the melody is only ~1 dB (K-weighted) over the
+  rest -- so a live loudness detector would switch late or flap, and
+  battles mostly hear the first pass. Instead `RIDE_MAP` holds each song's
+  louder sections in driver ticks from its start (the driver is
+  deterministic: same tick, same bar), with its loop, measured by
+  `tools/algol_sections.py` (band-only Algol render, per-bar BS.1770
+  loudness, drum hits, the loop from the FM key-ons). Algol counts ticks
+  from the song's start (a new voice table, or the music tracks starting
+  again; unknown if Algol is switched on mid-song), switches two ticks ahead
+  of the downbeat, and the eighth there is a crash. The ride is one cymbal
+  re-struck (wash that builds, stick ping, a little bell on the beat), not
+  a voice per stroke. Laughter ($AA, Zio) joined the rock songs (evenly
+  loud: hat throughout). The follower now locks only when half the recent
+  snare gaps agree, and holds that tempo: Red Alert's syncopated snare had
+  drawn a hat at the wrong speed, and the K4 S4 bars of The King of Terrors
+  had pulled it to a 0.113 s eighth.
 - **Next:** per-song picks by ear with PsiLok (he produces: his choice of
   sounds is the point); the PSG echo copies as one voice through a real
   delay; a MIDI export of the decoded notes (for remixing); a "your bank"
