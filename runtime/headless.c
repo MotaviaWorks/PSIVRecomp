@@ -64,6 +64,7 @@
 #include "sfx.h"
 #include "frame.h"
 #include "m68k.h"
+#include "mixbus.h"
 #include "sha256.h"
 #include "sound.h"
 #include "vdp.h"
@@ -220,6 +221,13 @@ static void report(void) {
     uint32_t hash = 2166136261u;                       /* FNV-1a over work RAM */
     for (int i = 0; i < 0x10000; i++) hash = (hash ^ m68k_ram[i]) * 16777619u;
     printf("frames %llu, RAM FNV-1a %08X, audio peak %d\n", (unsigned long long)frame_count, hash, audio_peak);
+    uint64_t limited, all;
+    double deepest;
+    mixbus_stats(&limited, &all, &deepest);
+    if (limited)
+        printf("mix bus: the limiter turned down %llu of %llu samples (%.2f%%), at most %.1f dB\n",
+               (unsigned long long)limited, (unsigned long long)all, all ? 100.0 * (double)limited / (double)all : 0.0,
+               deepest);
     if (wav) {
         wav_header(wav, wav_samples);
         fclose(wav);

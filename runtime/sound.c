@@ -41,7 +41,7 @@ static double frame_pos;               /* Z80 cycles run so far this frame */
 static double sample_phase;            /* Z80 cycles toward the next output sample */
 static double psg_phase;
 static int irq_cycles;
-static int16_t buffer[MAX_SAMPLES * 2];
+static float buffer[MAX_SAMPLES * 2];  /* the chips' scale (16-bit), unclipped */
 static int nsamples;
 static uint64_t total_samples;
 static FILE *write_log;
@@ -195,42 +195,36 @@ static void advance(double n) {
                 p += psg_level(psg_mask);
             }
             if (ticks) p /= ticks;
+            /* master gain: the loudest song peaks near 11,500 raw; x2.25 puts it
+             * around -2 dBFS with headroom for effects over music. Summed in
+             * float, unclipped: the mix bus (mixbus.c) makes the 16-bit output */
+            float fl, fr;
             if (custom) {
                 /* your file in place of the song; the chips play the effects */
                 float ml, mr;
                 ym_generate_mask(&l, &r, music_fx_fm());
                 music_render(&ml, &mr);
-                float fl = (float)((l + p) * 9 / 4) + ml, fr = (float)((r + p) * 9 / 4) + mr;
-                if (fabsf(fl) > 28000.0f) fl = (fl > 0 ? 1.0f : -1.0f) * (28000.0f + 4700.0f * tanhf((fabsf(fl) - 28000.0f) / 4700.0f));
-                if (fabsf(fr) > 28000.0f) fr = (fr > 0 ? 1.0f : -1.0f) * (28000.0f + 4700.0f * tanhf((fabsf(fr) - 28000.0f) / 4700.0f));
-                l = (int32_t)fl;
-                r = (int32_t)fr;
+                fl = (float)((l + p) * 9 / 4) + ml;
+                fr = (float)((r + p) * 9 / 4) + mr;
             } else if (algol_enabled()) {
                 /* the music on Algol; the original chips only for the
                  * channels a sound effect holds */
                 float ml, mr;
                 ym_generate_mask(&l, &r, algol_fm_effects());
                 algol_render(&ml, &mr);
-                /* an effect on top of the music: a soft knee, not a clip */
-                float fl = (float)((l + p) * 9 / 4) + ml, fr = (float)((r + p) * 9 / 4) + mr;
-                if (fabsf(fl) > 28000.0f) fl = (fl > 0 ? 1.0f : -1.0f) * (28000.0f + 4700.0f * tanhf((fabsf(fl) - 28000.0f) / 4700.0f));
-                if (fabsf(fr) > 28000.0f) fr = (fr > 0 ? 1.0f : -1.0f) * (28000.0f + 4700.0f * tanhf((fabsf(fr) - 28000.0f) / 4700.0f));
-                l = (int32_t)fl;
-                r = (int32_t)fr;
-            } else if ((solo & 0x43F) != 0x43F) {
-                ym_generate_mask(&l, &r, (solo & 0x1F) | ((solo >> 5 | solo >> 10) & 1) << 5);   /* tuning: some channels */
-                l = (l + p) * 9 / 4;
-                r = (r + p) * 9 / 4;
+                fl = (float)((l + p) * 9 / 4) + ml;
+                fr = (float)((r + p) * 9 / 4) + mr;
             } else {
-                ym_generate(&l, &r);
-                /* master gain: the loudest song peaks near 11,500 raw; x2.25 puts it
-                 * around -2 dBFS with headroom for effects over music */
-                l = (l + p) * 9 / 4;
-                r = (r + p) * 9 / 4;
+                if ((solo & 0x43F) != 0x43F)
+                    ym_generate_mask(&l, &r, (solo & 0x1F) | ((solo >> 5 | solo >> 10) & 1) << 5);   /* tuning: some channels */
+                else
+                    ym_generate(&l, &r);
+                fl = (float)((l + p) * 9 / 4);                   /* whole numbers, exact in float */
+                fr = (float)((r + p) * 9 / 4);
             }
             if (nsamples < MAX_SAMPLES) {
-                buffer[nsamples * 2] = (int16_t)(l > 32767 ? 32767 : l < -32768 ? -32768 : l);
-                buffer[nsamples * 2 + 1] = (int16_t)(r > 32767 ? 32767 : r < -32768 ? -32768 : r);
+                buffer[nsamples * 2] = fl;
+                buffer[nsamples * 2 + 1] = fr;
                 nsamples++;
             }
         }
@@ -296,7 +290,7 @@ void sound_reset_write(uint16_t v) {
     reset_held = hold;
 }
 
-int sound_end_frame(const int16_t **out) {
+int sound_end_frame(const float **out) {
     irq_cycles = VINT_IRQ_CYCLES;       /* the VDP raises the Z80 interrupt at vertical blank */
     if (frame_pos < FRAME_CYCLES) advance(FRAME_CYCLES - frame_pos);
     frame_pos -= FRAME_CYCLES;

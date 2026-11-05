@@ -300,7 +300,10 @@ static void resolve_bindings(void) {
     pad_of[IN_RIGHT] = SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
 }
 
+static uint64_t test_ff_frame, test_ff_len;            /* --test-ff F:N: fast forward held N frames from F */
+
 static int held(int in) {
+    if (in == IN_FF && test_ff_len && frame_count >= test_ff_frame && frame_count < test_ff_frame + test_ff_len) return 1;
     const bool *k = SDL_GetKeyboardState(NULL);
     if (key_of[in] != SDL_SCANCODE_UNKNOWN && k[key_of[in]]) return 1;
     if (pad && pad_of[in] != SDL_GAMEPAD_BUTTON_INVALID && SDL_GetGamepadButton(pad, pad_of[in])) return 1;
@@ -1628,12 +1631,131 @@ static bool SDLCALL test_pad_rumble(void *ud, Uint16 lo, Uint16 hi) {
 }
 
 /* ------------------------------------------------------------------ frame and audio */
+/* Diagnostics for psiv.log. The game makes a frame of sound at a time and
+ * SDL's stream holds it until the output device takes it. An underrun is the
+ * device asking for sound the stream doesn't have yet: a gap, heard as a
+ * click. Counted on SDL's audio thread while the game is playing (it pushed
+ * sound within the last 250 ms: not paused, in a menu or loading). */
+static SDL_AtomicInt audio_last_push_ms, audio_underruns, audio_missing, audio_starved;
+static void SDLCALL audio_requested(void *ud, SDL_AudioStream *s, int additional, int total) {
+    (void)ud; (void)s; (void)total;
+    if (additional <= 0) return;
+    if ((int)SDL_GetTicks() - SDL_GetAtomicInt(&audio_last_push_ms) > 250) return;
+    SDL_AddAtomicInt(&audio_underruns, 1);
+    SDL_AddAtomicInt(&audio_missing, additional);
+    SDL_SetAtomicInt(&audio_starved, 1);
+}
+
+/* The queue: the game keeps audio_target bytes ahead of the device, a
+ * cushion for a frame that runs late (set from the device's buffer when the
+ * stream opens). The game's clock (the PC's timer) and the device's own
+ * crystal never run at quite the same speed -- Desk's Focusrite drifts about
+ * 0.02% -- so the queue would creep until it ran dry or grew too long. The
+ * stream's playback speed is nudged to hold it at the target instead: at
+ * most 0.5% (8 cents) when far off, in practice a few hundredths of a
+ * percent, which no one can hear. */
+static int audio_target = SOUND_RATE * 4 / 20;          /* bytes; 50 ms until the device says */
+static double audio_level = -1.0;                       /* the queue before each push, smoothed */
+static float audio_ratio = 1.0f;
+
+static struct {
+    int pushes, drops, primes, qmin, qmax;
+    double qsum;
+    float rmin, rmax;
+    uint64_t since;
+} astat;
+
+/* a line in psiv.log every 30 s that had a gap, a drop or a refill
+ * (PSIV_AUDIO_LOG=1: every 5 s, whatever happened) */
+static void audio_report(void) {
+    static int every_ms = -1;
+    if (every_ms < 0) every_ms = SDL_getenv("PSIV_AUDIO_LOG") ? 5000 : 30000;
+    uint64_t now = SDL_GetTicks();
+    if (!astat.since) astat.since = now;
+    if (now - astat.since < (uint64_t)every_ms) return;
+    int under = SDL_SetAtomicInt(&audio_underruns, 0), missing = SDL_SetAtomicInt(&audio_missing, 0);
+    if (under || astat.drops || astat.primes > 1 || every_ms == 5000) {
+        double ms = 1000.0 / (SOUND_RATE * 4.0);
+        SDL_Log("audio: %d underruns (%.0f ms of sound missing), %d frames dropped, %d refills; queue %.0f / %.0f / "
+                "%.0f ms (least / average / most; target %.0f); speed %+.3f%% to %+.3f%%; over %.0f s",
+                under, missing * ms, astat.drops, astat.primes, astat.qmin * ms,
+                astat.pushes ? astat.qsum / astat.pushes * ms : 0.0, astat.qmax * ms, audio_target * ms,
+                (astat.rmin - 1.0f) * 100.0f, (astat.rmax - 1.0f) * 100.0f, (double)(now - astat.since) / 1000.0);
+    }
+    memset(&astat, 0, sizeof astat);
+    astat.since = now;
+}
+
+/* fill the queue up to the target with silence: when sound starts, after a
+ * pause, a menu or a long stall, and after fast forward */
+static void audio_prime(int queued) {
+    static const int16_t silence[2 * 1024];
+    int want = (audio_target - queued) & ~3;
+    while (want > 0) {
+        int b = want > (int)sizeof silence ? (int)sizeof silence : want;
+        SDL_PutAudioStreamData(audio, silence, b);
+        want -= b;
+    }
+    audio_level = audio_target;
+    audio_ratio = 1.0f;
+    SDL_SetAudioStreamFrequencyRatio(audio, 1.0f);
+    astat.primes++;
+}
+
 void platform_audio(const int16_t *samples, int count) {
     if (!audio || count <= 0 || paused) return;
-    /* keep latency bounded: if more than ~1/6 s is queued (fast-forward, a
-     * stall), drop this frame's audio instead of letting the delay grow */
-    if (SDL_GetAudioStreamQueued(audio) > SOUND_RATE * 4 / 6) return;
-    SDL_PutAudioStreamData(audio, samples, count * 4);
+    int queued = SDL_GetAudioStreamQueued(audio), bytes = count * 4;
+    int now = (int)SDL_GetTicks();
+    int idle = now - SDL_GetAtomicInt(&audio_last_push_ms) > 250;   /* the first sound, or after a pause or a menu */
+    if (!astat.pushes || queued < astat.qmin) astat.qmin = queued;
+    if (queued > astat.qmax) astat.qmax = queued;
+    astat.qsum += queued;
+    if (!astat.pushes || audio_ratio < astat.rmin) astat.rmin = audio_ratio;
+    if (!astat.pushes || audio_ratio > astat.rmax) astat.rmax = audio_ratio;
+    astat.pushes++;
+    SDL_SetAtomicInt(&audio_last_push_ms, now);
+    static int ff_until;                                 /* ms: fast forward was held until then, and a little */
+    if (held(IN_FF)) {                                   /* fast forward: some of it, the delay bounded */
+        ff_until = now + 500;
+        if (queued > 2 * audio_target) astat.drops++;
+        else SDL_PutAudioStreamData(audio, samples, bytes);
+        audio_report();
+        return;
+    }
+    static int verbose = -1;                             /* PSIV_AUDIO_LOG=2: each refill and clear */
+    if (verbose < 0) verbose = SDL_getenv("PSIV_AUDIO_LOG") && SDL_atoi(SDL_getenv("PSIV_AUDIO_LOG")) >= 2;
+    if (now < ff_until && queued > audio_target * 3 / 2) {   /* fast forward just ended: back to the cushion */
+        if (verbose) SDL_Log("audio: cleared at %d ms queued (frame %llu)", queued * 1000 / (SOUND_RATE * 4),
+                             (unsigned long long)frame_count);
+        SDL_ClearAudioStream(audio);
+        queued = 0;
+        idle = 1;
+        ff_until = 0;
+    } else if (queued > 4 * audio_target) {             /* the device stopped taking sound: keep the delay bounded */
+        astat.drops++;
+        audio_report();
+        return;
+    }
+    /* starting, or the device ran dry (a long stall): the gap happened
+     * anyway; refill the cushion so it doesn't happen again and again */
+    int starved = SDL_SetAtomicInt(&audio_starved, 0);
+    if (idle || (starved && queued < bytes)) {
+        if (verbose) SDL_Log("audio: refill at %d ms queued (frame %llu, %s)", queued * 1000 / (SOUND_RATE * 4),
+                             (unsigned long long)frame_count, idle ? "idle" : "ran dry");
+        audio_prime(queued);
+        queued = audio_target;
+    }
+    SDL_PutAudioStreamData(audio, samples, bytes);
+    /* hold the queue at the target: faster when it's long, slower when it's short */
+    audio_level = audio_level < 0 ? queued : audio_level + (queued - audio_level) * 0.02;
+    double e = (audio_level - audio_target) / audio_target;
+    e = e > 1.0 ? 1.0 : e < -1.0 ? -1.0 : e;
+    float ratio = (float)(1.0 + 0.005 * e);
+    if (ratio != audio_ratio) {
+        audio_ratio = ratio;
+        SDL_SetAudioStreamFrequencyRatio(audio, ratio);
+    }
+    audio_report();
 }
 
 /* a click or a tap at (rx, ry) in render pixels: the system menu, the battle
@@ -2248,6 +2370,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--no-dialogs")) no_dialogs = 1;
         /* testing the rumble: --test-rumble F (see test_pad_rumble) */
         else if (!strcmp(argv[i], "--test-rumble") && i + 1 < argc) test_rumble_frame = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--test-ff") && i + 1 < argc) {   /* F:N: fast forward held N frames from F */
+            char *e;
+            test_ff_frame = strtoull(argv[++i], &e, 10);
+            test_ff_len = *e == ':' ? strtoull(e + 1, NULL, 10) : 60;
+        }
     }
 
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");        /* touches are handled as touches (touch.h) */
@@ -2334,6 +2461,18 @@ int main(int argc, char **argv) {
     audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
     if (audio) {
         SDL_SetAudioStreamGain(audio, (float)setting_int("audio.volume") / 100.0f);
+        SDL_SetAudioStreamGetCallback(audio, audio_requested, NULL);
+        SDL_AudioSpec dev;
+        int dev_frames = 0;
+        if (SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(audio), &dev, &dev_frames)) {
+            /* the cushion: twice the device's buffer and a frame, 50 ms at least */
+            double buf_ms = dev.freq > 0 ? 1000.0 * dev_frames / dev.freq : 10.0, want_ms = 2.0 * buf_ms + 17.0;
+            if (want_ms < 50.0) want_ms = 50.0;
+            audio_target = (int)(want_ms / 1000.0 * SOUND_RATE) * 4;
+            SDL_Log("audio: %s, %d Hz, %d channels, %d-frame buffer (%.1f ms); %.0f ms kept queued",
+                    SDL_GetAudioDeviceName(SDL_GetAudioStreamDevice(audio)), dev.freq, dev.channels, dev_frames,
+                    buf_ms, want_ms);
+        }
         SDL_ResumeAudioStreamDevice(audio);
     } else {
         SDL_Log("no audio: %s", SDL_GetError());

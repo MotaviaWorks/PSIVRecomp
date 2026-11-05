@@ -277,6 +277,7 @@ void music_tick(void) {
 }
 
 int music_active(void) { return enabled && cur != NULL; }
+int music_enabled(void) { return enabled; }
 unsigned music_fx_fm(void) { return fx_fm; }
 unsigned music_fx_psg(void) { return fx_psg; }
 

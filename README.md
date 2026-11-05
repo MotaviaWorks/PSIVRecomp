@@ -360,6 +360,20 @@ build\native-Release\psiv_headless.exe --frames 1500 --music 8F:30 --wav song.wa
 way the game requests it; `--ymlog` logs every chip write with the source CPU
 and the sound-driver tick.
 
+**The mix and the output.** The chips, the port's sound effects and your
+music are summed in float; `runtime/mixbus.c` makes the 16-bit samples. With
+only the game's own sound (Classic, and every reference check) that is the
+same conversion as ever, bit for bit. With the port's sound in the mix, a
+look-ahead peak limiter (1.2 ms, ceiling -0.8 dBFS, 80 ms release) turns the
+whole mix down for a moment on a loud hit over loud music, instead of the
+per-sample soft clipping it replaced (heard as distortion); `psiv_headless`
+prints how much it worked. The app keeps ~50 ms queued for the output device
+(twice its buffer and a frame) and holds it there by nudging the playback
+speed (at most 0.5%, typically a few hundredths of a percent: the PC's timer
+and the device's clock drift apart). `psiv.log` gets an `audio:` line for any
+30 s with a gap (underrun) or a dropped frame; `PSIV_AUDIO_LOG=1` logs every
+5 s, `=2` each refill too; `psiv --test-ff F:N` holds fast forward.
+
 `prepare_rom.py` accepts raw and interleaved SMD dumps and refuses anything
 that isn't the USA ROM (SHA1 `bc7ff6d6a8408f38562bc610f24645cad6c42629`).
 `build_disasm.py` reassembles the disassembly with the bundled assembler on

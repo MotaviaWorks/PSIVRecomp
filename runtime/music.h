@@ -31,6 +31,7 @@ void music_set_folder(const char *dir);   /* NULL or "" = off */
 void music_reset(void);                   /* the console reset */
 void music_tick(void);                    /* each run of the music driver */
 int  music_active(void);                  /* a file plays: the chips play the effects only */
+int  music_enabled(void);                 /* a folder is set: files may play */
 unsigned music_fx_fm(void);               /* the channels effects hold: as algol_fm_effects() */
 unsigned music_fx_psg(void);
 void music_render(float *left, float *right);   /* one output sample, the chips' scale */

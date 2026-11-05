@@ -18,6 +18,9 @@
 #include "battleui.h"
 #include "bus.h"
 #include "m68k.h"
+#include "mixbus.h"
+#include "music.h"
+#include "algol.h"
 #include "rumble.h"
 #include "sfx.h"
 #include "sound.h"
@@ -108,17 +111,19 @@ void frame_run(void) {
         frame_lag_vint();
     }
 
-    /* the Z80, YM2612 and PSG play out the rest of the frame */
-    const int16_t *samples;
-    int n = sound_end_frame(&samples);
-    if (sfx_enabled()) {                                 /* plus any replacement samples */
-        static int16_t mix[2 * 8192];
-        if (n > 8192) n = 8192;
-        memcpy(mix, samples, (size_t)n * 2 * sizeof(int16_t));
-        sfx_mix(mix, n);
-        samples = mix;
-    }
-    platform_audio(samples, n);
+    /* the Z80, YM2612 and PSG play out the rest of the frame; then any
+     * replacement sound effects; the mix bus makes the 16-bit samples, with
+     * its limiter on while the port's own sound is in the mix */
+    const float *chips;
+    int n = sound_end_frame(&chips);
+    static float mix[2 * 8192];
+    static int16_t out[2 * 8192];
+    if (n > 8192) n = 8192;
+    memcpy(mix, chips, (size_t)n * 2 * sizeof(float));
+    if (sfx_enabled()) sfx_mix(mix, n);
+    mixbus_set_limiter(sfx_enabled() || algol_enabled() || music_enabled());
+    mixbus_finish(mix, out, n);
+    platform_audio(out, n);
 }
 
 int frame_vint_will_fire(void) {

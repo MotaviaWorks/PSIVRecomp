@@ -303,33 +303,20 @@ int sfx_request(uint8_t id) {
     return 1;
 }
 
-/* above about -2 dBFS the sum bends smoothly towards full scale instead of
- * clipping: a loud hit over loud music stays clean */
-static int16_t soft_limit(float s) {
-    const float knee = 26000.0f, room = 32767.0f - 26000.0f;
-    float a = fabsf(s);
-    if (a > knee) a = knee + room * tanhf((a - knee) / room);
-    return (int16_t)lrintf(s < 0 ? -a : a);
-}
-
-void sfx_mix(int16_t *samples, int frames) {
-    static float acc[2 * 8192];
-    int any = 0;
-    if (frames > 8192) frames = 8192;
+/* the replacements are added as they are: a loud hit over loud music is
+ * kept under full scale by the mix bus's limiter (mixbus.c), which turns
+ * the whole mix down for a moment rather than bending the waveform */
+void sfx_mix(float *samples, int frames) {
     for (int i = 0; i < MAX_VOICES; i++) {
         Voice *v = &voices[i];
         if (!v->pcm) continue;
-        if (!any) { memset(acc, 0, (size_t)frames * 2 * sizeof(float)); any = 1; }
         for (int n = 0; n < frames; n++) {
             if (v->pos >= v->frames || v->fade <= 0.0f) { v->pcm = NULL; break; }
             float g = v->gain * v->fade;
-            acc[n * 2] += (float)v->pcm[v->pos * 2] * g;
-            acc[n * 2 + 1] += (float)v->pcm[v->pos * 2 + 1] * g;
+            samples[n * 2] += (float)v->pcm[v->pos * 2] * g;
+            samples[n * 2 + 1] += (float)v->pcm[v->pos * 2 + 1] * g;
             v->pos++;
             v->fade += v->fade_step;
         }
     }
-    if (any)                                             /* untouched where nothing replaced plays */
-        for (int n = 0; n < frames * 2; n++)
-            if (acc[n] != 0.0f) samples[n] = soft_limit((float)samples[n] + acc[n]);
 }

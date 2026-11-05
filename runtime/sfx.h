@@ -32,8 +32,8 @@ int  sfx_synth_dump(const char *dir);
 /* the game asked for this sound: 1 = a replacement started, drop the request */
 int  sfx_request(uint8_t id);
 
-/* add the playing samples to a frame of audio: interleaved stereo int16 at
- * SOUND_RATE (sound.h) */
-void sfx_mix(int16_t *samples, int frames);
+/* add the playing samples to a frame of audio: interleaved stereo float at
+ * 16-bit scale, SOUND_RATE (sound.h), before the mix bus (mixbus.h) */
+void sfx_mix(float *samples, int frames);
 
 #endif

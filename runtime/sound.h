@@ -4,7 +4,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
-/* Output: interleaved stereo int16 at SOUND_RATE (the YM2612's native rate). */
+/* Output: interleaved stereo at SOUND_RATE (the YM2612's native rate), in
+ * float at 16-bit scale and not yet clipped; mixbus.c makes the 16-bit
+ * samples the front ends get. */
 #define SOUND_RATE 53267
 
 void sound_init(void);
@@ -19,7 +21,7 @@ void     sound_psg_write(uint8_t v);          /* $C00011 */
 
 /* Run the Z80, YM2612 and PSG to the end of this frame (called once per
  * frame after VInt). Returns the number of stereo samples now in *out. */
-int sound_end_frame(const int16_t **out);
+int sound_end_frame(const float **out);
 
 /* VGM-style write log for checking against the VGM rips: one line per chip
  * write, "sample chip reg value". NULL turns it off. */

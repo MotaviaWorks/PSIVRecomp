@@ -92,6 +92,8 @@ Reporting a problem
 
 Please send:
 - `psiv.log`, and `psiv-crash.txt` if there is one (both are in the folder above);
+  for crackles or gaps in the sound, the `audio:` lines in `psiv.log` say when
+  your output device ran short;
 - the version: the menu shows it bottom left;
 - your device or PC, and what you were doing;
 - your save (`saves/psiv.srm`) if the problem is somewhere in the game.
