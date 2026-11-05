@@ -244,6 +244,51 @@ crash are synthesized; 7 (a pitched instrument, Ryucross Field), 8 (a voice),
   delay; a MIDI export of the decoded notes (for remixing); a "your bank"
   mode (an SF2 or samples you provide, like the sound effects).
 
+### Instrument banks from SNES games you own (PsiLok, 2026-11-04) -- v1: Lufia II (`runtime/snesbank.c`)
+Players with a copy of a SNES game can have PSIV's music played on that
+game's instruments: decoded from their ROM at startup, nothing shipped (no
+samples from the internet). PsiLok's picks are in `custom soundtrack ideas/SNES/`
+(git-ignored): Battletoads & Double Dragon, Breath of Fire 1-2, Chrono
+Trigger, Earthworm Jim 1-2, Final Fantasy III, Final Fight, Lufia 1-2,
+Shadowrun, Star Fox, Super Turrican 1-2. Lufia II was the test.
+- **How the samples were found:** SNES music is BRR samples (9-byte blocks:
+  a shift, one of four prediction filters, 16 4-bit samples) in the sound
+  chip's 64 KB, uploaded by each game's driver. A blind scan of the ROM for
+  BRR is noise. Instead BizHawk (bsnes core: it has an "APURAM" domain;
+  Snes9x has none) dumped the sound RAM while the game played; the sample
+  directory (4-byte start / loop entries) was at $0100, and each sample's
+  bytes were in the ROM, raw. Lufia II keeps every instrument in one chain
+  of records from $0C3828: `[length][loop offset][ADSR1][ADSR2][tuning 8.8]`
+  then the BRR data; `08 00 00 00 00 00 00 00` is an empty slot; a loop
+  offset equal to the length means the sample plays once. 42 records, 37
+  samples. The tuning is the waveform's period in BRR blocks (16 samples):
+  the sample sounds 2000 / tuning Hz at 32 kHz -- confirmed by measuring
+  every looped sample's period. The loader finds the longest such chain
+  (so other releases of the game work too).
+- **In Algol:** a voice whose instrument has a bank sample reads it (cubic
+  interpolation, looped; two reads a few cents apart for the instruments
+  Algol voices in unison) under Algol's envelope times the game's own (its
+  sustain level and decay rate from ADSR2), skipping the synth's drive and
+  filter; drums map the same way. The levels were matched to the synth's
+  per channel (-10 dB at first; now within 0.5 dB on 8F and AC), and the
+  pitch tracks of each channel checked against the synth's. Algol's synth
+  output is byte-identical when no bank is set.
+- **The voicing** (which sample plays what) was picked from the samples'
+  waveforms, spectra and envelopes, not by ear: lead 35, brass 37, strings
+  6, bass 26, pluck 25, guitar 13, bell 39, organ 10, keys 20, chip 21
+  (23 first: its fundamental is weak, the 3rd harmonic led), kick 29, snare
+  38, hat 17, crash 34, tom 28. PsiLok's ears decide; `algol.ini`: `bank lead = N`.
+- **Other titles:** Lufia 1 uses the same records (48 at $0480C0): needs a
+  voicing. The rest use other drivers and need their own recipes, found the
+  same way (`tools/snes/sound_ram.py dump / find / chain`): Square's (Chrono
+  Trigger, FF III), Capcom's (Breath of Fire, Final Fight), Factor 5's
+  (Super Turrican), Nintendo's N-SPC family (Star Fox), and others. Some
+  pack their samples; then the recipe has to unpack them too.
+- **Next:** a menu entry (the ROM's path is a psiv.ini setting for now);
+  auto-voicing from the samples' features for games without a curated one;
+  the generated hat and ride from the bank's cymbals; SF2 export of a bank
+  (for PsiLok's own production).
+
 ## Smaller ones worth keeping in mind
 - Fast-forward, and turbo for battles and text.
 - Save anywhere. Harder than in an emulator: the recompiled game's position

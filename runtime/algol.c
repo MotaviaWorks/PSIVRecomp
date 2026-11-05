@@ -19,6 +19,7 @@
  */
 #include "algol.h"
 #include "m68k.h"
+#include "snesbank.h"
 #include "sound.h"
 
 #include <math.h>
@@ -27,6 +28,8 @@
 #include <string.h>
 
 #define SR      ((float)SOUND_RATE)
+#define BANK_LEVEL      3.3f                /* a bank's instruments at Algol's level (each sample's own gain evens them) */
+#define BANK_DRUM_LEVEL 2.7f
 #define TWO_PI  6.28318531f
 
 static int enabled;
@@ -120,8 +123,43 @@ typedef struct {
     uint32_t rng;
     uint32_t patch;
     float hp;                     /* noise voice: high-pass state */
+    int bs;                       /* the bank sample it plays (snesbank.h), -1: Algol's own */
+    double spos[2];               /* where in the sample (two reads, detuned, for width) */
 } Voice;
 static Voice voice[NVOICES];
+
+/* ------------------------------------------------------------------ an instrument bank */
+/* A SNES game's samples (snesbank.h) in place of the synth: per instrument,
+ * per drum, a sample (-1: keep Algol's own) and a transposition */
+static int bank_on, bank_inst[N_INST], bank_drum[8];
+static float bank_tr[N_INST];
+static struct { char name[16]; int sample; float transpose; } bank_user[24];   /* algol.ini: "bank lead = 35 [-12]" */
+static int nbank_user;
+static const char *const DRUM_NAMES[] = {"kick", "snare", "hat", "ride", "tom", "crash"};   /* D_KICK .. D_CRASH */
+
+static void bank_resolve(void) {
+    for (int u = 0; u < nbank_user; u++) snesbank_set_voice(bank_user[u].name, bank_user[u].sample, bank_user[u].transpose);
+    for (int i = 0; i < N_INST; i++) bank_inst[i] = bank_on ? snesbank_voice(INST[i].name, &bank_tr[i]) : -1;
+    for (int k = 0; k < 8; k++) bank_drum[k] = bank_on && k < 6 ? snesbank_voice(DRUM_NAMES[k], NULL) : -1;
+}
+
+int algol_set_bank(const char *rom_path) {
+    bank_on = rom_path && *rom_path && snesbank_load(rom_path);
+    bank_resolve();
+    const char *lv = getenv("PSIV_ALGOL_LOG");
+    if (bank_on && lv && atoi(lv) > 0) {                 /* the samples, and who plays what */
+        printf("algol: bank %s, %d samples\n", snesbank_name(), snesbank_count());
+        for (int i = 0; i < snesbank_count(); i++) {
+            const BankSample *s = snesbank_sample(i);
+            if (s) printf("algol:   %2d  %7.1f Hz  %s%s\n", i, s->root, s->loop >= 0 ? "loops" : "once",
+                          s->decay > 0.0f ? ", decays" : "");
+        }
+        for (int i = 0; i < N_INST; i++) printf("algol: bank %-8s -> %d\n", INST[i].name, bank_inst[i]);
+        for (int k = 0; k < 6; k++) printf("algol: bank %-8s -> %d\n", DRUM_NAMES[k], bank_drum[k]);
+    }
+    return bank_on;
+}
+const char *algol_bank_name(void) { return bank_on ? snesbank_name() : ""; }
 
 static void pan_of(Voice *v, float p) {
     p = clampf(p, 0.0f, 1.0f);
@@ -142,6 +180,27 @@ static void voice_on(Voice *v, int inst, float note, float gain, float pan) {
     pan_of(v, pan);
     for (int u = 0; u < 8; u++) v->ph[u] = (rnd(&v->rng) + 1.0f) * 0.5f;
     v->mph = v->mph2 = 0.0f;
+    v->bs = bank_on ? bank_inst[inst] : -1;
+    v->spos[0] = v->spos[1] = 0.0;
+}
+
+/* one read of a bank sample at pos (cubic), advancing by step; looping, or
+ * 0 once a one-shot is over */
+static float bank_read(const BankSample *s, double *pos, double step) {
+    double p = *pos;
+    if (p >= (double)(s->len - 1)) {
+        if (s->loop < 0) return 0.0f;
+        double span = (double)(s->len - s->loop);
+        p = (double)s->loop + fmod(p - (double)s->loop, span);
+    }
+    int i = (int)p;
+    float f = (float)(p - (double)i);
+    #define AT(k) (s->pcm[(k) < s->len ? (k) : (s->loop >= 0 ? s->loop + ((k) - s->len) % (s->len - s->loop) : s->len - 1)])
+    float y0 = i > 0 ? s->pcm[i - 1] : s->pcm[0], y1 = s->pcm[i], y2 = AT(i + 1), y3 = AT(i + 2);
+    #undef AT
+    *pos = p + step;
+    /* Catmull-Rom */
+    return y1 + 0.5f * f * (y2 - y0 + f * (2.0f * y0 - 5.0f * y1 + 4.0f * y2 - y3 + f * (3.0f * (y1 - y2) + y3 - y0)));
 }
 
 static void voice_off(Voice *v) {
@@ -154,40 +213,10 @@ static float polyblep(float t, float dt) {
     return 0.0f;
 }
 
-/* one sample of a voice into l/r, and its effect sends */
-static void voice_run(Voice *v, float *l, float *r, float *rev, float *dly, float *cho) {
-    const Inst *I = &INST[v->inst];
-    const float dt = 1.0f / SR;
-    v->t += dt;
-    /* envelopes */
-    if (v->stage == 0) {
-        v->env += dt / (I->a > 0.0005f ? I->a : 0.0005f);
-        if (v->env >= 1.0f) { v->env = 1.0f; v->stage = 1; }
-    } else if (v->stage == 1) {
-        v->env += (I->s - v->env) * k_d[v->inst];
-    } else {
-        v->env -= v->env * k_r[v->inst];
-        if (v->env < 0.0003f) { v->live = 0; v->env = 0.0f; return; }
-    }
-    if (I->s <= 0.0f && v->stage == 1 && v->env < 0.0003f) { v->live = 0; return; }
-    v->fenv += (I->fs - v->fenv) * k_fd[v->inst];
-    v->gain += (v->gain_to - v->gain) * 0.004f;
-    /* pitch: glides towards a tied note, plus vibrato */
-    if (v->note != v->target) {
-        float k = I->glide > 0.0f ? dt / I->glide : 1.0f;
-        v->note += (v->target - v->note) * (k > 1.0f ? 1.0f : k);
-        if (fabsf(v->target - v->note) < 0.001f) v->note = v->target;
-    }
-    float n = v->note;
-    if (I->vib > 0.0f && v->t > I->vdelay) {
-        float ramp = (v->t - I->vdelay) / 0.4f;
-        v->vph += TWO_PI * I->vrate * dt;
-        if (v->vph > TWO_PI) v->vph -= TWO_PI;
-        n += I->vib * (ramp > 1.0f ? 1.0f : ramp) * sinf(v->vph);
-    }
+/* Algol's own sound: the oscillators, a sub, drive, then the filter */
+static void synth_osc(Voice *v, const Inst *I, float n, float *out_l, float *out_r) {
     float hz = note_hz(n), inc = hz / SR;
     if (inc > 0.45f) inc = 0.45f;
-    /* oscillators */
     float sl = 0.0f, sr = 0.0f;
     int nu = I->unison < 1 ? 1 : I->unison > 8 ? 8 : I->unison;
     switch (I->wave) {
@@ -276,6 +305,65 @@ static void voice_run(Voice *v, float *l, float *r, float *rev, float *dly, floa
             if (c) sr = v2; else sl = v2;
         }
     }
+    *out_l = sl;
+    *out_r = sr;
+}
+
+/* A bank's sample at the note (snesbank.h): read twice, a few cents apart,
+ * left and right, for the instruments Algol voices in unison, once for the
+ * rest; under the game's own envelope after its attack: down to its
+ * sustain level, then its decay */
+static void bank_osc(Voice *v, const Inst *I, float n, float *out_l, float *out_r) {
+    const BankSample *s = snesbank_sample(v->bs);
+    if (!s) { *out_l = *out_r = 0.0f; return; }
+    double step = (double)note_hz(n + bank_tr[v->inst]) / (double)s->root * (32000.0 / (double)SR);
+    if (step > 6.0) step = 6.0;
+    float a, b;
+    if (I->unison >= 3) {
+        a = bank_read(s, &v->spos[0], step * 0.9965);
+        b = bank_read(s, &v->spos[1], step * 1.0035);
+    } else a = b = bank_read(s, &v->spos[0], step);
+    float lvl = s->level + (1.0f - s->level) * expf(-v->t / 0.016f);
+    if (s->decay > 0.0f) lvl *= expf(-v->t / s->decay);
+    float g = s->gain * lvl * BANK_LEVEL;
+    *out_l = (a * 0.8f + b * 0.2f) * g;
+    *out_r = (b * 0.8f + a * 0.2f) * g;
+}
+
+/* one sample of a voice into l/r, and its effect sends */
+static void voice_run(Voice *v, float *l, float *r, float *rev, float *dly, float *cho) {
+    const Inst *I = &INST[v->inst];
+    const float dt = 1.0f / SR;
+    v->t += dt;
+    /* envelopes */
+    if (v->stage == 0) {
+        v->env += dt / (I->a > 0.0005f ? I->a : 0.0005f);
+        if (v->env >= 1.0f) { v->env = 1.0f; v->stage = 1; }
+    } else if (v->stage == 1) {
+        v->env += (I->s - v->env) * k_d[v->inst];
+    } else {
+        v->env -= v->env * k_r[v->inst];
+        if (v->env < 0.0003f) { v->live = 0; v->env = 0.0f; return; }
+    }
+    if (I->s <= 0.0f && v->stage == 1 && v->env < 0.0003f) { v->live = 0; return; }
+    v->fenv += (I->fs - v->fenv) * k_fd[v->inst];
+    v->gain += (v->gain_to - v->gain) * 0.004f;
+    /* pitch: glides towards a tied note, plus vibrato */
+    if (v->note != v->target) {
+        float k = I->glide > 0.0f ? dt / I->glide : 1.0f;
+        v->note += (v->target - v->note) * (k > 1.0f ? 1.0f : k);
+        if (fabsf(v->target - v->note) < 0.001f) v->note = v->target;
+    }
+    float n = v->note;
+    if (I->vib > 0.0f && v->t > I->vdelay) {
+        float ramp = (v->t - I->vdelay) / 0.4f;
+        v->vph += TWO_PI * I->vrate * dt;
+        if (v->vph > TWO_PI) v->vph -= TWO_PI;
+        n += I->vib * (ramp > 1.0f ? 1.0f : ramp) * sinf(v->vph);
+    }
+    float sl = 0.0f, sr = 0.0f;
+    if (v->bs >= 0) bank_osc(v, I, n, &sl, &sr);           /* a SNES game's sample (snesbank.h) */
+    else synth_osc(v, I, n, &sl, &sr);
     if (I->hp > 0.0f) {                                     /* one-pole high-pass */
         float kh = I->hp * TWO_PI / SR;
         v->hpz[0] += (sl - v->hpz[0]) * kh;
@@ -359,6 +447,15 @@ static void load_user_map(void) {
     while (fgets(line, sizeof line, f) && nuser < 256) {
         char name[64];
         unsigned h;
+        int bn;
+        float btr = 0.0f;
+        if (sscanf(line, " bank %15s = %d %f", name, &bn, &btr) >= 2 && nbank_user < 24) {   /* "bank lead = 35 [-12]" */
+            snprintf(bank_user[nbank_user].name, sizeof bank_user[0].name, "%s", name);
+            bank_user[nbank_user].sample = bn;
+            bank_user[nbank_user].transpose = btr;
+            nbank_user++;
+            continue;
+        }
         if (sscanf(line, " song %x = %63s", &h, name) == 2) {   /* "song 8F = rock" / "= standard" */
             song_tables();
             if (h >= 0x81 && h <= 0xB4) song_style[h - 0x81] = !strcmp(name, "rock") ? STYLE_ROCK : STYLE_STANDARD;
@@ -369,6 +466,7 @@ static void load_user_map(void) {
         if (i >= 0) { user_map[nuser].hash = h; user_map[nuser].inst = i; nuser++; }
     }
     fclose(f);
+    bank_resolve();
 }
 
 static uint32_t patch_hash(int part, int c) {
@@ -564,7 +662,7 @@ void algol_psg_write(uint8_t val) {
 }
 
 /* ------------------------------------------------------------------ the drum kit */
-enum { D_KICK, D_SNARE, D_HAT, D_RIDE, D_TOM, D_CRASH, D_SAMPLE };
+enum { D_KICK, D_SNARE, D_HAT, D_RIDE, D_TOM, D_CRASH, D_SAMPLE, D_BANK };
 static const struct { int kind; float tone, decay, level; } KIT[18] = {
     {D_SAMPLE, 0, 0, 0},
     {D_SNARE, 190, 0.17f, 0.95f},  /*  1 snare */
@@ -594,6 +692,7 @@ typedef struct {
     float hp1, hp2, lp1, bp1;
     uint32_t rng;
     const uint8_t *pcm;
+    const float *fpcm;            /* D_BANK: a bank's drum (snesbank.h) */
     int len;
     double pos, step;
 } Drum;
@@ -840,6 +939,16 @@ void algol_dac_hit(int sample, int pitch, int volume, int pan) {
         case D_CRASH: d->decay *= 1.25f; d->gain *= 1.10f; d->room = 0.15f; drum_metal(d, 2.3f); break;
         }
     }
+    const BankSample *bs = bank_on && d->kind < 6 ? snesbank_sample(bank_drum[d->kind]) : NULL;
+    if (bs) {                                               /* the bank's drum, at its own rate */
+        d->kind = D_BANK;
+        d->rock = 0;
+        d->fpcm = bs->pcm;
+        d->len = bs->len;
+        d->step = 32000.0 / SR * exp2((double)semis / 12.0);
+        d->gain *= bs->gain * BANK_DRUM_LEVEL;
+        return;
+    }
     if (d->kind == D_SAMPLE) {
         static const uint32_t BASE[4] = {0xE0000, 0xE8000, 0xF0000, 0xF8000};
         uint32_t base = BASE[BANK_TBL[sample - 1][0]], e = base + BANK_TBL[sample - 1][1] * 8u;
@@ -930,6 +1039,14 @@ static void drum_run(Drum *d, float *l, float *r, float *room) {
         float n = rnd(&d->rng) * expf(-t / 0.02f) * (d->rock ? 0.35f : 0.25f);
         s = tanhf((sinf(TWO_PI * d->ph) * expf(-t / d->decay) + n) * (d->rock ? 2.0f : 1.4f)) * 0.9f;
         if (t > d->decay * 6.0f) d->on = 0;
+        break;
+    }
+    case D_BANK: {                                          /* a bank's drum: interpolated */
+        int i = (int)d->pos;
+        if (i + 1 >= d->len) { d->on = 0; return; }
+        float fr = (float)(d->pos - (double)i);
+        s = d->fpcm[i] + (d->fpcm[i + 1] - d->fpcm[i]) * fr;
+        d->pos += d->step;
         break;
     }
     case D_SAMPLE: {                                        /* the ROM's own: interpolated, smoothed */

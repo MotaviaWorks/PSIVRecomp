@@ -36,6 +36,7 @@
  *     --music ID:F       jukebox: at frame F stop all sound, then request sound ID
  *                        (hex, e.g. 84) the way the game does, via Sound_Index ($FF500A)
  *     --algol            the music on Algol, the port's modern sound chip (algol.h)
+ *     --algol-bank ROM   with the instruments of a SNES game you own (snesbank.h)
  *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
  *                        (next to the trace, or build/bizhawk/port.*)
  *
@@ -819,6 +820,10 @@ int main(int argc, char **argv) {
             if (depth_scale > 4) depth_scale = 4;
         } else if (!strcmp(argv[i], "--algol")) {
             algol_set_enabled(1);                          /* the music on the modern chip */
+        } else if (!strcmp(argv[i], "--algol-bank") && i + 1 < argc) {
+            const char *rom = argv[++i];                   /* a SNES game's instruments (snesbank.h) */
+            if (!algol_set_bank(rom)) { fprintf(stderr, "no instrument bank in %s\n", rom); return 1; }
+            printf("instrument bank: %s\n", algol_bank_name());
         } else if (!strcmp(argv[i], "--sfx-synth")) {
             int n = sfx_synth_load();                      /* the port's own sound effects */
             sfx_set_mode(SFX_MODERN);

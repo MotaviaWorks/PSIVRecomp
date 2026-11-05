@@ -84,6 +84,17 @@ original game, unchanged; **Enhanced** turns on the additions:
   (`PSIV_ALGOL_LOG=1` lists them) and the drums of any song (`song 8F =
   rock` or `= standard`); `psiv_headless --algol` renders with it.
 
+  **Instruments from a SNES game you own** (`enhance.music_bank` in
+  `psiv.ini`: the path to its ROM): Algol plays the music with that game's
+  own instruments and drums instead of its synthesizers, decoded from your
+  copy at startup (`runtime/snesbank.c`: the S-DSP's BRR decoder, each
+  sample with its loop, envelope and the game's tuning). Nothing from the
+  game ships. Known so far: **Lufia II** (37 instruments). Which sample plays
+  what can be changed in `algol.ini` (`bank lead = 35`, optionally a
+  transposition in semitones: `bank bass = 26 -12`; `PSIV_ALGOL_LOG=1` lists
+  them); `psiv_headless --algol-bank ROM` renders with it. Adding a game
+  means finding how it stores its samples: `tools/snes/sound_ram.py`.
+
 - **Sound effects** (modern / your samples / original): *modern* is the port's
   own set, synthesized at startup (`runtime/sfxsynth.c`), so nothing is
   shipped: blade hits (a short swing, a slice, a ringing edge, a thump; hits

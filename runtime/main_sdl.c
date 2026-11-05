@@ -115,6 +115,7 @@ static Setting settings[] = {
     {"enhance.text_font", "C:/Windows/Fonts/segoeui.ttf", "TrueType/OpenType font for modern text"},
     {"enhance.sfx", "modern", "sound effects: modern = the port's own, synthesized; custom = your samples, mapped in sfx/sfx.ini (the rest modern); original = the game's own"},
     {"enhance.music", "original", "music: algol = the port's modern sound chip plays the game's music (new instruments, drums and reverb); original = the YM2612 and PSG"},
+    {"enhance.music_bank", "", "with Algol: a SNES game you own whose instruments play the music instead of Algol's (the path to its ROM, e.g. Lufia II); empty = Algol's own"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
     {"enhance.battle_fx", "1", "attack and technique effects light the scene; sparks, flashes, embers, lens flares: 0 off, 1 subtle, 2 full"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
@@ -585,6 +586,17 @@ static void apply_enhancements(void) {
     hdtext_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.text"), "original") != 0);
     battleui_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_ui"), "original") != 0);
     algol_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.music"), "algol"));
+    /* the instrument bank: decoded from that ROM when the setting changes */
+    static char bank_now[1100];
+    const char *bank = setting("enhance.music_bank");
+    if (strcmp(bank, bank_now)) {
+        char path[1100];
+        if (!*bank || bank[0] == '/' || bank[0] == '\\' || bank[1] == ':') snprintf(path, sizeof path, "%s", bank);
+        else path_in_home(path, sizeof path, bank);
+        if (algol_set_bank(path)) SDL_Log("instruments: %s, from %s", algol_bank_name(), path);
+        else if (*bank) SDL_Log("instruments: %s is not a game the port knows; Algol's own", path);
+        snprintf(bank_now, sizeof bank_now, "%s", bank);
+    }
 }
 
 static void apply_video(void) {

@@ -39,4 +39,10 @@ unsigned algol_psg_effects(void);
 /* one output sample of the music, about the level of the original chips */
 void algol_render(float *left, float *right);
 
+/* An instrument bank from a SNES game you own (snesbank.h): its samples in
+ * place of Algol's own instruments and drums, the rest as before. NULL or ""
+ * goes back to the synth. Returns 1 if the ROM is a game the port knows. */
+int algol_set_bank(const char *rom_path);
+const char *algol_bank_name(void);           /* "" when none */
+
 #endif
