@@ -1,5 +1,7 @@
 # PSIV Recomp
 
+<img src="res/psiv.png" alt="The port's icon: a four-point star" width="96" align="right">
+
 A native port of **Phantasy Star IV: The End of the Millennium** (Mega Drive /
 Genesis, USA) built by static recompilation. Work in progress: see
 [docs/PLAN.md](docs/PLAN.md) for the architecture and milestones and
@@ -296,6 +298,7 @@ Windows (`asl` on Linux) and fails unless the result is byte-identical.
 | `tools/` | ROM prep, rebuild, listing parser, 68000 decoder, program model, resolver, C generator |
 | `runtime/` | CPU (`m68k.*`), bus, VDP + renderer (`vdp.*`), frame loop, SDL3 and headless front ends |
 | `third_party/` | SDL3 for Windows builds (fetched, never committed) |
+| `res/` | The app's icon: an original four-point star in the game's window colours, drawn by `tools/make_icon.py` (which also writes `runtime/icon.h`); no game art |
 | `analysis/` | Generated analysis: `functions.json` (every function entry and why), `indirect_targets.{json,md}` (addresses and labels only) |
 | `docs/` | Plan and ideas |
 | `rom/`, `build/` | Your ROM and build output (never committed) |

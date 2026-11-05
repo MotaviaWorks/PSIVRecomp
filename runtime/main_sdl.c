@@ -30,6 +30,9 @@
 #include "music.h"
 #include "fpview.h"
 #include "walkto.h"
+#ifndef _WIN32
+#include "icon.h"
+#endif
 #include "sfx.h"
 #include "diag.h"
 #include "frame.h"
@@ -1046,6 +1049,13 @@ int main(int argc, char **argv) {
         return 1;
     }
     SDL_SetRenderVSync(renderer, 0);                    /* paced to 59.92 Hz ourselves */
+#ifndef _WIN32
+    {                                                   /* the icon (Windows: the exe's own, res/psiv.rc) */
+        SDL_Surface *icon = SDL_CreateSurfaceFrom(PSIV_ICON_SIZE, PSIV_ICON_SIZE, SDL_PIXELFORMAT_ARGB8888,
+                                                  (void *)psiv_icon, PSIV_ICON_SIZE * 4);
+        if (icon) { SDL_SetWindowIcon(window, icon); SDL_DestroySurface(icon); }
+    }
+#endif
     if (setting_int("video.fullscreen")) SDL_SetWindowFullscreen(window, true);
 
     static uint8_t rom[0x400000];
