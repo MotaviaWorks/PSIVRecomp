@@ -8,8 +8,10 @@
  * from the VDP, so the game's fades and animations carry over. People, chests
  * and the other objects stand in it as pictures turned to the camera (from
  * the game's object list and art, near or far); people show the side that
- * faces you; one set into a wall is painted onto it. The game's
- * windows and text stay on top. The game runs as it always does; only the
+ * faces you; one set into a wall is painted onto it. What the 3/4 view draws
+ * over the party (a pillar's shaft, an arch over a passage) stands up from
+ * the floor line beneath it. Doors open as the game opens them (in the map).
+ * The game's windows and text stay on top. The game runs as it always does; only the
  * picture and (in the app) the meaning of the d-pad change: up walks forward,
  * left / right turn that way, down turns back.
  *

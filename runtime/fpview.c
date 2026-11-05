@@ -180,6 +180,117 @@ static void map_update(void) {
     else { gen_x = 0; gen_y = 1; }
 }
 
+/* ------------------------------------------------------------------ the props */
+/* In the 3/4 view what stands in front of the party -- a pillar's shaft, an
+ * arch over a passage, tall grass -- is drawn with priority over the sprites,
+ * over cells the party can walk (behind it). Those tiles are props: each one
+ * over a walkable cell, and the priority tiles straight above it. In groups
+ * (4-connected, by 8x8 tile) each stands on the floor line under its lowest
+ * tile, past any solid cells there -- the group's lowest line, so an arch
+ * hangs over its passage at the height of its legs -- and rises from it 1:1:
+ * a wall's face on that line grows by it (see-through around its art), and
+ * over open floor it is a face of its own. Priority art over solid cells
+ * alone (a wall's top) stays the wall's; the floor shows no priority art. */
+#define TMAX 256                                  /* tiles a side: maps of up to 64 chunks */
+static int props_on, tw, th;                      /* the walked layer, in tiles */
+static uint8_t  tile_opaque[2048];
+static uint16_t comp_of[TMAX * TMAX];             /* a prop tile's group (1-based), by tile */
+static uint16_t comp_line[TMAX * TMAX / 4 + 2];   /* each group's floor line (a cell row, wrapped) */
+static uint16_t face_px[TMAX / 2][TMAX];          /* [floor line][tile column]: px of props above it */
+static float hmax = 2.0f;                         /* the tallest face, cells */
+
+static int wrapi(int v, int n) { v %= n; return v < 0 ? v + n : v; }
+
+static int prio_art(int x, int y) {               /* a priority tile with art at world pixel (x, y) */
+    for (int k = 0; k < 2; k++) {
+        uint16_t e = chunk_word(&layer[k], x, y);
+        if ((e & 0x8000) && tile_opaque[e & 0x7FF]) return 1;
+    }
+    return 0;
+}
+
+static uint32_t props_key;                        /* what the analysis was made from */
+static int props_age;
+
+static void props_update(void) {
+    uint32_t h = 2166136261u ^ (uint32_t)walk;
+    for (int k = 0; k < 2; k++)
+        for (int i = 0; i < layer[k].w * layer[k].h; i++) h = (h ^ r8(layer[k].layout + (unsigned)i)) * 16777619u;
+    for (size_t i = 0; i < sizeof chunks; i++) h = (h ^ chunks[i]) * 16777619u;
+    if (h == props_key && ++props_age < 30) return;    /* a door opened, or now and then (tiles load in) */
+    props_key = h;
+    props_age = 0;
+    tw = layer[walk].w * 4;
+    th = layer[walk].h * 4;
+    hmax = 2.0f;
+    props_on = tw <= TMAX && th <= TMAX;
+    if (!props_on) return;
+    for (int t = 0; t < 2048; t++) {
+        unsigned o = 0;
+        for (int i = 0; i < 32; i++) o |= vdp.vram[t * 32 + i];
+        tile_opaque[t] = o != 0;
+    }
+    static uint8_t mark[TMAX * TMAX];
+    memset(mark, 0, (size_t)(tw * th));
+    memset(comp_of, 0, sizeof(uint16_t) * (size_t)(tw * th));
+    for (int i = 0; i < th / 2; i++) memset(face_px[i], 0, sizeof(uint16_t) * (size_t)tw);
+    /* by tile column: runs of priority art over walkable cells, up to 4 cells
+     * long (a longer one is the top of a wall running away north, lying over
+     * the floor beside it), and the priority art straight above each */
+    for (int tx = 0; tx < tw; tx++)
+        for (int ty = 0; ty < th; ) {
+            if (!prio_art(tx * 8, ty * 8) || solid(tx >> 1, ty >> 1)) { ty++; continue; }
+            int t0 = ty;
+            while (ty < th && prio_art(tx * 8, ty * 8) && !solid(tx >> 1, ty >> 1)) ty++;
+            if (ty - t0 > 8) continue;
+            for (int u = t0; u < ty; u++) mark[u * tw + tx] = 2;
+            for (int u = t0 - 1; u >= 0 && u > t0 - 16 && prio_art(tx * 8, u * 8); u--) mark[u * tw + tx] = 1;
+        }
+    static int32_t stack[TMAX * TMAX], members[TMAX * TMAX];
+    int ncomp = 0;
+    for (int i0 = 0; i0 < tw * th; i0++) {
+        if (!mark[i0] || comp_of[i0]) continue;
+        if (ncomp + 1 >= (int)(sizeof comp_line / sizeof comp_line[0])) break;
+        int c = ++ncomp, sp = 0, n = 0;
+        stack[sp++] = i0;
+        comp_of[i0] = (uint16_t)c;
+        while (sp) {
+            int i = stack[--sp], tx = i % tw, ty = i / tw;
+            members[n++] = i;
+            int nb[4] = {tx > 0 ? i - 1 : -1, tx + 1 < tw ? i + 1 : -1, ty > 0 ? i - tw : -1, ty + 1 < th ? i + tw : -1};
+            for (int k = 0; k < 4; k++)
+                if (nb[k] >= 0 && mark[nb[k]] && !comp_of[nb[k]]) { comp_of[nb[k]] = (uint16_t)c; stack[sp++] = nb[k]; }
+        }
+        /* the lowest floor line under it -- past a wall's front, 4 cells at most:
+         * under more, it is the edge of a wall's top seen beyond it (no prop) */
+        int line = 0;
+        for (int m = 0; m < n && line >= 0; m++) {
+            int tx = members[m] % tw, ty = members[m] / tw, cx = tx >> 1, r = ty >> 1;
+            if (ty + 1 < th && comp_of[members[m] + tw] == c) continue;   /* not the bottom of its column */
+            if (!solid(cx, r) && solid(cx, r + 1)) r++;
+            if (solid(cx, r)) {
+                int r0 = r;
+                while (solid(cx, r) && r <= r0 + 4) r++;
+                if (r > r0 + 4) line = -1;
+            } else r++;
+            if (line >= 0 && r > line) line = r;
+        }
+        if (line < 0) {
+            for (int m = 0; m < n; m++) comp_of[members[m]] = 0, mark[members[m]] = 0;
+            ncomp--;
+            continue;
+        }
+        int lr = wrapi(line, th / 2);
+        comp_line[c] = (uint16_t)lr;
+        for (int m = 0; m < n; m++) {
+            int tx = members[m] % tw, ty = members[m] / tw, hpx = line * 16 - ty * 8;
+            if (hpx > 255) hpx = 255;                               /* 16 cells at most */
+            if (hpx > face_px[lr][tx]) face_px[lr][tx] = (uint16_t)hpx;
+            if (2.0f + (float)hpx / 16.0f > hmax) hmax = 2.0f + (float)hpx / 16.0f;
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ the camera */
 static float cam_ang;
 static unsigned cam_map = 0xFFFFFFFFu;
@@ -215,7 +326,8 @@ static uint32_t shade(uint32_t c, float k) {
 
 typedef struct { int x, y, w, h; uint16_t attr; uint32_t src; } Piece;   /* src: its tiles in ROM, or 0: VRAM */
 typedef struct { float px, py, dx, dy, plx, ply, horizon, proj; } View;
-static float zbuf[VDP_MAX_W * 2];                /* each column's wall distance */
+#define ZW (VDP_MAX_W * 2)
+static float zpix[ZW * VDP_MAX_H * 2];          /* each pixel's depth (walls, props), for the billboards */
 
 static unsigned rom8(uint32_t a) { return a < m68k_rom_size ? m68k_rom[a] : 0; }
 static uint32_t rom32(uint32_t a) { return (uint32_t)rom8(a) << 24 | rom8(a + 1) << 16 | rom8(a + 2) << 8 | rom8(a + 3); }
@@ -425,16 +537,133 @@ static void draw_billboards(uint32_t *out, int stride, int RW, int RH, const Vie
         if (c1 > RW) c1 = RW;
         if (r1 > RH) r1 = RH;
         for (int c = c0; c < c1; c++) {
-            if (ty >= zbuf[c]) continue;                         /* behind a wall */
             int sx = (int)(((float)c + 0.5f - left) / ppx);
             if (sx < 0 || sx >= iw) continue;
             for (int r = r0; r < r1; r++) {
+                if (ty >= zpix[r * RW + c]) continue;            /* behind a wall or a prop */
                 int sy = (int)(((float)r + 0.5f - top) / ppx);
                 if (sy < 0 || sy >= ih) continue;
                 uint32_t col = img[sy * iw + sx];
                 if (col) out[(size_t)r * (size_t)stride + (size_t)c] = shade(col, fog);
             }
         }
+    }
+}
+
+/* ------------------------------------------------------------------ the walls and props */
+/* the colour of layer k's tile e at world pixel (x, y), or 0: clear */
+static uint32_t tile_rgb(int k, uint16_t e, int x, int y) {
+    int p = tile_pixel(e, x, y);
+    return p ? rgb_of((((e >> 13) & 1) + layer[k].pal) * 16 + p) : 0;
+}
+
+static int prop_tile(uint16_t e) { return props_on && (e & 0x8000) && tile_opaque[e & 0x7FF]; }
+
+static unsigned prop_group(int x, int y) { return props_on ? comp_of[wrapi(y >> 3, th) * tw + wrapi(x >> 3, tw)] : 0; }
+
+/* the art of a wall's face that stands on line ln (a cell row) at world pixel
+ * (x, y): the map, less props standing on other lines; objects on the wall over it */
+static uint32_t face_rgb(int x, int y, int ln) {
+    if (ndecal) {
+        uint32_t d = decal_rgb(x, y);
+        if (d) return d;
+    }
+    unsigned g = prop_group(x, y);
+    for (int k = 0; k < 2; k++) {
+        uint16_t e = chunk_word(&layer[k], x, y);
+        if (g && prop_tile(e) && comp_line[g] != wrapi(ln, th / 2)) continue;   /* another's, standing elsewhere */
+        uint32_t c = tile_rgb(k, e, x, y);
+        if (c) return c;
+    }
+    return rgb_of(vdp.reg[7] & 63);
+}
+
+/* a prop's own art at (x, y) if it stands on line ln; else 0 (see-through) */
+static uint32_t prop_rgb(int x, int y, int ln) {
+    unsigned g = prop_group(x, y);
+    if (!g || comp_line[g] != wrapi(ln, th / 2)) return 0;
+    for (int k = 0; k < 2; k++) {
+        uint16_t e = chunk_word(&layer[k], x, y);
+        if (!prop_tile(e)) continue;
+        uint32_t c = tile_rgb(k, e, x, y);
+        if (c) return c;
+    }
+    return 0;
+}
+
+/* the floor: the map without its props (they stand up) */
+static uint32_t floor_rgb(int x, int y) {
+    unsigned g = prop_group(x, y);
+    for (int k = 0; k < 2; k++) {
+        uint16_t e = chunk_word(&layer[k], x, y);
+        if (g && prop_tile(e)) continue;
+        uint32_t c = tile_rgb(k, e, x, y);
+        if (c) return c;
+    }
+    return rgb_of(vdp.reg[7] & 63);
+}
+
+/* the faces a ray meets, near to far: a wall's, entered from the floor (kind
+ * 0), or a prop's own, on a line over open floor (kind 1) */
+#define MAXHIT 16
+typedef struct { float d, wx; int kind, mx, my, side, line; } Hit;
+typedef struct { uint32_t *out; int stride, RW, RH, x; float px, py, rdx, rdy, horizon, proj; } Ray;
+
+static void draw_wall(const Ray *R, const Hit *h) {
+    float dist = h->d, u = h->side == 0 ? R->py + dist * R->rdy : R->px + dist * R->rdx;
+    u -= floorf(u);
+    if ((h->side == 0 && R->rdx < 0) || (h->side == 1 && R->rdy > 0)) u = 1.0f - u;
+    int tx = (int)(u * 16.0f);
+    if (tx > 15) tx = 15;
+    float fog = 1.0f / (1.0f + dist * 0.12f) * (h->side == 0 ? 0.82f : 1.0f);
+    /* the face the game draws (a wall over a floor, seen from the south);
+     * a face it never draws takes the front of its own wall, found below
+     * it, or else the map's usual front */
+    int fx = h->mx, fy = h->my, own = 0;
+    for (int k = 0; k < 4; k++) {
+        if (!solid(h->mx, h->my + k)) break;
+        if (!solid(h->mx, h->my + k + 1)) { fy = h->my + k; own = 1; break; }
+    }
+    /* its own 2 cells over WALL_H; the props standing on its line above them, 1:1 */
+    int run = 1, fc = 1, line = fy + 1, xw = fx * 16 + tx, ext = 0;
+    if (own) {
+        while (run < 12 && solid(fx, fy - run)) run++;
+        fc = run < 2 ? run : 2;
+        if (props_on) ext = (int)face_px[wrapi(line, th / 2)][wrapi(xw >> 3, tw)] - fc * 16;
+        if (ext < 0) ext = 0;
+    }
+    float bot = R->horizon + EYE / dist * R->proj, base = R->horizon - (WALL_H - EYE) / dist * R->proj;
+    float top = base - (float)ext / 16.0f / dist * R->proj;
+    int y0 = top < 0 ? 0 : (int)top, y1 = bot > (float)R->RH ? R->RH : (int)bot;
+    for (int y = y0; y < y1; y++) {
+        float yc = (float)y + 0.5f;
+        uint32_t c;
+        if (yc >= base) {
+            float v = (yc - base) / (bot - base);
+            c = own ? face_rgb(xw, (line - fc) * 16 + (int)(v * (float)fc * 16.0f), line)
+                    : map_rgb(gen_x * 16 + tx, (gen_y - 1) * 16 + (int)(v * 32.0f));
+        } else {                                                    /* the wall's cells go on, or a prop */
+            int wy = (line - fc) * 16 - 1 - (int)((base - yc) * dist / R->proj * 16.0f);
+            c = wy >= (line - run) * 16 ? face_rgb(xw, wy, line) : prop_rgb(xw, wy, line);
+            if (!c) continue;
+        }
+        R->out[(size_t)y * (size_t)R->stride + (size_t)R->x] = shade(c, fog);
+        zpix[y * R->RW + R->x] = dist;
+    }
+}
+
+static void draw_prop(const Ray *R, const Hit *h) {
+    float dist = h->d;
+    int xw = (int)floorf(h->wx * 16.0f), fp = face_px[wrapi(h->line, th / 2)][wrapi(xw >> 3, tw)];
+    float bot = R->horizon + EYE / dist * R->proj, top = bot - (float)fp / 16.0f / dist * R->proj;
+    float fog = 1.0f / (1.0f + dist * 0.12f);
+    int y0 = top < 0 ? 0 : (int)top, y1 = bot > (float)R->RH ? R->RH : (int)bot;
+    for (int y = y0; y < y1; y++) {
+        int wy = h->line * 16 - 1 - (int)((bot - ((float)y + 0.5f)) * dist / R->proj * 16.0f);
+        uint32_t c = prop_rgb(xw, wy, h->line);
+        if (!c) continue;
+        R->out[(size_t)y * (size_t)R->stride + (size_t)R->x] = shade(c, fog);
+        zpix[y * R->RW + R->x] = dist;
     }
 }
 
@@ -450,7 +679,7 @@ static void render(uint32_t *out, int stride, int RW, int RH) {
     float dx = cosf(cam_ang), dy = sinf(cam_ang), k = tanf(FOV / 2.0f);
     float plx = -dy * k, ply = dx * k;
     float horizon = (float)RH * 0.5f, proj = ((float)RW * 0.5f) / k;
-    if (RW > (int)(sizeof zbuf / sizeof zbuf[0])) RW = (int)(sizeof zbuf / sizeof zbuf[0]);
+    if (RW > ZW) RW = ZW;
     View view = {px, py, dx, dy, plx, ply, horizon, proj};
     objects_prepare(&view);
     for (int x = 0; x < RW; x++) {
@@ -461,54 +690,55 @@ static void render(uint32_t *out, int stride, int RW, int RH) {
         int sx = rdx < 0 ? -1 : 1, sy = rdy < 0 ? -1 : 1;
         float stx = rdx < 0 ? (px - (float)mx) * ddx : ((float)mx + 1.0f - px) * ddx;
         float sty = rdy < 0 ? (py - (float)my) * ddy : ((float)my + 1.0f - py) * ddy;
-        int side = 0, hit = 0;
-        for (int i = 0; i < 64; i++) {
+        /* walk the ray, noting the faces it meets, until nothing further on could
+         * show over the walls already in front (a taller wall, a prop) */
+        Hit hit[MAXHIT];
+        int nh = 0, inside = 0;                                    /* the leader's own cell counts as floor */
+        float occl = (float)RH, nearest = 1e30f;
+        for (int i = 0; i < 96 && nh < MAXHIT; i++) {
+            int side;
             if (stx < sty) { stx += ddx; mx += sx; side = 0; }
             else { sty += ddy; my += sy; side = 1; }
-            if (solid(mx, my)) { hit = 1; break; }
-        }
-        float dist = side == 0 ? stx - ddx : sty - ddy;
-        if (dist < 0.05f) dist = 0.05f;
-        zbuf[x] = hit ? dist : 1e30f;
-        float top = horizon - (WALL_H - EYE) / dist * proj, bot = horizon + EYE / dist * proj;
-        int y0 = top < 0 ? 0 : (int)top, y1 = bot > (float)RH ? RH : (int)bot;
-        if (!hit) y0 = y1 = (int)horizon;
-        float u = side == 0 ? py + dist * rdy : px + dist * rdx;
-        u -= floorf(u);
-        if ((side == 0 && rdx < 0) || (side == 1 && rdy > 0)) u = 1.0f - u;
-        int tx = (int)(u * 16.0f);
-        if (tx > 15) tx = 15;
-        float fog = 1.0f / (1.0f + dist * 0.12f) * (side == 0 ? 0.82f : 1.0f);
-        /* the face the game draws (a wall over a floor, seen from the south);
-         * a face it never draws takes the front of its own wall, found below
-         * it, or else the map's usual front */
-        int fx = mx, fy = my, own = 0;
-        if (hit) {
-            for (int k2 = 0; k2 < 4; k2++) {
-                if (!solid(mx, my + k2)) break;
-                if (!solid(mx, my + k2 + 1)) { fy = my + k2; own = 1; break; }
+            float dist = side == 0 ? stx - ddx : sty - ddy;
+            if (dist < 0.05f) dist = 0.05f;
+            if (side == 1 && props_on) {                            /* a prop's own face on this line */
+                int line = sy > 0 ? my : my + 1;
+                float wx = px + dist * rdx;
+                if (face_px[wrapi(line, th / 2)][wrapi((int)floorf(wx * 2.0f), tw)] && !solid((int)floorf(wx), line - 1)) {
+                    hit[nh].d = dist; hit[nh].wx = wx; hit[nh].kind = 1; hit[nh].line = line;
+                    if (++nh == MAXHIT) break;
+                }
             }
+            int s = solid(mx, my);
+            if (s && !inside) {                                     /* a wall, entered from the floor */
+                hit[nh].d = dist; hit[nh].kind = 0; hit[nh].mx = mx; hit[nh].my = my; hit[nh].side = side;
+                nh++;
+                float t = horizon - (WALL_H - EYE) / dist * proj;
+                if (t < occl) occl = t;
+                if (dist < nearest) nearest = dist;
+            }
+            inside = s;
+            if (occl <= 0.0f || horizon - (hmax - EYE) / dist * proj >= occl) break;
         }
-        int fc = 1;
-        if (own) while (fc < 2 && solid(fx, fy - fc)) fc++;
-        for (int y = y0; y < y1; y++) {
-            float v = ((float)y + 0.5f - top) / (bot - top);
-            uint32_t c;
-            if (own) {
-                int wx = fx * 16 + tx, wy = (fy + 1 - fc) * 16 + (int)(v * (float)fc * 16.0f);
-                c = ndecal ? decal_rgb(wx, wy) : 0;
-                if (!c) c = map_rgb(wx, wy);
-            } else c = map_rgb(gen_x * 16 + tx, (gen_y - 1) * 16 + (int)(v * 32.0f));
-            out[(size_t)y * (size_t)stride + (size_t)x] = shade(c, fog);
+        /* the ceiling and the floor, then the faces over them, far to near */
+        Ray ray = {out, stride, RW, RH, x, px, py, rdx, rdy, horizon, proj};
+        float fb = nearest < 1e29f ? horizon + EYE / nearest * proj : horizon;
+        int yf = fb > (float)RH ? RH : (int)fb;
+        if (yf < (int)horizon + 1) yf = (int)horizon + 1;
+        for (int y = 0; y < yf && y < RH; y++) {                   /* the ceiling: dark */
+            uint32_t g = y < (int)horizon ? 10u + (uint32_t)(10 * y) / (uint32_t)(horizon > 1 ? horizon : 1) : 20u;
+            out[(size_t)y * (size_t)stride + (size_t)x] = 0xFF000000u | g << 16 | (g - 2) << 8 | (g + 4);
+            zpix[y * RW + x] = 1e30f;
         }
-        for (int y = y1 > (int)horizon + 1 ? y1 : (int)horizon + 1; y < RH; y++) {   /* the floor: the map */
+        for (int y = yf; y < RH; y++) {                             /* the floor: the map */
             float rd = EYE * proj / ((float)y + 0.5f - horizon);
             int wx = (int)floorf((px + rd * rdx) * 16.0f), wy = (int)floorf((py + rd * rdy) * 16.0f);
-            out[(size_t)y * (size_t)stride + (size_t)x] = shade(map_rgb(wx, wy), 1.0f / (1.0f + rd * 0.12f));
+            out[(size_t)y * (size_t)stride + (size_t)x] = shade(floor_rgb(wx, wy), 1.0f / (1.0f + rd * 0.12f));
+            zpix[y * RW + x] = 1e30f;
         }
-        for (int y = 0; y < y0; y++) {                  /* the ceiling: dark */
-            uint32_t g = 10u + (uint32_t)(10 * y) / (uint32_t)(horizon > 1 ? horizon : 1);
-            out[(size_t)y * (size_t)stride + (size_t)x] = 0xFF000000u | g << 16 | (g - 2) << 8 | (g + 4);
+        for (int k2 = nh - 1; k2 >= 0; k2--) {
+            if (hit[k2].kind) draw_prop(&ray, &hit[k2]);
+            else draw_wall(&ray, &hit[k2]);
         }
     }
     draw_billboards(out, stride, RW, RH, &view);
@@ -575,6 +805,7 @@ int fpview_compose(const VdpLine *lines, const uint32_t *game, int w, int h, uin
     shown = fpview_active();
     if (!shown) { last_ui = 0; return 0; }
     map_update();
+    props_update();
     /* drawn at up to twice the game's size, then scaled up */
     int s2 = scale < 2 ? scale : 2;
     static uint32_t buf[VDP_MAX_W * 2 * VDP_MAX_H * 2];

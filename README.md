@@ -108,11 +108,16 @@ original game, unchanged; **Enhanced** turns on the additions:
   pictures turned to you, drawn from the game's own object list and art,
   near or far (the game itself only draws what is on its screen); people
   show the side of them that faces you, and a thing set into a wall (the
-  Machine Center's elevator doors) is painted onto it.
-  Towns and the planets' surfaces keep the game's view. Not yet: props the
-  game draws on plane A, doors that only change on screen.
-  `psiv_headless --fpview S` takes shots of it (`PSIV_FPVIEW_ANYWHERE=1`:
-  in towns too, for testing). Inspired by Gen1Recomp's 3D mode.
+  Machine Center's elevator doors) is painted onto it. What the game draws
+  over the party in its 3/4 view -- a pillar's shaft, an arch over a
+  passage, a wall's top edge -- stands up from the floor line beneath it at
+  the art's own scale: the Soldier's Temple's pillars rise at full height
+  beside its walls, its arch hangs over the doorway. Doors open as in the
+  game (each door changes the map, and the view follows it: the Machine
+  Center's elevator slides open). Towns and the planets' surfaces keep the
+  game's view. `psiv_headless --fpview S` takes shots of it
+  (`PSIV_FPVIEW_ANYWHERE=1`: in towns too, for testing). Inspired by
+  Gen1Recomp's 3D mode.
 
 - **Your music** (on / off): audio files of your own -- a remix, say -- play
   in place of the game's songs. Put WAVs (16/24-bit or float, any rate) in

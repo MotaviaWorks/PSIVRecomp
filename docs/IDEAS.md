@@ -305,10 +305,35 @@ first person, from the game's own tiles, and their battles fought there.
   table has just those two scripts. Checked: the temple's chest, the Plate
   System's white chest ($1D4, the pedestal), Tonoe's Motavians from front
   and back (`PSIV_FPVIEW_ANYWHERE`), the 24,635-frame session still matches.
-- **Next:** plane-A props; doors that change on screen; objects lying flat
-  (floor switches) painted onto the floor instead of standing; turning in
-  place (the game can't: a turn is a step); a minimap; ceilings from map
-  art; a cheaper render mode.
+- **Props (v3):** what stands in front of the party in the 3/4 view is drawn
+  with priority over the sprites (the temple walks plane B; its pillars,
+  arch and wall bands are on plane A; the Machine Center's wall tops are
+  priority tiles on the walked layer itself). On screen, plane A always
+  matched the RAM map (`planediff.py`-style checks on visible cells): nothing
+  is drawn "only on screen". A prop is priority art over a walkable cell
+  (runs of at most 4 cells down a tile column: a longer one is the top of a
+  wall running north, lying beside it), plus the priority art straight above
+  it; 4-connected groups by 8x8 tile; each stands on the floor line under its
+  lowest tile, past at most 4 solid cells (a wall's front; under more it is
+  the edge of a wall's top beyond, and not a prop) -- the group's lowest, so
+  an arch hangs over its passage at the height of its legs. Drawn 1:1 from
+  that line: a wall's face there grows by it (its own solid cells opaque,
+  the prop's art see-through around it), and over open floor it is a face
+  of its own on that line. The floor no longer shows props; a face shows
+  no prop standing on another line (a pillar's top over the wall behind
+  it). The renderer walks each ray past the first wall while something
+  taller could still show (the tallest face in the map bounds it), draws
+  far to near, and keeps a per-pixel depth for the billboards. Temple:
+  pillars 5.5-6.5 cells, the south wall 5 with its arch. Re-analysed when
+  the layouts or chunks change (doors) and every 30 frames (tiles load in);
+  ~7.5 ms a frame at 2x.
+- **Doors:** every door event (Bio-plant, elevators, Tonoe's basement,
+  Garuberk Tower, the Silence Temple) writes the map layout in RAM and
+  refreshes the planes, so the view follows them: the Machine Center's
+  elevator ($4F -> $53 under the leader on C) slides open in 3D.
+- **Next:** objects lying flat (floor switches) painted onto the floor
+  instead of standing; turning in place (the game can't: a turn is a step);
+  a minimap; ceilings from map art; a cheaper render mode.
 
 ### Your own music (PsiLok, 2026-11-04) -- v1 done (`runtime/music.c`)
 PsiLok's Meet Them Head-On rearrangement as a bonus without shipping it (it is
