@@ -19,6 +19,9 @@
  *     --shot-range F1-F2 limit --shot-every to these logical frames
  *     --depth L[:S]      battle depth at level L (0 off, 1 subtle, 2 strong); shots
  *                        of battle frames show it, composed at S x (default 2)
+ *     --weather L[:KIND] battle weather (with --depth): 0 off, 1 light, 2 heavy; KIND
+ *                        (rain, storm, snow, clouds, debris, clear) in every battle
+ *     --weather-sound 0  the weather's rain and thunder silent
  *     --layers F:PREFIX  frame F's layers as PNGs, plane A's tiles and the sprite
  *                        table as text (for working out what the game draws where)
  *     --sram FILE        battery save to load before power-on (8 KB, the odd
@@ -66,6 +69,7 @@
 #include "music.h"
 #include "fpview.h"
 #include "walkto.h"
+#include "weather.h"
 #include "widemap.h"
 #include "rumble.h"
 #include "sfx.h"
@@ -970,6 +974,16 @@ int main(int argc, char **argv) {
             widemap_set_edge(atoi(argv[++i]));             /* beyond a map's edge: 0 backdrop, 1 edge repeated */
         } else if (!strcmp(argv[i], "--fog") && i + 1 < argc) {
             depth_set_fog(atoi(argv[++i]));                /* battle fog level (with --depth) */
+        } else if (!strcmp(argv[i], "--weather") && i + 1 < argc) {
+            char *e;                                       /* battle weather level[:KIND] (with --depth) */
+            weather_set_level((int)strtol(argv[++i], &e, 10));
+            if (*e == ':') {
+                int k = weather_kind_by_name(e + 1);
+                if (k < 0) { fprintf(stderr, "no weather \"%s\"\n", e + 1); return 2; }
+                weather_force(k);
+            }
+        } else if (!strcmp(argv[i], "--weather-sound") && i + 1 < argc) {
+            weather_set_sound(atoi(argv[++i]));            /* 0: the weather silent */
         } else if (!strcmp(argv[i], "--shot-range") && i + 1 < argc) {
             char *e;                                       /* F1-F2: limit --shot-every */
             shot_from = strtoull(argv[++i], &e, 10);

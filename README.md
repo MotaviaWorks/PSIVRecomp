@@ -124,6 +124,15 @@ original game, unchanged; **Enhanced** turns on the additions:
   apart.
 - **Battle fog** (F8: off / light / heavy): drifting mist between the enemies
   and the party, tinted from each battle's background.
+- **Battle weather** (off / light / heavy), by where the battle is (the port
+  works out which of the game's 32 battle backgrounds it uses): rain or a
+  storm in some of Motavia's grassland, beach and sea battles -- darker skies,
+  lightning, the rain and the thunder heard -- snow on Dezolis, mist clouds
+  drifting over Rykros, its towers and the carnivorous trees, and rocks
+  floating in the Air Castle and at the Edge. Drawn at three depths under the
+  battle camera: behind the enemies, between them and the party, and in front
+  of everyone (`runtime/weather.c`; the sounds are synthesized like the
+  port's sound effects). Off in vehicle battles.
 - **Battle effects** (off / subtle / full): the game's own attack and
   technique sprites light the scene in their colours, sparks and a flash
   where hits land, embers rising from fire, a lens flare at bright moments.

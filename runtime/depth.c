@@ -25,6 +25,7 @@
 #include "depth.h"
 #include "frame.h"
 #include "m68k.h"
+#include "weather.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -179,6 +180,12 @@ static int sprite_root(int *parent, int i) {
 }
 
 static void ease(float *v, float target, float k) { *v += (target - *v) * k; }
+
+/* a colour darkened (m/256 a channel) and brightened (+a) */
+static inline uint32_t tinted(uint32_t s, int mr, int mg, int mb, int ar, int ag, int ab) {
+    int r = ((int)(s >> 16 & 255) * mr >> 8) + ar, g = ((int)(s >> 8 & 255) * mg >> 8) + ag, b = ((int)(s & 255) * mb >> 8) + ab;
+    return 0xFF000000u | (uint32_t)(r > 255 ? 255 : r) << 16 | (uint32_t)(g > 255 ? 255 : g) << 8 | (uint32_t)(b > 255 ? 255 : b);
+}
 
 /* output pixel -> source coordinate for a layer moved by the camera */
 static void build_map(int16_t *map, int n, int scale, int size, float center, float factor,
@@ -492,10 +499,12 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         light_amount = 0.0f;
         light_on = 0;
         memset(light_grid, 0, sizeof light_grid);
+        weather_battle_end();
         return 0;
     }
     int wide = vdp_view_x0 < 0;                               /* widescreen: margins to fill */
-    if (!wide && level == 0 && cur.drift_x < 0.02f && cur.zoom < 0.0005f && fog_cur < 0.005f && fx_cur < 0.005f)
+    int wx = weather_active();                                /* rain, snow, clouds, debris (weather.c) */
+    if (!wide && !wx && level == 0 && cur.drift_x < 0.02f && cur.zoom < 0.0005f && fog_cur < 0.005f && fx_cur < 0.005f)
         return 0;                                             /* all eased out */
     if (!noise_ready) make_noise();
     if (scale > MAX_SCALE) scale = MAX_SCALE;
@@ -697,13 +706,16 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     static uint8_t fog_col1[VDP_MAX_W * MAX_SCALE], fog_col2[VDP_MAX_W * MAX_SCALE];
     static uint16_t fog_profile[VDP_MAX_H * MAX_SCALE];
     int tint_r = 0, tint_g = 0, tint_b = 0;
-    if (fog_on) {
-        long sr = 0, sg = 0, sb = 0, n = 0;
+    long sr = 0, sg = 0, sb = 0, n = 0;                      /* the background's average colour */
+    if (fog_on || wx) {
         for (int y = 0; y < h * 6 / 7; y += 4)
             for (int x = 0; x < w; x += 4) {
                 uint32_t c = pal[layer[L_BG][y][x] & 0x3F];
                 sr += c >> 16 & 255; sg += c >> 8 & 255; sb += c & 255; n++;
             }
+        if (!n) n = 1;
+    }
+    if (fog_on) {
         float target[3] = {(float)sr / (float)n * 0.5f + 105.0f, (float)sg / (float)n * 0.5f + 105.0f,
                            (float)sb / (float)n * 0.5f + 112.0f};
         for (int i = 0; i < 3; i++) {
@@ -761,6 +773,16 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             }
     }
 
+    /* a storm's darker light and its lightning (weather.c), on all but the windows */
+    int tmr = 256, tmg = 256, tmb = 256, tar = 0, tag = 0, tab = 0;
+    int tint = wx && weather_tint(&tmr, &tmg, &tmb, &tar, &tag, &tab);
+    uint32_t tpal[128];                                       /* the palette under that light */
+    for (int i = 0; i < 128; i++) tpal[i] = tint ? tinted(pal[i], tmr, tmg, tmb, tar, tag, tab) : pal[i];
+    if (tint && fog_on) {                                     /* the fog under it too */
+        uint32_t fc = tinted(0xFF000000u | (uint32_t)tint_r << 16 | (uint32_t)tint_g << 8 | (uint32_t)tint_b,
+                             tmr, tmg, tmb, tar, tag, tab);
+        tint_r = (int)(fc >> 16 & 255); tint_g = (int)(fc >> 8 & 255); tint_b = (int)(fc & 255);
+    }
     for (int Y = 0; Y < oh; Y++) {
         int vu = Y / scale, ve = row_en[Y], vp = row_pa[Y], vb = row_bg[Y];
         uint8_t *fr = front[Y];
@@ -778,7 +800,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             if ((c = layer[L_UI][vu][X / scale]) != 0) { dst[X] = pal[c & 0x3F]; fr[X] = 3; continue; }
             if (vp >= 0 && (u = col_pa[X]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0
                 && !(party_under[vp][u] && ve >= 0 && col_en[X] >= 0 && layer[L_ACTION][ve][col_en[X]])) {
-                uint32_t pc = pal[c & 0x3F];
+                uint32_t pc = tpal[c & 0x3F];
                 if (lit && ve >= 0 && col_en[X] >= 0) {                /* the party catches some of the light */
                     const uint8_t *lp = light_px[ve][col_en[X]];
                     int r = (int)(pc >> 16 & 255) + lp[0] / 3, g = (int)(pc >> 8 & 255) + lp[1] / 3, b = (int)(pc & 255) + lp[2] / 3;
@@ -790,9 +812,10 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             }
             /* behind it: action, enemies, background */
             uint32_t far;
-            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_ACTION][ve][u]) != 0) far = pal[c & 0x3F];
-            else if (ve >= 0 && u >= 0 && (c = layer[L_ENEMY][ve][u]) != 0) far = pal[c & 0x3F];
-            else far = pal[layer[L_BG][vb][col_bg[X]] & 0x3F];
+            uint8_t what = WX_FRONT_ENEMY;
+            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_ACTION][ve][u]) != 0) far = tpal[c & 0x3F];
+            else if (ve >= 0 && u >= 0 && (c = layer[L_ENEMY][ve][u]) != 0) far = tpal[c & 0x3F];
+            else { far = tpal[layer[L_BG][vb][col_bg[X]] & 0x3F]; what = WX_FRONT_BG; }
             if (fog_on && prof) {
                 int d = (nrow1[fog_col1[X]] * 5 + nrow2[fog_col2[X]] * 3) >> 3;   /* 0..255 */
                 d = (d - 80) * 2;                                                 /* contrast: wisps */
@@ -812,7 +835,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                 far = 0xFF000000u | (uint32_t)(r > 255 ? 255 : r) << 16 | (uint32_t)(g > 255 ? 255 : g) << 8 | (uint32_t)(b > 255 ? 255 : b);
             }
             dst[X] = far;
-            fr[X] = 0;
+            fr[X] = what;
         }
     }
     /* the sprites on the party, each object through the enemies' camera and
@@ -838,9 +861,15 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                 if (sx < 0 || sx >= ow || (u = col_en[sx]) < 0 || near_obj[ve][u] != r + 1) continue;
                 uint8_t c = near_px[ve][u], f = front[Y][X];
                 if ((c & 0x80) ? f == 3 : (f == 1 || f == 3)) continue;
-                dst[X] = pal[c & 0x3F];
+                dst[X] = tpal[c & 0x3F];
+                front[Y][X] = WX_FRONT_PARTY;                 /* with the party, for the weather */
             }
         }
+    }
+    if (wx) {                                                 /* the weather, at its three depths */
+        WeatherFrame wf = {out, out_stride, &front[0][0], VDP_MAX_W * MAX_SCALE, w, h, scale,
+                           cam_x, cam_y, zoom, dt, (int)(sr / n), (int)(sg / n), (int)(sb / n)};
+        weather_draw(&wf);
     }
     if (fx_on) fx_draw(out, out_stride, w, h, scale, cam_x, cam_y, zoom, fx_cur);
     return 1;

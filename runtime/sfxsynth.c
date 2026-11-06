@@ -1096,6 +1096,77 @@ static int16_t *render_blast(int v, int *frames) {
     return finish(&out, -2.0f, 1.8f, frames);
 }
 
+/* Thunder for the battle storms (weather.c), not one of the game's sounds:
+ * variants 0-1 near -- a crack splitting the air, a boom, the rumble rolling
+ * away -- and 2-3 far, only the rumble, softer and longer. The rumble swells
+ * and dies back a few times, as thunder rolls off the hills. */
+static int16_t *render_thunder(int v, int *frames) {
+    Rng vr = seed(0x7DE1u, v);
+    int near = v < 2;
+    float len = near ? 4.6f : 5.4f, k = 0.9f + 0.2f * urnd(&vr);
+    Buf out = buf_new(len);
+    if (near) {
+        Buf ck = noise_sweep(len, 0.0f, 0.0008f, 0.11f, 7000.0f * k, 700.0f, 0.3f, 0.55f, -0.3f, 0.3f, 0.6f, 0x7DE2u, v);
+        Buf cr = crackle(len, 0.0f, 0.5f, 140.0f, 1500.0f, 1.3f, 1.6f, 0x7DE3u, v);
+        Buf bm = thump(len, 0.02f, 80.0f * k, 30.0f, 0.25f, 0.7f, 1.8f);
+        mix(&out, &ck, 0.0f);
+        mix(&out, &cr, -7.0f);
+        mix(&out, &bm, -4.0f);
+        buf_free(&ck); buf_free(&cr); buf_free(&bm);
+    }
+    Buf ru = noise_sweep(len, near ? 0.06f : 0.0f, near ? 0.12f : 0.5f, near ? 1.3f : 1.8f, 220.0f * k, 60.0f, 2.6f,
+                         0.6f, near ? 0.35f : -0.35f, near ? -0.35f : 0.35f, 0.0f, 0x7DE4u, v);
+    /* the roll: three to five swells at random times */
+    float swell_t[5], swell_w[5];
+    int ns = 3 + (int)(urnd(&vr) * 3.0f);
+    for (int i = 0; i < ns; i++) { swell_t[i] = (near ? 0.1f : 0.3f) + urnd(&vr) * (len * 0.55f); swell_w[i] = 0.4f + 0.6f * urnd(&vr); }
+    for (int n = 0; n < ru.n; n++) {
+        float t = (float)n / SR, g = 0.35f;
+        for (int i = 0; i < ns; i++) {
+            float d = (t - swell_t[i]) / 0.35f;
+            g += swell_w[i] * expf(-d * d);
+        }
+        ru.l[n] *= g;
+        ru.r[n] *= g;
+    }
+    normalize(&ru);
+    mix(&out, &ru, near ? -3.0f : 0.0f);
+    buf_free(&ru);
+    reverb(&out, 0.9f, 0.55f, 0.35f, 60.0f);
+    return finish(&out, near ? -1.0f : -5.0f, near ? 1.6f : 1.2f, frames);
+}
+
+/* Rain for the battle weather (weather.c), not one of the game's sounds: a
+ * loop of rain falling -- a soft hiss, a wash lower down, drops ticking near
+ * and far -- steady from end to end, so it loops (weather.c cross-fades the
+ * seam). */
+static int16_t *render_rain(int v, int *frames) {
+    float len = 4.0f;
+    Buf b = buf_new(len);
+    Rng r = seed(0x4A1Du, v);
+    Svf h1 = {0, 0}, h2 = {0, 0}, lo1 = {0, 0}, lo2 = {0, 0}, dl = {0, 0}, dr = {0, 0};
+    float drop = 0.0f, dtau = 0.002f, df = 3000.0f, gl = 0.7f, gr = 0.7f;
+    for (int n = 0; n < b.n; n++) {
+        float xl = rnd(&r), xr = rnd(&r);
+        float hl = svf(&h1, xl, 5200.0f, 0.5f).bp, hr = svf(&h2, xr, 5400.0f, 0.5f).bp;
+        float wl = svf(&lo1, xl, 900.0f, 0.4f).bp, wr = svf(&lo2, xr, 950.0f, 0.4f).bp;
+        if (urnd(&r) < 120.0f / SR) {                       /* a drop: a tick near or far */
+            drop = 0.25f + 0.75f * urnd(&r);
+            dtau = 0.0015f + 0.004f * urnd(&r);
+            df = 1800.0f * powf(2.0f, 1.6f * rnd(&r));
+            pan(rnd(&r) * 0.9f, &gl, &gr);
+        }
+        float x = rnd(&r) * drop;
+        drop *= expf(-1.0f / (dtau * SR));
+        float ddl = svf(&dl, x, df, 2.2f).bp * gl, ddr = svf(&dr, x, df, 2.2f).bp * gr;
+        b.l[n] = hl * 0.55f + wl * 0.35f + ddl * 0.8f;
+        b.r[n] = hr * 0.55f + wr * 0.35f + ddr * 0.8f;
+    }
+    normalize(&b);
+    reverb(&b, 0.5f, 0.6f, 0.12f, 300.0f);
+    return finish(&b, -3.0f, 0.0f, frames);
+}
+
 /* Spark (SFXID_Spark, $D3; Black Hole asks seven times): a crisp electric
  * snap -- a crack, a tiny falling zap, a spit of crackle */
 static int16_t *render_spark(int v, int *frames) {
@@ -1229,6 +1300,8 @@ static const SfxRecipe RECIPES[] = {
     {"current", "Tandle: an electric current buzzing, crackling, humming", 2, 1, 0.350f},
     {"holy", "Efess: a flash of light, a rising swell of shimmer", 2, 1, 0.300f},
     {"sonic", "Phonon: two tones wavering into a sonic beam", 2, 1, 0.250f},
+    {"thunder", "battle storms: a crack and the rumble rolling away (0-1 near, 2-3 far)", 4, 2, 0.000f},
+    {"rain", "battle rain: a loop of hiss, wash and dripping drops", 1, 1, 0.000f},
 };
 
 typedef int16_t *(*RenderFn)(int, int *);
@@ -1238,7 +1311,7 @@ static const RenderFn RENDER[] = {render_slash, render_slasher, render_cursor, r
                                   render_glimmer, render_swipe, render_healcast, render_miss, render_gravity,
                                   render_recover, render_breath, render_buff, render_surge, render_zap,
                                   render_rocket, render_blast, render_spark, render_radiance, render_current,
-                                  render_holy, render_sonic};
+                                  render_holy, render_sonic, render_thunder, render_rain};
 
 int sfxsynth_count(void) { return (int)(sizeof RECIPES / sizeof RECIPES[0]); }
 

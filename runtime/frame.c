@@ -24,6 +24,7 @@
 #include "rumble.h"
 #include "sfx.h"
 #include "sound.h"
+#include "weather.h"
 #include "widemap.h"
 
 #include <string.h>
@@ -127,7 +128,9 @@ void frame_run(void) {
     if (n > 8192) n = 8192;
     memcpy(mix, chips, (size_t)n * 2 * sizeof(float));
     if (sfx_enabled()) sfx_mix(mix, n);
-    mixbus_set_limiter(sfx_enabled() || algol_enabled() || music_enabled());
+    int weather_heard = weather_sound_on();
+    if (weather_heard) weather_mix(mix, n);                /* battle rain and thunder */
+    mixbus_set_limiter(sfx_enabled() || algol_enabled() || music_enabled() || weather_heard);
     mixbus_finish(mix, out, n);
     platform_audio(out, n);
 }

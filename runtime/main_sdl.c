@@ -46,6 +46,7 @@
 #include "music.h"
 #include "fpview.h"
 #include "walkto.h"
+#include "weather.h"
 #include "rumble.h"
 #ifndef _WIN32
 #include "icon.h"
@@ -195,6 +196,8 @@ static Setting settings[] = {
     {"enhance.mode", "enhanced", "enhanced = the port's additions below are on; classic = the original game, unchanged (Esc menu > Settings)"},
     {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
+    {"enhance.battle_weather", "1", "battle weather by place: rain and storms on Motavia's grass, beaches and sea, snow on Dezolis, mist clouds on Rykros, debris in space: 0 off, 1 light, 2 heavy"},
+    {"enhance.battle_weather_sound", "on", "the rain and thunder heard with the battle weather: on / off"},
     {"enhance.text", "modern", "text: modern = redrawn with the font below at full resolution; original = the game's pixel font"},
     {"enhance.text_font", "", "TrueType/OpenType font file for modern text; empty = Segoe UI on Windows, else the bundled Noto Sans"},
     {"enhance.sfx", "modern", "sound effects: modern = the port's own, synthesized; custom = your samples, mapped in sfx/sfx.ini (the rest modern); original = the game's own"},
@@ -883,6 +886,8 @@ static void apply_enhancements(void) {
     depth_set_level(classic_mode() ? 0 : setting_int("enhance.battle_depth"));
     depth_set_fog(classic_mode() ? 0 : setting_int("enhance.battle_fog"));
     depth_set_fx(classic_mode() ? 0 : setting_int("enhance.battle_fx"));
+    weather_set_sound(SDL_strcasecmp(setting("enhance.battle_weather_sound"), "off") != 0);
+    weather_set_level(classic_mode() ? 0 : setting_int("enhance.battle_weather"));
     const char *sm = setting("enhance.sfx");
     sfx_set_mode(classic_mode() || !SDL_strcasecmp(sm, "original") ? SFX_ORIGINAL
                  : !SDL_strcasecmp(sm, "custom") ? SFX_CUSTOM : SFX_MODERN);
@@ -988,6 +993,9 @@ static const MenuItem BATTLE_ITEMS[] = {
      apply_enhancements},
     {"Fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1,
      "Drifting mist between the enemies and the party. F8 switches it too.", apply_enhancements},
+    {"Weather", "enhance.battle_weather", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1,
+     "Rain and storms on Motavia, snow on Dezolis, mist clouds on Rykros, debris in space. Heavy: more of it.",
+     apply_enhancements},
     {"Effects", "enhance.battle_fx", {"0", "1", "2"}, {"Off", "Subtle", "Full"}, 0, 0, 0, 1,
      "Attacks and techniques light the scene: sparks, flashes, embers and lens flares.", apply_enhancements},
 };
