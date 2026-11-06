@@ -119,7 +119,14 @@ static void map_xy(const Layer *L, int x, int y, int px, int py, int *X, int *Y)
     *Y = ny + dy;
 }
 
+/* plane A rows the game has filled across the whole 4:3 view with one entry
+ * that isn't the map's -- the white bars closing in as a battle starts
+ * (FieldRoutine_Battle2 paints only the 40 columns it shows): -1 for none.
+ * The margins carry the fill on, so the bars cross the whole picture. */
+static int fill_a[32];
+
 static int margin_entry(int plane, int x, int y, int px, int py) {
+    if (plane == 0 && fill_a[(py >> 3) & 31] >= 0) return fill_a[(py >> 3) & 31];
     const Layer *L = &layer[plane ? 1 : 0];
     if (!L->on) return -1;
     int X, Y;
@@ -214,6 +221,31 @@ void widemap_frame(int wide) {
         }
     }
     table = chunks;
+    /* rows of plane A filled with one entry, not the map's (see fill_a) */
+    int fills = 0, mw = vdp_width(), h = vdp_height();
+    for (int r = 0; r < 32; r++) fill_a[r] = -1;
+    for (int y = 4; y < h; y += 8) {
+        int px0, py0;
+        vdp_plane_xy(0, 4, y, &px0, &py0);
+        uint16_t e0 = vdp_plane_entry(0, px0, py0);
+        if (!(e0 & 0x7FF)) continue;                      /* a blank row isn't a fill */
+        int same = 1, mapped = 0, cells = 0;
+        for (int x = 4; x < mw && same; x += 8) {
+            int px, py, X, Y;
+            vdp_plane_xy(0, x, y, &px, &py);
+            uint16_t e = vdp_plane_entry(0, px, py);
+            same = e == e0;
+            cells++;
+            if (chunks_ok) {
+                map_xy(&layer[0], x, y, px, py, &X, &Y);
+                mapped += map_entry(&layer[0], X, Y) == (int)e;
+            }
+        }
+        if (same && mapped * 2 < cells) {
+            fill_a[(py0 >> 3) & 31] = e0;
+            fills++;
+        }
+    }
     for (int k = 0; k < 2; k++) {
         Layer *L = &layer[k];
         L->on = chunks_ok && agrees(n[k], m[k]);
@@ -221,10 +253,10 @@ void widemap_frame(int wide) {
             int ld, rd, mc;
             margin_diffs(k, L, &ld, &rd, &mc);
             printf("widemap %llu: plane %c map %03X (%dx%d chunks) camera %d,%d %s %d/%d agree (%d%%); "
-                   "margins differ L %d R %d of %d\n",
+                   "margins differ L %d R %d of %d; filled rows %d\n",
                    frames, k ? 'B' : 'A', r16(FIELD_MAP), L->wrap_w, L->wrap_h, L->cam_x, L->cam_y,
-                   L->on ? "on " : "off", m[k], n[k], n[k] ? m[k] * 100 / n[k] : 0, ld, rd, mc);
+                   L->on ? "on " : "off", m[k], n[k], n[k] ? m[k] * 100 / n[k] : 0, ld, rd, mc, fills);
         }
     }
-    if (enabled && (layer[0].on || layer[1].on)) vdp_margin_entry = margin_entry;
+    if (enabled && (layer[0].on || layer[1].on || fills)) vdp_margin_entry = margin_entry;
 }
