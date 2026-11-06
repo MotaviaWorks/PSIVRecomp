@@ -190,6 +190,7 @@ void m68k_fatal(const char *what, uint32_t addr, uint32_t value);
 void m68k_stop(uint32_t sr);                          /* `stop`: wait for an interrupt */
 void m68k_reset_insn(void);                           /* `reset` instruction */
 m68k_fn m68k_lookup(uint32_t addr);                   /* NULL if addr is not a function */
+void m68k_run_ram(uint32_t pc);                        /* interpret code the game wrote to RAM (raster effects) */
 
 /* after a call: if the callee rewrote its return address, carry on where the
  * 68000 would (see m68k_resume); the caller returns right after */

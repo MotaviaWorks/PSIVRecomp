@@ -78,12 +78,16 @@ void frame_run(void) {
     vdp.in_vblank = 0;
     for (int y = 0; y < h; y++) {
         vdp.line = y;
-        vdp_render_line(y, &frame_lines[y]);
-        vdp_compose_line(&frame_lines[y], &frame_pixels[y * VDP_MAX_W], w);
+        /* the line counter runs out at the end of the line before, and what
+         * the handler writes (vertical scroll: Gra's wave, HInt2's stretch)
+         * shows on this line already: Genesis Plus GX (BizHawk) draws Gra's
+         * wave so, to the pixel, where the port had it a line late */
         if (counter-- == 0) {
             counter = vdp.reg[10];
             if (vdp_hint_enabled()) m68k_interrupt(4, SPIN_PC);
         }
+        vdp_render_line(y, &frame_lines[y]);
+        vdp_compose_line(&frame_lines[y], &frame_pixels[y * VDP_MAX_W], w);
     }
 
     platform_frame(frame_pixels, w, h);
