@@ -228,6 +228,31 @@ static const struct { uint8_t id; const char *recipe; float gain_db; } MODERN[] 
     {0xB7, "slasher", 0.0f},        /* SFXID_Slasher: Alys's throw */
     {0xF2, "cursor", 0.0f},         /* SFXID_MovingCursor */
     {0xF3, "select", 0.0f},         /* SFXID_Selection */
+    /* the battle set (2026-11-05): the effects the test bot's battles ask for
+     * most (tools/sfx_census.py); each 1 dB under its original's loudest quarter
+     * second (tools/sfx_study.py), Gra's (every 8 frames) 2 dB under: the music keeps
+     * the channel the original effect would have taken, so the sum is fuller */
+    {0xE8, "claw", -0.2f},          /* SFXID_Claw: claws, Double Slash, Disrupt */
+    {0xB9, "dissolve", -4.5f},      /* SFXID_EnemyKilled */
+    {0xDD, "grind", -1.3f},         /* SFXID_GraveOpening: an enemy's attack in battle */
+    {0xC6, "wind", -5.7f},          /* SFXID_Zan: Zan, Nazan, Hewn */
+    {0xBA, "blow", -6.3f},          /* SFXID_EnemyAttack1 */
+    {0xD5, "gnash", -1.8f},         /* SFXID_MoleAttack: an enemy's bites */
+    {0xB5, "rod", -0.2f},           /* SFXID_Rod: staves */
+    {0xBE, "fire", -4.7f},          /* SFXID_Foi: fire techniques, fire weapons */
+    {0xCC, "heal", -2.3f},          /* SFXID_Res: Res, Gires, the healing items */
+    {0xBB, "cast", -1.8f},          /* SFXID_TechCast */
+    {0xB6, "shot", -1.8f},          /* SFXID_Shot: Wren's gun */
+    {0xC4, "glimmer", -1.4f},       /* SFXID_Moonshad: Anti, Rimpa, Giwat */
+    {0xD7, "swipe", -4.5f},         /* SFXID_EnemyAttack3 */
+    {0xBD, "healcast", -3.7f},      /* SFXID_HealTechCast */
+    {0xB8, "miss", -4.1f},          /* SFXID_AttackMiss */
+    {0xC7, "gravity", -6.9f},       /* SFXID_Gra: every 8 frames of the gravity wave */
+    {0xCD, "recover", 1.3f},        /* SFXID_Recovery */
+    {0xC2, "breath", -2.8f},        /* SFXID_FireBreath */
+    {0xBC, "buff", -5.4f},          /* SFXID_BuffCast: Saner, Shift, Deban */
+    {0xCB, "surge", -1.0f},         /* SFXID_Brose: Brose, Diem */
+    {0xC5, "zap", -4.4f},           /* SFXID_LaserAttack: Tsu, Flare */
 };
 
 int sfx_synth_load(void) {

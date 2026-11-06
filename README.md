@@ -228,7 +228,17 @@ original game, unchanged; **Enhanced** turns on the additions:
   shipped: blade hits (a short swing, a slice, a ringing edge, a thump; hits
   in quick succession overlap), the slasher's throw (the spin flying off and
   coming back, timed to its hits, with Doppler), a menu-cursor tick and a
-  two-note chime for choices -- several variants each, picked at random.
+  two-note chime for choices, and the battle set: the 21 effects battles ask
+  for most -- claws, staves, Wren's gun, misses; enemies' blows, swipes,
+  bites and grinding attacks, and their destruction; Zan's wind, Foi's fire,
+  Tsu's lightning, Gra's warp (a pulse the game repeats every 8 frames),
+  Brose's surge, fire breath; casts, buffs, Moonshade's glimmer, and the
+  healing bells of Res, its cast and Recovery -- several variants each,
+  picked at random. Each keeps its original's length, so it fits the
+  animation it was timed to, and sits 1 dB under the original's loudness
+  (`tools/sfx_census.py` counts which effects the test bot's battles ask
+  for and what asks; `tools/sfx_study.py` sets an original and its
+  replacement side by side as spectrograms, with their loudness).
   *Your samples* maps sound IDs to your own WAVs in `sfx/sfx.ini` (a file, or
   a folder played at random); IDs it doesn't map stay modern. Samples stay out
   of git. `psiv_headless --sfx-dump DIR` writes every synthesized sound to
@@ -278,8 +288,8 @@ original game, unchanged; **Enhanced** turns on the additions:
   are the port's own (`runtime/battledesc.c`). Vehicle battles keep the
   original windows. Needs the modern-text font.
 
-Planned (see `docs/IDEAS.md`): more of the sound set synthesized (techniques,
-enemy attacks, the field).
+Planned (see `docs/IDEAS.md`): the rest of the sound set synthesized (rarer
+techniques and enemy attacks, the field: doors, chests, stairs).
 
 ### Headless runs
 

@@ -256,8 +256,25 @@ a release needs effects of its own. Plan, best fit first:
   passes through), $B7 Alys's throw (the first hit follows 38-41 frames
   later, so the return is timed to it), $F2 cursor, $F3 choice; levels within
   ~2 dB of the originals in the mix, a soft knee where they meet loud music.
-  Next candidates by frequency in a session: BA/D8/D7 enemy attacks, B9 enemy
-  killed, B8 miss, the technique sounds (BB, BE Foi, C6 Zan...).
+- **The battle set (PsiLok, 2026-11-05: "now that we have more battle data
+  from spells and techniques, could we generate more sound effects")**: the
+  test bot's battles over the fan saves, with every request logged against
+  the command in force (`tools/sfx_census.py`), ranked the rest: $E8 claw
+  (664 in 43 runs), $B9 enemy killed (505), $DD grave opening (an enemy's
+  attack in battle, 456), $C6 Zan (342), $BA and $D5 enemy blows and bites
+  (269 each), $B5 rod (245), $BE Foi (200), $CC Res (177), $BB cast (163), $B6
+  Wren's shot (158), $C4 Moonshade (153), $D7 swipe, $BD heal cast, $B8 miss,
+  $C7 Gra, $CD recovery, $C2 fire breath, $BC buff, $CB Brose, $C5 laser (Tsu's
+  thunder). All 21 synthesized from six shared layers (swept noise, a gliding
+  FM tone, a thump, crackle, glass bells, amplitude pulses), each keeping its
+  original's length and shape (`tools/sfx_study.py`: spectrograms side by
+  side) -- Gra's is one deep pulse, since the game asks for it every 8 frames
+  of the wave. Levels: 1 dB under each original's loudest quarter second.
+  The originals take a music channel while they play and these don't, so
+  the mix limiter works more: on 3-6% of a bot run's samples, at most 1.5-3
+  dB (was ~1%). Next: the rarer techniques (Megid, Legeon, Tandle, Phonon,
+  Rimit, Eliminat...), enemies' $D8/$DA/$D9, and the field (doors, chests,
+  stairs, the elevators).
 - **Remastered originals** (an option): the game's own FM effect, with a
   modern layer added at runtime (sub-bass on hits, a transient, stereo room).
 - **AI-generated** (later, only for what synthesis does badly, e.g. monster

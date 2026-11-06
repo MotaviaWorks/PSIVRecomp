@@ -469,16 +469,619 @@ static int16_t *render_select(int v, int *frames) {
     return finish(&b, -10.0f, 0.0f, frames);
 }
 
+/* ------------------------------------------------------------------ layers
+ * The battle set below is built from these: each returns one layer,
+ * normalised, for mix() at a set level. Times in seconds, from the layer's
+ * start; `t0` delays a layer inside the effect. */
+
+/* noise through a band-pass whose centre moves from f0 to f1 (exponentially,
+ * over `sweep` seconds), shaped by attack_decay(a, tau) and panned from p0 to
+ * p1 over the same time; `air` (0-1) adds the high-passed noise for breath */
+static Buf noise_sweep(float len, float t0, float a, float tau, float f0, float f1, float sweep, float q,
+                       float p0, float p1, float air, uint32_t s, int v) {
+    Buf b = buf_new(len);
+    Svf f = {0, 0}, h = {0, 0};
+    Rng r = seed(s, v);
+    for (int n = t0 > 0 ? (int)(t0 * SR) : 0; n < b.n; n++) {
+        float t = (float)n / SR - t0, env = attack_decay(t, a, tau);
+        if (t > a && env < 1e-4f) break;
+        float u = clamp01(t / sweep), fc = f0 * powf(f1 / f0, u), x = rnd(&r), gl, gr;
+        float y = (svf(&f, x, fc, q).bp + air * svf(&h, x, fc * 1.6f, 0.7f).hp) * env;
+        pan(p0 + (p1 - p0) * smooth(u), &gl, &gr);
+        b.l[n] = y * gl;
+        b.r[n] = y * gr;
+    }
+    normalize(&b);
+    return b;
+}
+
+/* a tone gliding from f0 to f1 (time constant `glide`), its edge from FM
+ * (`edge` 0-1, fading over the first 60 ms by half), the right channel
+ * detuned by `det` for width; attack_decay(a, tau); at pan p */
+static Buf tone_glide(float len, float t0, float a, float tau, float f0, float f1, float glide, float edge,
+                      float det, float p) {
+    Buf b = buf_new(len);
+    float pl = 0, pr = 0, gl, gr;
+    pan(p, &gl, &gr);
+    for (int n = t0 > 0 ? (int)(t0 * SR) : 0; n < b.n; n++) {
+        float t = (float)n / SR - t0, env = attack_decay(t, a, tau);
+        if (t > a && env < 1e-4f) break;
+        float f = f1 + (f0 - f1) * expf(-t / glide), e = edge * (0.5f + 0.5f * expf(-t / 0.06f));
+        pl += TAU * f / SR;
+        pr += TAU * f * (1.0f + det) / SR;
+        b.l[n] = sinf(pl + e * sinf(2.0f * pl)) * env * gl;
+        b.r[n] = sinf(pr + e * sinf(2.0f * pr)) * env * gr;
+    }
+    normalize(&b);
+    return b;
+}
+
+/* weight: a sine falling from f0 to f1, saturated by `drive` */
+static Buf thump(float len, float t0, float f0, float f1, float glide, float tau, float drive) {
+    Buf b = buf_new(len);
+    float ph = 0, nd = tanhf(drive > 0 ? drive : 1.0f);
+    for (int n = t0 > 0 ? (int)(t0 * SR) : 0; n < b.n; n++) {
+        float t = (float)n / SR - t0, env = attack_decay(t, 0.0015f, tau);
+        if (t > 0.01f && env < 1e-4f) break;
+        ph += TAU * (f1 + (f0 - f1) * expf(-t / glide)) / SR;
+        float s = drive > 0 ? tanhf(drive * sinf(ph) * env) / nd : sinf(ph) * env;
+        b.l[n] = b.r[n] = s;
+    }
+    normalize(&b);
+    return b;
+}
+
+/* crackle: from t0 for `dur`, little bursts at `rate` a second (random), each
+ * 1-5 ms of noise ringing through a band near fc (+-spread octaves), at a
+ * random place in the stereo field, the density fading over `dur` */
+static Buf crackle(float len, float t0, float dur, float rate, float fc, float spread, float q, uint32_t s, int v) {
+    Buf b = buf_new(len);
+    Rng r = seed(s, v);
+    Svf fl = {0, 0}, fr = {0, 0};
+    float env = 0, tau = 0.002f, gl = 0.7f, gr = 0.7f, f = fc;
+    for (int n = t0 > 0 ? (int)(t0 * SR) : 0; n < b.n; n++) {
+        float t = (float)n / SR - t0;
+        if (t > dur + 0.05f) break;
+        float dens = t < dur ? 1.0f - 0.7f * t / dur : 0.0f;
+        if (urnd(&r) < rate * dens / SR) {
+            env = 0.35f + 0.65f * urnd(&r);
+            tau = 0.001f + 0.004f * urnd(&r);
+            f = fc * powf(2.0f, spread * rnd(&r));
+            pan(rnd(&r) * 0.8f, &gl, &gr);
+        }
+        float x = rnd(&r) * env;
+        env *= expf(-1.0f / (tau * SR));
+        b.l[n] = svf(&fl, x, f, q).bp * gl;
+        b.r[n] = svf(&fr, x, f, q).bp * gr;
+    }
+    normalize(&b);
+    return b;
+}
+
+/* a struck glass/bell: partials at `ratio` of f, each its own decay, a 2 ms
+ * strike; added into b at `amp` and pan p (not normalised: chimes stack) */
+static void bell(Buf *b, float t0, float f, float tau, float amp, float p) {
+    static const float RATIO[5] = {1.0f, 2.0f, 2.76f, 4.07f, 5.4f};
+    static const float LEVEL[5] = {1.0f, 0.42f, 0.24f, 0.12f, 0.06f};
+    static const float DECAY[5] = {1.0f, 0.62f, 0.4f, 0.26f, 0.18f};
+    float gl, gr;
+    pan(p, &gl, &gr);
+    for (int k = 0; k < 5; k++) {
+        float fk = f * RATIO[k];
+        if (fk > SR * 0.42f) break;
+        float ph = 0, w = TAU * fk / SR, lv = LEVEL[k] * amp;
+        for (int n = t0 > 0 ? (int)(t0 * SR) : 0; n < b->n; n++) {
+            float t = (float)n / SR - t0, env = attack_decay(t, 0.002f, tau * DECAY[k]);
+            if (t > 0.01f && env < 1e-4f) break;
+            ph += w;
+            float s = sinf(ph) * env * lv;
+            b->l[n] += s * gl;
+            b->r[n] += s * gr * (k & 1 ? 0.92f : 1.0f);
+        }
+    }
+}
+
+/* amplitude pulses at `hz` (0 to 1 to 0 each cycle, sharpened by `pow`) over
+ * a layer, from t0 */
+static void pulse(Buf *b, float t0, float hz, float sharp) {
+    float ph = 0;
+    for (int n = t0 > 0 ? (int)(t0 * SR) : 0; n < b->n; n++) {
+        ph += hz / SR;
+        float c = 0.5f - 0.5f * cosf(TAU * ph), g = powf(c, sharp);
+        b->l[n] *= g;
+        b->r[n] *= g;
+    }
+}
+
+/* ------------------------------------------------------------------ the battle set
+ * Made from the battles the test bot fights across the fan saves
+ * (tools/sfx_census.py: which effects come, and what calls them) and the
+ * originals' own lengths and shapes (tools/sfx_study.py). Each keeps the
+ * original's length, so it fits the animation it was timed to. */
+
+/* Claw (SFXID_Claw, $E8; party claws and Double Slash, the commonest battle
+ * sound after the menus): three rakes 22-30 ms apart drawing across the
+ * stereo field, a ragged tear under them and a soft thud */
+static int16_t *render_claw(int v, int *frames) {
+    Rng vr = seed(0xC1A3u, v);
+    float len = 0.42f, gap = 0.022f + 0.008f * urnd(&vr), top = 5200.0f * (0.9f + 0.2f * urnd(&vr));
+    Buf out = buf_new(len);
+    for (int k = 0; k < 3; k++) {
+        float p = -0.5f + 0.5f * (float)k;
+        Buf rk = noise_sweep(len, (float)k * gap, 0.001f, 0.024f, top * (1.0f - 0.08f * (float)k), 1300.0f, 0.06f, 2.4f,
+                             p - 0.15f, p + 0.15f, 0.25f, 0xC1A4u + (uint32_t)k, v);
+        mix(&out, &rk, k == 1 ? 0.0f : -2.0f);
+        buf_free(&rk);
+    }
+    Buf tr = noise_sweep(len, 0.004f, 0.004f, 0.06f, 1800.0f, 700.0f, 0.12f, 0.8f, -0.2f, 0.2f, 0.0f, 0xC1A5u, v);
+    Buf th = thump(len, 0.012f, 170.0f, 70.0f, 0.02f, 0.045f, 1.4f);
+    mix(&out, &tr, -8.0f);
+    mix(&out, &th, -9.0f);
+    buf_free(&tr); buf_free(&th);
+    reverb(&out, 0.35f, 0.5f, 0.08f, 400.0f);
+    return finish(&out, -3.0f, 1.4f, frames);
+}
+
+/* Enemy killed (SFXID_EnemyKilled, $B9): a falling zap, then the enemy
+ * dissolving -- a soft burst darkening as it goes, dust glittering off it --
+ * over a low thump; 0.9 s like the original */
+static int16_t *render_dissolve(int v, int *frames) {
+    Rng vr = seed(0xD1E5u, v);
+    float len = 1.1f, k = 0.9f + 0.2f * urnd(&vr);
+    Buf zp = tone_glide(len, 0.0f, 0.002f, 0.11f, 2100.0f * k, 140.0f * k, 0.07f, 0.9f, 0.006f, 0.0f);
+    Buf bu = noise_sweep(len, 0.02f, 0.006f, 0.24f, 4200.0f, 280.0f, 0.5f, 0.7f, -0.25f, 0.25f, 0.3f, 0xD1E6u, v);
+    Buf du = crackle(len, 0.08f, 0.62f, 70.0f, 7000.0f * k, 0.5f, 3.0f, 0xD1E7u, v);
+    Buf th = thump(len, 0.01f, 110.0f, 42.0f, 0.03f, 0.18f, 1.2f);
+    Buf out = buf_new(len);
+    mix(&out, &zp, -5.0f);
+    mix(&out, &bu, 0.0f);
+    mix(&out, &du, -10.0f);
+    mix(&out, &th, -6.0f);
+    buf_free(&zp); buf_free(&bu); buf_free(&du); buf_free(&th);
+    reverb(&out, 0.62f, 0.45f, 0.2f, 300.0f);
+    return finish(&out, -4.0f, 1.2f, frames);
+}
+
+/* Grave opening (SFXID_GraveOpening, $DD; in battle an enemy's attack, and
+ * heard a lot): a grinding rumble pulsing ~19 times a second for a second --
+ * dark noise and a crunchier band under a wavering growl */
+static int16_t *render_grind(int v, int *frames) {
+    Rng vr = seed(0x6A1Du, v);
+    float len = 1.35f, hz = 18.0f + 3.0f * urnd(&vr);
+    Buf lo = noise_sweep(len, 0.0f, 0.03f, 0.45f, 520.0f, 260.0f, 1.1f, 0.6f, -0.2f, 0.2f, 0.0f, 0x6A1Eu, v);
+    Buf cr = noise_sweep(len, 0.0f, 0.02f, 0.38f, 2600.0f, 1500.0f, 1.0f, 1.4f, 0.3f, -0.3f, 0.2f, 0x6A1Fu, v);
+    pulse(&lo, 0.0f, hz, 1.5f);
+    pulse(&cr, 0.012f, hz, 2.5f);
+    Buf gw = buf_new(len);                                    /* the growl: a rough low tone, wavering */
+    float ph = 0;
+    for (int n = 0; n < gw.n; n++) {
+        float t = (float)n / SR, env = attack_decay(t, 0.05f, 0.45f);
+        ph += TAU * (62.0f + 7.0f * sinf(TAU * 3.1f * t)) / SR;
+        float s = tanhf(2.5f * sinf(ph)) * env;
+        gw.l[n] = s;
+        gw.r[n] = s;
+    }
+    pulse(&gw, 0.006f, hz, 1.0f);
+    normalize(&gw);
+    Buf out = buf_new(len);
+    mix(&out, &lo, 0.0f);
+    mix(&out, &cr, -5.0f);
+    mix(&out, &gw, -7.0f);
+    buf_free(&lo); buf_free(&cr); buf_free(&gw);
+    reverb(&out, 0.5f, 0.6f, 0.12f, 250.0f);
+    return finish(&out, -2.0f, 1.6f, frames);
+}
+
+/* Zan (SFXID_Zan, $C6: Zan, Nazan, the Hewn skill): wind blades -- two
+ * whistling gusts sweeping up and away in opposite directions, a thin
+ * whistle riding the first, airy noise trailing */
+static int16_t *render_wind(int v, int *frames) {
+    Rng vr = seed(0x2A11u, v);
+    float len = 0.62f, k = 0.92f + 0.16f * urnd(&vr);
+    Buf g1 = noise_sweep(len, 0.0f, 0.06f, 0.12f, 650.0f * k, 3600.0f * k, 0.22f, 4.0f, -0.6f, 0.5f, 0.15f, 0x2A12u, v);
+    Buf g2 = noise_sweep(len, 0.07f, 0.05f, 0.13f, 900.0f * k, 4300.0f * k, 0.2f, 3.2f, 0.6f, -0.4f, 0.15f, 0x2A13u, v);
+    Buf wh = tone_glide(len, 0.03f, 0.05f, 0.1f, 1500.0f * k, 2900.0f * k, 0.12f, 0.15f, 0.004f, -0.1f);
+    Buf ai = noise_sweep(len, 0.12f, 0.08f, 0.16f, 6000.0f, 3000.0f, 0.4f, 0.7f, -0.3f, 0.3f, 0.6f, 0x2A14u, v);
+    Buf out = buf_new(len);
+    mix(&out, &g1, 0.0f);
+    mix(&out, &g2, -1.5f);
+    mix(&out, &wh, -14.0f);
+    mix(&out, &ai, -9.0f);
+    buf_free(&g1); buf_free(&g2); buf_free(&wh); buf_free(&ai);
+    reverb(&out, 0.55f, 0.4f, 0.16f, 400.0f);
+    return finish(&out, -3.0f, 1.3f, frames);
+}
+
+/* An enemy's blow (SFXID_EnemyAttack1, $BA): a punch -- a low thump, a
+ * crack and a short body of dark noise */
+static int16_t *render_blow(int v, int *frames) {
+    Rng vr = seed(0xB10Au, v);
+    float len = 0.35f, k = 0.9f + 0.2f * urnd(&vr);
+    Buf th = thump(len, 0.0f, 150.0f * k, 52.0f * k, 0.025f, 0.06f, 2.0f);
+    Buf ck = noise_sweep(len, 0.0f, 0.0005f, 0.018f, 2100.0f * k, 1400.0f, 0.03f, 1.0f, -0.1f, 0.1f, 0.4f, 0xB10Bu, v);
+    Buf bo = noise_sweep(len, 0.002f, 0.003f, 0.045f, 900.0f, 400.0f, 0.06f, 0.7f, 0.1f, -0.1f, 0.0f, 0xB10Cu, v);
+    Buf out = buf_new(len);
+    mix(&out, &th, 0.0f);
+    mix(&out, &ck, -3.0f);
+    mix(&out, &bo, -6.0f);
+    buf_free(&th); buf_free(&ck); buf_free(&bo);
+    reverb(&out, 0.35f, 0.55f, 0.07f, 300.0f);
+    return finish(&out, -3.0f, 1.8f, frames);
+}
+
+/* Mole attack (SFXID_MoleAttack, $D5; an enemy's): six snapping bites ~50 ms
+ * apart -- a click and a short chirp each, a little uneven */
+static int16_t *render_gnash(int v, int *frames) {
+    Rng vr = seed(0x6A55u, v);
+    float len = 0.5f;
+    Buf out = buf_new(len);
+    for (int k = 0; k < 6; k++) {
+        float t0 = fmaxf(0.0f, 0.05f * (float)k + 0.006f * rnd(&vr)), f = 1200.0f * (0.85f + 0.3f * urnd(&vr));
+        float p = (k & 1) ? 0.25f : -0.25f;
+        Buf ck = noise_sweep(len, t0, 0.0004f, 0.006f, 3300.0f, 2600.0f, 0.01f, 1.6f, p, p, 0.3f, 0x6A56u + (uint32_t)k, v);
+        Buf ch = tone_glide(len, t0, 0.001f, 0.016f, f * 1.4f, f * 0.7f, 0.012f, 0.6f, 0.0f, p);
+        mix(&out, &ck, 0.0f);
+        mix(&out, &ch, -5.0f);
+        buf_free(&ck); buf_free(&ch);
+    }
+    reverb(&out, 0.3f, 0.5f, 0.08f, 400.0f);
+    return finish(&out, -4.0f, 1.2f, frames);
+}
+
+/* Rod (SFXID_Rod, $B5: Rune's and Hahn's staves): a knock of hard wood --
+ * the bending modes of a short bar, a click and a little thump */
+static int16_t *render_rod(int v, int *frames) {
+    Rng vr = seed(0x20D0u, v);
+    float len = 0.3f, f0 = 380.0f * (0.9f + 0.2f * urnd(&vr));
+    static const float RATIO[4] = {1.0f, 2.756f, 5.404f, 8.933f};
+    static const float DECAY[4] = {0.05f, 0.032f, 0.02f, 0.012f};
+    static const float LEVEL[4] = {1.0f, 0.55f, 0.3f, 0.15f};
+    Mode ml[4], mr[4];
+    for (int i = 0; i < 4; i++) {
+        mode_set(&ml[i], f0 * RATIO[i], DECAY[i], LEVEL[i]);
+        mode_set(&mr[i], f0 * RATIO[i] * 1.004f, DECAY[i], LEVEL[i]);
+    }
+    Buf wd = buf_new(len);
+    Rng ne = seed(0x20D1u, v);
+    for (int n = 0; n < wd.n; n++) {
+        float t = (float)n / SR, ex = t < 0.002f ? rnd(&ne) * (1.0f - t / 0.002f) : 0.0f, l = 0, r = 0;
+        for (int i = 0; i < 4; i++) { l += mode_step(&ml[i], ex); r += mode_step(&mr[i], ex); }
+        wd.l[n] = l;
+        wd.r[n] = r;
+    }
+    normalize(&wd);
+    Buf ck = noise_sweep(len, 0.0f, 0.0003f, 0.004f, 4000.0f, 3000.0f, 0.01f, 1.2f, 0.0f, 0.0f, 0.5f, 0x20D2u, v);
+    Buf th = thump(len, 0.0f, 120.0f, 60.0f, 0.02f, 0.04f, 1.2f);
+    Buf out = buf_new(len);
+    mix(&out, &wd, 0.0f);
+    mix(&out, &ck, -6.0f);
+    mix(&out, &th, -8.0f);
+    buf_free(&wd); buf_free(&ck); buf_free(&th);
+    reverb(&out, 0.3f, 0.5f, 0.08f, 400.0f);
+    return finish(&out, -3.0f, 1.0f, frames);
+}
+
+/* Foi (SFXID_Foi, $BE: the fire techniques and fire weapons): two puffs of
+ * flame 0.12 s apart, like the original -- a whoosh catching, a flickering
+ * roar, a low fwoomp -- and crackling between and after */
+static int16_t *render_fire(int v, int *frames) {
+    float len = 0.62f;
+    Buf out = buf_new(len);
+    for (int k = 0; k < 2; k++) {
+        float t0 = 0.12f * (float)k, p = k ? 0.25f : -0.25f;
+        Buf ig = noise_sweep(len, t0, 0.015f, 0.035f, 450.0f, 3200.0f, 0.05f, 1.4f, p, p, 0.2f, 0xF01u + (uint32_t)k, v);
+        Buf ro = noise_sweep(len, t0 + 0.025f, 0.015f, k ? 0.13f : 0.07f, 2600.0f, 900.0f, 0.25f, 0.6f, p, -p, 0.1f,
+                             0xF02u + (uint32_t)k, v);
+        pulse(&ro, t0, 23.0f + 5.0f * (float)k, 0.6f);         /* the flame flickers */
+        Buf fw = thump(len, t0 + 0.01f, 140.0f, 55.0f, 0.03f, 0.09f, 1.3f);
+        mix(&out, &ig, k ? -3.0f : -1.0f);
+        mix(&out, &ro, k ? -1.0f : 0.0f);
+        mix(&out, &fw, -8.0f);
+        buf_free(&ig); buf_free(&ro); buf_free(&fw);
+    }
+    Buf cr = crackle(len, 0.03f, 0.45f, 90.0f, 3000.0f, 0.7f, 2.0f, 0xF03u, v);
+    mix(&out, &cr, -9.0f);
+    buf_free(&cr);
+    reverb(&out, 0.5f, 0.45f, 0.13f, 300.0f);
+    return finish(&out, -3.0f, 1.4f, frames);
+}
+
+/* Res (SFXID_Res, $CC: Res, Gires and the healing items): the original's
+ * rising staircase as a run of glass bells up a pentatonic scale, left to
+ * right, over a high shimmer that settles */
+static int16_t *render_heal(int v, int *frames) {
+    static const float NOTE[8] = {1046.5f, 1174.7f, 1318.5f, 1568.0f, 1760.0f, 2093.0f, 2349.3f, 2637.0f};
+    float len = 1.3f, det = v ? 1.0f / 1.0595f : 1.0f;        /* variant 2 a semitone lower */
+    Buf b = buf_new(len);
+    for (int k = 0; k < 8; k++)
+        bell(&b, 0.055f * (float)k, NOTE[k] * det, 0.32f, 1.0f - 0.04f * (float)k, -0.6f + 1.2f * (float)k / 7.0f);
+    normalize(&b);
+    Buf sh = tone_glide(len, 0.15f, 0.25f, 0.35f, 4186.0f * det, 4186.0f * det, 1.0f, 0.1f, 0.003f, 0.0f);
+    Buf sp = crackle(len, 0.1f, 0.6f, 40.0f, 9000.0f, 0.4f, 4.0f, 0x7E5u, v);
+    Buf out = buf_new(len);
+    mix(&out, &b, 0.0f);
+    mix(&out, &sh, -16.0f);
+    mix(&out, &sp, -16.0f);
+    buf_free(&b); buf_free(&sh); buf_free(&sp);
+    reverb(&out, 0.7f, 0.35f, 0.3f, 400.0f);
+    return finish(&out, -5.0f, 0.0f, frames);
+}
+
+/* A technique cast (SFXID_TechCast, $BB): a bright chime, then at 0.2 s a
+ * rising rush and three glittering tones falling into it */
+static int16_t *render_cast(int v, int *frames) {
+    float len = 0.95f, k = v ? 1.06f : 1.0f;
+    Buf ch = buf_new(len);
+    bell(&ch, 0.0f, 2637.0f * k, 0.14f, 1.0f, -0.2f);
+    bell(&ch, 0.006f, 3951.0f * k, 0.11f, 0.6f, 0.2f);
+    normalize(&ch);
+    Buf ru = noise_sweep(len, 0.2f, 0.18f, 0.12f, 600.0f, 5200.0f, 0.3f, 2.2f, -0.4f, 0.4f, 0.3f, 0xCA5u, v);
+    Buf out = buf_new(len);
+    mix(&out, &ch, -2.0f);
+    mix(&out, &ru, -4.0f);
+    for (int i = 0; i < 3; i++) {
+        Buf gl = tone_glide(len, 0.22f + 0.05f * (float)i, 0.004f, 0.12f, 3300.0f * k / (1.0f + 0.2f * (float)i),
+                            1300.0f * k, 0.09f, 0.5f, 0.005f, -0.3f + 0.3f * (float)i);
+        mix(&out, &gl, -7.0f);
+        buf_free(&gl);
+    }
+    buf_free(&ch); buf_free(&ru);
+    reverb(&out, 0.6f, 0.4f, 0.22f, 400.0f);
+    return finish(&out, -4.0f, 0.0f, frames);
+}
+
+/* Shot (SFXID_Shot, $B6: Wren's gun): an energy shot -- a sharp crack, a
+ * bright "pew" falling fast, and a low punch */
+static int16_t *render_shot(int v, int *frames) {
+    Rng vr = seed(0x5407u, v);
+    float len = 0.32f, k = 0.9f + 0.2f * urnd(&vr);
+    Buf ck = noise_sweep(len, 0.0f, 0.0003f, 0.006f, 6000.0f, 4000.0f, 0.01f, 0.8f, 0.0f, 0.0f, 0.8f, 0x5408u, v);
+    Buf pw = tone_glide(len, 0.0f, 0.001f, 0.06f, 2600.0f * k, 260.0f * k, 0.028f, 1.2f, 0.01f, 0.1f);
+    Buf pu = thump(len, 0.0f, 130.0f, 48.0f, 0.02f, 0.05f, 2.0f);
+    Buf tl = noise_sweep(len, 0.01f, 0.004f, 0.06f, 2400.0f, 600.0f, 0.08f, 0.8f, 0.1f, 0.4f, 0.0f, 0x5409u, v);
+    Buf out = buf_new(len);
+    mix(&out, &ck, -4.0f);
+    mix(&out, &pw, 0.0f);
+    mix(&out, &pu, -5.0f);
+    mix(&out, &tl, -9.0f);
+    buf_free(&ck); buf_free(&pw); buf_free(&pu); buf_free(&tl);
+    reverb(&out, 0.4f, 0.5f, 0.1f, 350.0f);
+    return finish(&out, -3.0f, 1.5f, frames);
+}
+
+/* Moonshade (SFXID_Moonshad, $C4: Anti, Rimpa, Giwat): glitter rising in six
+ * quick steps, then a soft fifth that breathes under a sparkle */
+static int16_t *render_glimmer(int v, int *frames) {
+    static const float NOTE[6] = {2349.3f, 2793.8f, 3135.9f, 3729.3f, 4186.0f, 4698.6f};
+    float len = 0.85f, k = v ? 0.94f : 1.0f;
+    Buf gl = buf_new(len);
+    for (int i = 0; i < 6; i++) bell(&gl, 0.035f * (float)i, NOTE[i] * k, 0.12f, 1.0f, -0.5f + 0.2f * (float)i);
+    normalize(&gl);
+    Buf p1 = tone_glide(len, 0.2f, 0.06f, 0.3f, 440.0f * k, 440.0f * k, 1.0f, 0.2f, 0.004f, -0.2f);
+    Buf p2 = tone_glide(len, 0.2f, 0.06f, 0.3f, 660.0f * k, 660.0f * k, 1.0f, 0.2f, -0.004f, 0.2f);
+    pulse(&p1, 0.2f, 7.0f, 0.5f);
+    pulse(&p2, 0.24f, 7.0f, 0.5f);
+    Buf sp = crackle(len, 0.2f, 0.45f, 50.0f, 8000.0f, 0.5f, 4.0f, 0x400Du, v);
+    Buf out = buf_new(len);
+    mix(&out, &gl, 0.0f);
+    mix(&out, &p1, -10.0f);
+    mix(&out, &p2, -12.0f);
+    mix(&out, &sp, -14.0f);
+    buf_free(&gl); buf_free(&p1); buf_free(&p2); buf_free(&sp);
+    reverb(&out, 0.65f, 0.4f, 0.26f, 400.0f);
+    return finish(&out, -5.0f, 0.0f, frames);
+}
+
+/* An enemy's swipe (SFXID_EnemyAttack3, $D7): a rush of air falling in
+ * pitch, a tone falling under it, and a thud */
+static int16_t *render_swipe(int v, int *frames) {
+    Rng vr = seed(0x5A1Eu, v);
+    float len = 0.42f, k = 0.9f + 0.2f * urnd(&vr), dir = (v & 1) ? 1.0f : -1.0f;
+    Buf ai = noise_sweep(len, 0.0f, 0.012f, 0.06f, 3300.0f * k, 800.0f, 0.12f, 2.0f, -0.6f * dir, 0.6f * dir, 0.2f, 0x5A1Fu, v);
+    Buf tn = tone_glide(len, 0.004f, 0.006f, 0.08f, 1400.0f * k, 380.0f * k, 0.05f, 0.8f, 0.006f, 0.0f);
+    Buf th = thump(len, 0.05f, 140.0f, 60.0f, 0.02f, 0.05f, 1.6f);
+    Buf out = buf_new(len);
+    mix(&out, &ai, 0.0f);
+    mix(&out, &tn, -8.0f);
+    mix(&out, &th, -6.0f);
+    buf_free(&ai); buf_free(&tn); buf_free(&th);
+    reverb(&out, 0.4f, 0.5f, 0.1f, 350.0f);
+    return finish(&out, -3.0f, 1.5f, frames);
+}
+
+/* A healing cast (SFXID_HealTechCast, $BD): a soft rising sweep, as in the
+ * original, settling into three chimes of a major chord */
+static int16_t *render_healcast(int v, int *frames) {
+    float len = 0.95f, k = v ? 1.06f : 1.0f;
+    Buf sw = tone_glide(len, 0.0f, 0.12f, 0.12f, 300.0f * k, 1250.0f * k, 0.09f, 0.35f, 0.004f, 0.0f);
+    Buf ch = buf_new(len);
+    bell(&ch, 0.22f, 1318.5f * k, 0.3f, 1.0f, -0.35f);
+    bell(&ch, 0.27f, 1661.2f * k, 0.3f, 0.9f, 0.0f);
+    bell(&ch, 0.32f, 1975.5f * k, 0.35f, 0.85f, 0.35f);
+    normalize(&ch);
+    Buf sp = crackle(len, 0.25f, 0.4f, 35.0f, 9000.0f, 0.4f, 4.0f, 0x4EA1u, v);
+    Buf out = buf_new(len);
+    mix(&out, &sw, -3.0f);
+    mix(&out, &ch, 0.0f);
+    mix(&out, &sp, -15.0f);
+    buf_free(&sw); buf_free(&ch); buf_free(&sp);
+    reverb(&out, 0.65f, 0.4f, 0.26f, 400.0f);
+    return finish(&out, -5.0f, 0.0f, frames);
+}
+
+/* A miss (SFXID_AttackMiss, $B8): a light whiff of air passing by */
+static int16_t *render_miss(int v, int *frames) {
+    float len = 0.22f, dir = (v & 1) ? 1.0f : -1.0f;
+    Buf ai = noise_sweep(len, 0.0f, 0.02f, 0.035f, 2600.0f, 900.0f, 0.07f, 1.8f, -0.5f * dir, 0.5f * dir, 0.3f, 0x2155u, v);
+    reverb(&ai, 0.3f, 0.5f, 0.06f, 500.0f);
+    return finish(&ai, -6.0f, 0.0f, frames);
+}
+
+/* Gra (SFXID_Gra, $C7). The game asks for it every 8 frames while the
+ * gravity wave runs (as it does for enemies' Gra), so each is one deep
+ * pulse of the warp, short enough that they chain into a throb: a falling
+ * saturated sine, a sub, and dark noise squeezed by the pulse */
+static int16_t *render_gravity(int v, int *frames) {
+    float len = 0.3f, k = v == 1 ? 0.94f : v == 2 ? 1.06f : 1.0f;
+    Buf wp = thump(len, 0.0f, 150.0f * k, 46.0f * k, 0.035f, 0.07f, 2.4f);
+    Buf sb = tone_glide(len, 0.0f, 0.01f, 0.09f, 48.0f * k, 40.0f * k, 0.05f, 0.0f, 0.0f, 0.0f);
+    Buf dk = noise_sweep(len, 0.0f, 0.01f, 0.06f, 420.0f, 180.0f, 0.1f, 0.9f, -0.3f, 0.3f, 0.0f, 0x6A0u, v);
+    Buf zg = noise_sweep(len, 0.0f, 0.001f, 0.016f, 6500.0f * k, 3500.0f * k, 0.03f, 2.5f, -0.2f, 0.2f, 0.3f, 0x6A1u, v);
+    Buf out = buf_new(len);
+    mix(&out, &wp, 0.0f);
+    mix(&out, &sb, -5.0f);
+    mix(&out, &dk, -7.0f);
+    mix(&out, &zg, -11.0f);
+    buf_free(&wp); buf_free(&sb); buf_free(&dk); buf_free(&zg);
+    reverb(&out, 0.5f, 0.6f, 0.1f, 200.0f);
+    return finish(&out, -3.0f, 1.6f, frames);
+}
+
+/* Recovery (SFXID_Recovery, $CD: the recovery skills and items): the
+ * original's arpeggio, rising four times, as soft glass over a shimmer */
+static int16_t *render_recover(int v, int *frames) {
+    static const float NOTE[4] = {1046.5f, 1318.5f, 1568.0f, 2093.0f};
+    float len = 1.6f, k = v ? 1.0595f : 1.0f;
+    Buf b = buf_new(len);
+    for (int c = 0; c < 4; c++)
+        for (int i = 0; i < 4; i++)
+            bell(&b, 0.29f * (float)c + 0.05f * (float)i, NOTE[i] * k * (1.0f + 0.06f * (float)c), 0.12f,
+                 0.8f + 0.05f * (float)i, -0.4f + 0.27f * (float)i);
+    normalize(&b);
+    Buf sh = tone_glide(len, 0.0f, 0.3f, 0.6f, 3136.0f * k, 3136.0f * k, 1.0f, 0.1f, 0.003f, 0.0f);
+    pulse(&sh, 0.0f, 5.0f, 0.5f);
+    Buf out = buf_new(len);
+    mix(&out, &b, 0.0f);
+    mix(&out, &sh, -17.0f);
+    buf_free(&b); buf_free(&sh);
+    reverb(&out, 0.7f, 0.35f, 0.28f, 400.0f);
+    return finish(&out, -6.0f, 0.0f, frames);
+}
+
+/* Fire breath (SFXID_FireBreath, $C2): a roar -- flickering fire, a growl
+ * under it, crackling */
+static int16_t *render_breath(int v, int *frames) {
+    float len = 0.6f;
+    Buf ro = noise_sweep(len, 0.0f, 0.02f, 0.2f, 1800.0f, 700.0f, 0.3f, 0.6f, -0.3f, 0.3f, 0.25f, 0xB2EAu, v);
+    pulse(&ro, 0.0f, 19.0f, 0.5f);
+    Buf gr = buf_new(len);
+    float ph = 0;
+    for (int n = 0; n < gr.n; n++) {
+        float t = (float)n / SR, env = attack_decay(t, 0.02f, 0.2f);
+        ph += TAU * (95.0f + 12.0f * sinf(TAU * 7.0f * t)) / SR;
+        float s = tanhf(3.0f * sinf(ph)) * env;                     /* a rough, square-ish growl */
+        gr.l[n] = gr.r[n] = s;
+    }
+    normalize(&gr);
+    Buf cr = crackle(len, 0.02f, 0.35f, 120.0f, 2500.0f, 0.8f, 2.0f, 0xB2EBu, v);
+    Buf out = buf_new(len);
+    mix(&out, &ro, 0.0f);
+    mix(&out, &gr, -7.0f);
+    mix(&out, &cr, -8.0f);
+    buf_free(&ro); buf_free(&gr); buf_free(&cr);
+    reverb(&out, 0.5f, 0.45f, 0.14f, 300.0f);
+    return finish(&out, -2.0f, 1.5f, frames);
+}
+
+/* A buff (SFXID_BuffCast, $BC: Saner, Shift, Deban): powering up -- a tone
+ * and its fifth climbing two octaves, a rush climbing with them, a sparkle
+ * at the top */
+static int16_t *render_buff(int v, int *frames) {
+    float len = 0.75f, k = v ? 1.06f : 1.0f;
+    Buf t1 = tone_glide(len, 0.0f, 0.02f, 0.2f, 220.0f * k, 880.0f * k, 0.12f, 0.6f, 0.005f, -0.2f);
+    Buf t2 = tone_glide(len, 0.0f, 0.02f, 0.2f, 330.0f * k, 1320.0f * k, 0.12f, 0.6f, -0.005f, 0.2f);
+    Buf ru = noise_sweep(len, 0.0f, 0.25f, 0.1f, 500.0f, 6000.0f, 0.32f, 1.8f, -0.3f, 0.3f, 0.3f, 0xB0FFu, v);
+    Buf sp = crackle(len, 0.3f, 0.3f, 60.0f, 8000.0f, 0.4f, 4.0f, 0xB100u, v);
+    Buf out = buf_new(len);
+    mix(&out, &t1, -2.0f);
+    mix(&out, &t2, -6.0f);
+    mix(&out, &ru, -6.0f);
+    mix(&out, &sp, -12.0f);
+    buf_free(&t1); buf_free(&t2); buf_free(&ru); buf_free(&sp);
+    reverb(&out, 0.55f, 0.4f, 0.2f, 400.0f);
+    return finish(&out, -3.0f, 1.0f, frames);
+}
+
+/* Brose (SFXID_Brose, $CB: Brose and the Diem skill): a second of crackling
+ * energy pulsing ~28 times a second, a bright line falling through it */
+static int16_t *render_surge(int v, int *frames) {
+    float len = 1.25f, k = v ? 0.94f : 1.0f;
+    Buf bz = noise_sweep(len, 0.0f, 0.03f, 0.5f, 1300.0f * k, 900.0f * k, 1.0f, 2.0f, -0.3f, 0.3f, 0.2f, 0xB205u, v);
+    Buf hm = tone_glide(len, 0.0f, 0.03f, 0.5f, 180.0f * k, 170.0f * k, 1.0f, 1.2f, 0.01f, 0.0f);
+    pulse(&bz, 0.0f, 28.0f, 2.0f);
+    pulse(&hm, 0.0f, 28.0f, 1.0f);
+    Buf ln = tone_glide(len, 0.02f, 0.05f, 0.45f, 6200.0f * k, 1500.0f * k, 0.35f, 0.4f, 0.004f, 0.0f);
+    Buf cr = crackle(len, 0.0f, 0.9f, 140.0f, 4500.0f, 0.6f, 3.0f, 0xB206u, v);
+    Buf out = buf_new(len);
+    mix(&out, &bz, 0.0f);
+    mix(&out, &hm, -6.0f);
+    mix(&out, &ln, -10.0f);
+    mix(&out, &cr, -9.0f);
+    buf_free(&bz); buf_free(&hm); buf_free(&ln); buf_free(&cr);
+    reverb(&out, 0.5f, 0.45f, 0.14f, 300.0f);
+    return finish(&out, -3.0f, 1.4f, frames);
+}
+
+/* Laser / lightning (SFXID_LaserAttack, $C5: Tsu and the Flare skill): a
+ * crack, three zaps falling from high, crackling electricity and a rumble */
+static int16_t *render_zap(int v, int *frames) {
+    Rng vr = seed(0x2A9u, v);
+    float len = 0.8f;
+    Buf out = buf_new(len);
+    Buf ck = noise_sweep(len, 0.0f, 0.0004f, 0.012f, 5000.0f, 3000.0f, 0.02f, 0.8f, 0.0f, 0.0f, 0.8f, 0x2AAu, v);
+    mix(&out, &ck, -2.0f);
+    buf_free(&ck);
+    for (int i = 0; i < 3; i++) {
+        float t0 = 0.12f * (float)i + 0.02f * urnd(&vr);
+        Buf zp = tone_glide(len, t0, 0.001f, 0.07f, 8000.0f / (1.0f + 0.3f * (float)i), 600.0f, 0.03f, 1.5f, 0.01f,
+                            -0.4f + 0.4f * (float)i);
+        mix(&out, &zp, -4.0f);
+        buf_free(&zp);
+    }
+    Buf el = crackle(len, 0.0f, 0.45f, 320.0f, 4500.0f, 0.8f, 2.5f, 0x2ABu, v);
+    Buf ru = noise_sweep(len, 0.02f, 0.03f, 0.3f, 260.0f, 120.0f, 0.4f, 0.7f, -0.2f, 0.2f, 0.0f, 0x2ACu, v);
+    mix(&out, &el, -3.0f);
+    mix(&out, &ru, -5.0f);
+    buf_free(&el); buf_free(&ru);
+    reverb(&out, 0.6f, 0.4f, 0.18f, 300.0f);
+    return finish(&out, -3.0f, 1.5f, frames);
+}
+
 /* ------------------------------------------------------------------ the list */
 static const SfxRecipe RECIPES[] = {
     {"slash", "blade hit: a short swing, a slice, a ringing edge and a thump", 4, 3},
     {"slasher", "thrown slasher: the throw, the spin flying off and coming back", 3, 1},
     {"cursor", "menu cursor: a soft tick", 3, 1},
     {"select", "menu choice: a two-note chime", 2, 2},
+    {"claw", "claws: three rakes across, a tear and a thud", 3, 3},
+    {"dissolve", "an enemy destroyed: a falling zap, a soft burst, glittering dust", 3, 3},
+    {"grind", "a grinding rumble pulsing under a growl (an enemy's attack)", 2, 1},
+    {"wind", "Zan: wind blades, two whistling gusts and the air after", 3, 2},
+    {"blow", "an enemy's blow: a punch, a crack, a body", 3, 2},
+    {"gnash", "an enemy's bites: six snapping clicks", 2, 1},
+    {"rod", "a staff's knock: hard wood, a click, a thump", 3, 2},
+    {"fire", "Foi: two puffs of flame, crackling", 2, 2},
+    {"heal", "Res: glass bells rising over a shimmer", 2, 1},
+    {"cast", "a technique cast: a chime, a rising rush, falling glitter", 2, 1},
+    {"shot", "Wren's gun: a crack, a falling pew, a punch", 3, 2},
+    {"glimmer", "Moonshade: rising glitter and a breathing fifth", 2, 1},
+    {"swipe", "an enemy's swipe: falling air, a tone, a thud", 3, 2},
+    {"healcast", "a healing cast: a soft rise into a major chord", 2, 1},
+    {"miss", "a miss: a whiff of air", 2, 1},
+    {"gravity", "Gra: one deep pulse of the warp (chained, they throb)", 3, 3},
+    {"recover", "recovery: an arpeggio rising four times", 2, 1},
+    {"breath", "fire breath: a flickering roar and a growl", 2, 1},
+    {"buff", "a buff: a tone and its fifth climbing, a sparkle at the top", 2, 1},
+    {"surge", "Brose: crackling energy pulsing, a bright line falling", 2, 1},
+    {"zap", "Tsu: a crack, falling zaps, crackling electricity, a rumble", 2, 2},
 };
 
 typedef int16_t *(*RenderFn)(int, int *);
-static const RenderFn RENDER[] = {render_slash, render_slasher, render_cursor, render_select};
+static const RenderFn RENDER[] = {render_slash, render_slasher, render_cursor, render_select,
+                                  render_claw, render_dissolve, render_grind, render_wind, render_blow,
+                                  render_gnash, render_rod, render_fire, render_heal, render_cast, render_shot,
+                                  render_glimmer, render_swipe, render_healcast, render_miss, render_gravity,
+                                  render_recover, render_breath, render_buff, render_surge, render_zap};
 
 int sfxsynth_count(void) { return (int)(sizeof RECIPES / sizeof RECIPES[0]); }
 
