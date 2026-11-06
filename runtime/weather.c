@@ -39,10 +39,10 @@ static int kind = WX_NONE, picked, bg_index = -1;
 static float t_wx, fade;                 /* seconds of this battle's weather; 0..1 easing in */
 static uint32_t rs = 0x2545F491u;
 
-static void sound_init(void);
+static void wx_sound_init(void);
 void weather_set_level(int l) {
     level = l < 0 ? 0 : l >= WEATHER_LEVELS ? WEATHER_LEVELS - 1 : l;
-    if (level && sound_on) sound_init();         /* rain and thunder made now, not at a battle's start */
+    if (level && sound_on) wx_sound_init();         /* rain and thunder made now, not at a battle's start */
 }
 int  weather_get_level(void) { return level; }
 const char *weather_level_name(int l) { return l >= 0 && l < WEATHER_LEVELS ? LEVEL_NAMES[l] : "?"; }
@@ -689,7 +689,7 @@ static double rain_pos;
 typedef struct { int v, pos; float gain; } Voice;
 static Voice voices[2] = {{-1, 0, 0.0f}, {-1, 0, 0.0f}};
 
-static void sound_init(void) {
+static void wx_sound_init(void) {
     if (sound_ready) return;
     sound_ready = 1;
     rain_pcm = sfxsynth_render("rain", 0, &rain_frames);
