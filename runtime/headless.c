@@ -45,6 +45,9 @@
  *     --click F:X,Y[,R]  with --movie: a mouse click at logical frame F on frame
  *                        pixel (X, Y) -- click to walk (walkto.h), battle menus
  *                        (battleui.h); R: the right button; repeatable
+ *     --poke F[-G]:ADDR=VAL  testing: set RAM byte $FFADDR to VAL (both hex) before
+ *                        the work after frame F (each frame to G); logical with
+ *                        --movie; repeatable
  *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
  *                        (next to the trace, or build/bizhawk/port.*)
  *     --dump-to PREFIX   ... to PREFIX.ram.bin etc. instead
@@ -95,6 +98,8 @@ static Shot shots[64];
 static int npress, nshot;
 static struct { uint64_t frame; int x, y, right; } clicks[16];   /* --click */
 static int nclick;
+static struct { uint64_t from, to; uint32_t addr; uint8_t val; } pokes[16];   /* --poke */
+static int npoke;
 static Press *movie;                 /* --movie: events by logical frame */
 static int nmovie;
 static uint64_t movie_end;           /* last logical frame the movie touches */
@@ -757,6 +762,9 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         snprintf(p, sizeof p, "%s/%06llu.png", shot_dir, (unsigned long long)logical);
         if (depth_active) save_png_stride(p, depth_buf, sw, sh, sw);
         else save_png(p, pixels, width, height);
+        if (getenv("PSIV_SHOT_LOG"))                       /* where each shot falls in the frames and the sound */
+            printf("shot: logical %llu frame %llu sample %u\n", (unsigned long long)logical, (unsigned long long)f,
+                   (unsigned)wav_samples);
     }
     if ((movie || testbot_on()) && fresh) {
         uint8_t keys = 0;
@@ -787,6 +795,13 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
             }
         bus_pad[0] = battleui_pad(keys, walkto_pad(keys, keys));
     }
+    for (int i = 0; i < npoke && fresh; i++)               /* --poke: a RAM byte set before the next frame's work */
+        if (when >= pokes[i].from && when <= pokes[i].to) {
+            if (when == pokes[i].from)
+                printf("%s %llu: poke %04X = %02X (was %02X)\n", bylogical ? "logical" : "frame", (unsigned long long)when,
+                       pokes[i].addr, pokes[i].val, m68k_ram[pokes[i].addr]);
+            m68k_ram[pokes[i].addr] = pokes[i].val;
+        }
     /* Sound_Index: a request only beats what is playing if its priority is at
      * least as high, so stop everything ($FE) first, then ask for the song */
     if (test_fatal_frame && f == test_fatal_frame) m68k_call(0x123456);
@@ -947,6 +962,14 @@ int main(int argc, char **argv) {
             if (depth_scale > 4) depth_scale = 4;
         } else if (!strcmp(argv[i], "--algol")) {
             algol_set_enabled(1);                          /* the music on the modern chip */
+        } else if (!strcmp(argv[i], "--poke") && i + 1 < argc && npoke < 16) {
+            char *e;
+            pokes[npoke].from = pokes[npoke].to = strtoull(argv[++i], &e, 10);
+            if (*e == '-') pokes[npoke].to = strtoull(e + 1, &e, 10);
+            if (*e == ':') pokes[npoke].addr = (uint32_t)strtoul(e + 1, &e, 16) & 0xFFFF;
+            if (*e != '=') { fprintf(stderr, "--poke F[-G]:ADDR=VAL (hex)\n"); return 1; }
+            pokes[npoke].val = (uint8_t)strtoul(e + 1, NULL, 16);
+            npoke++;
         } else if (!strcmp(argv[i], "--click") && i + 1 < argc && nclick < 16) {
             char *e;
             clicks[nclick].frame = strtoull(argv[++i], &e, 10);
