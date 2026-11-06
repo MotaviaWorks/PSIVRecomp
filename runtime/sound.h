@@ -26,5 +26,10 @@ int sound_end_frame(const float **out);
 /* VGM-style write log for checking against the VGM rips: one line per chip
  * write, "sample chip reg value". NULL turns it off. */
 void sound_set_log(FILE *f);
+/* rewind.c: everything the Z80, the YM2612 and the PSG need to go on from
+ * this moment, as bytes (out NULL: just the size); load returns the bytes it
+ * took */
+size_t sound_state_save(uint8_t *out);
+size_t sound_state_load(const uint8_t *in);
 
 #endif

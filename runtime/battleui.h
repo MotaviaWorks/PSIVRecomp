@@ -29,6 +29,7 @@
 #ifndef PSIV_BATTLEUI_H
 #define PSIV_BATTLEUI_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 void battleui_set_enabled(int on);
@@ -37,6 +38,10 @@ int  battleui_enabled(void);
 /* once per frame, before its lines are drawn (frame.c): decides whether the
  * modern menus are up, and if so hides the game's windows from the picture */
 void battleui_frame(void);
+/* rewind: the party picture kept for the battle, as bytes (out NULL: the
+ * size); load returns the bytes it took */
+size_t battleui_state_save(uint8_t *out);
+size_t battleui_state_load(const uint8_t *in);
 
 /* the modern menus are up this frame: the front end draws them */
 int  battleui_active(void);

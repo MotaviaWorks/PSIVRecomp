@@ -46,6 +46,7 @@
 #include "music.h"
 #include "fpview.h"
 #include "walkto.h"
+#include "rewind.h"
 #include "weather.h"
 #include "rumble.h"
 #ifndef _WIN32
@@ -196,6 +197,7 @@ static Setting settings[] = {
     {"enhance.mode", "enhanced", "enhanced = the port's additions below are on; classic = the original game, unchanged (Esc menu > Settings)"},
     {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
+    {"enhance.rewind", "on", "rewind: Backspace or the left shoulder fades to white and back to about ten seconds before (a state kept every ten seconds, the last two minutes): on / off"},
     {"enhance.battle_weather", "1", "battle weather by place: rain and storms on Motavia's grass, beaches and sea, snow on Dezolis, mist clouds on Rykros, debris in space: 0 off, 1 light, 2 heavy"},
     {"enhance.battle_weather_sound", "on", "the rain and thunder heard with the battle weather: on / off"},
     {"enhance.text", "modern", "text: modern = redrawn with the font below at full resolution; original = the game's pixel font"},
@@ -216,11 +218,13 @@ static Setting settings[] = {
     {"keys.c", "C", ""},
     {"keys.start", "Return", ""},
     {"keys.fast_forward", "Tab", "hold to run unthrottled"},
+    {"keys.rewind", "Backspace", "go back about ten seconds (enhance.rewind)"},
     {"pad.a", "x", "gamepad buttons use SDL names: a (south), b (east), x (west), y (north), start, back, leftshoulder, rightshoulder"},
     {"pad.b", "a", ""},
     {"pad.c", "b", ""},
     {"pad.start", "start", ""},
     {"pad.fast_forward", "rightshoulder", ""},
+    {"pad.rewind", "leftshoulder", ""},
     {"pad.rumble", "normal", "rumble: off, light, normal, strong -- blows landing, critical hits, enemies destroyed, the field's doors and explosions; on the gamepad, or a phone's vibration motor"},
 };
 #define NSETTINGS (int)(sizeof settings / sizeof settings[0])
@@ -284,8 +288,9 @@ static void load_settings(void) {
 }
 
 /* key bindings resolved from the settings */
-enum { IN_UP, IN_DOWN, IN_LEFT, IN_RIGHT, IN_A, IN_B, IN_C, IN_START, IN_FF, IN_COUNT };
-static const char *in_names[IN_COUNT] = {"up", "down", "left", "right", "a", "b", "c", "start", "fast_forward"};
+enum { IN_UP, IN_DOWN, IN_LEFT, IN_RIGHT, IN_A, IN_B, IN_C, IN_START, IN_FF, IN_REWIND, IN_COUNT };
+static const char *in_names[IN_COUNT] = {"up", "down", "left", "right", "a", "b", "c", "start", "fast_forward",
+                                         "rewind"};
 static SDL_Scancode key_of[IN_COUNT];
 static SDL_GamepadButton pad_of[IN_COUNT];
 
@@ -672,6 +677,7 @@ static const char *test_shot;                                         /* its sho
 static const char *test_capture_path;
 static struct { uint64_t frame, len; uint8_t keys; } test_keys[32];   /* --test-keys */
 static int n_test_keys;
+static uint64_t test_rewind_frame;    /* --test-rewind F: a rewind asked for at frame F */
 static uint64_t test_click_frame;                                     /* --test-click */
 static float test_click_x, test_click_y;
 static void quit(int code);
@@ -733,6 +739,44 @@ static void test_shots(void) {
     SDL_Log("captured %s", path);
     if (!test_shot) quit(0);
     test_shot = NULL;
+}
+
+/* ------------------------------------------------------------------ rewind (rewind.h) */
+static char rewind_msg[64];
+static uint64_t rewind_msg_until;
+
+static void rewind_now(void) {
+    if (rewind_request()) return;
+    SDL_snprintf(rewind_msg, sizeof rewind_msg, "%s",
+                 rewind_enabled() ? "Nothing to go back to yet" : "Rewind is off (Settings, Game)");
+    rewind_msg_until = SDL_GetTicks() + 1800;
+}
+
+/* the fade to white over everything, and a note in the corner: how far it
+ * went back, or why it didn't */
+static void rewind_draw(int ow, int oh) {
+    (void)ow;
+    float wh = rewind_white();
+    if (wh > 0.002f) {
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, (Uint8)(wh * 255.0f + 0.5f));
+        SDL_RenderFillRect(renderer, NULL);
+    }
+    char text[64] = "";
+    int secs = rewind_note_seconds();
+    if (secs) SDL_snprintf(text, sizeof text, "Back %d seconds", secs);
+    else if (SDL_GetTicks() < rewind_msg_until) SDL_snprintf(text, sizeof text, "%s", rewind_msg);
+    if (!*text) return;
+    float s = SDL_max(1.0f, SDL_floorf((float)oh / 270.0f));     /* SDL's 8x8 font, a few times over */
+    float tw = (float)SDL_strlen(text) * 8.0f * s, x = 14.0f * s, y = 12.0f * s;
+    SDL_FRect bg = {x - 6.0f * s, y - 5.0f * s, tw + 12.0f * s, 18.0f * s};
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 12, 18, 40, 210);
+    SDL_RenderFillRect(renderer, &bg);
+    SDL_SetRenderScale(renderer, s, s);
+    SDL_SetRenderDrawColor(renderer, 255, 230, 160, 255);
+    SDL_RenderDebugText(renderer, x / s, y / s, text);
+    SDL_SetRenderScale(renderer, 1.0f, 1.0f);
 }
 
 static void present(const uint32_t *pixels, int w, int h, int compose) {
@@ -810,6 +854,7 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     SDL_RenderTexture(renderer, depth_shown ? depth_texture : texture, NULL, &dst);
     draw_walk_marker(&dst, fw, pm, w, h);
     touch_draw(renderer, ow, oh);                        /* the on-screen pad, when touch is in use */
+    rewind_draw(ow, oh);                                 /* a rewind's fade to white, and its note */
     if (menu_is_open()) menu_draw();
     test_shots();
     SDL_RenderPresent(renderer);
@@ -888,6 +933,7 @@ static void apply_enhancements(void) {
     depth_set_fx(classic_mode() ? 0 : setting_int("enhance.battle_fx"));
     weather_set_sound(SDL_strcasecmp(setting("enhance.battle_weather_sound"), "off") != 0);
     weather_set_level(classic_mode() ? 0 : setting_int("enhance.battle_weather"));
+    rewind_set_enabled(SDL_strcasecmp(setting("enhance.rewind"), "off") != 0);
     const char *sm = setting("enhance.sfx");
     sfx_set_mode(classic_mode() || !SDL_strcasecmp(sm, "original") ? SFX_ORIGINAL
                  : !SDL_strcasecmp(sm, "custom") ? SFX_CUSTOM : SFX_MODERN);
@@ -959,6 +1005,9 @@ static const MenuItem GAME_ITEMS[] = {
     {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1,
      "Dialogue and the game's windows in a modern font at full resolution, or the game's own pixel font.",
      apply_enhancements},
+    {"Rewind", "enhance.rewind", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 0,
+     "Backspace or the left shoulder goes back about ten seconds: a fade to white and back.",
+     apply_enhancements},
 };
 static const MenuItem DISPLAY_ITEMS[] = {
     {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0,
@@ -1022,8 +1071,8 @@ static const MenuPage PAGES[] = {
 };
 #define N_PAGES (int)(sizeof PAGES / sizeof PAGES[0])
 #define MAX_ROWS 5                    /* the longest page: the panel keeps its size */
-static const char *const MAIN_LABELS[] = {"Resume", "Settings", "Quit game"};
-#define N_MAIN 3
+static const char *const MAIN_LABELS[] = {"Resume", "Go back 10 seconds", "Settings", "Quit game"};
+#define N_MAIN 4
 static const char *const CLASSIC_NOTE = "Off in Classic mode. Set Mode to Enhanced, on the Game page, to use it.";
 
 enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT, MENU_LAUNCHER };
@@ -1145,12 +1194,13 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
     if (!ok) return;
     if (menu_screen == MENU_MAIN) {
         if (menu_sel == 0) menu_close();
-        else if (menu_sel == 1) settings_enter();
+        else if (menu_sel == 1) { menu_close(); rewind_now(); }
+        else if (menu_sel == 2) settings_enter();
         else { menu_screen = MENU_QUIT; menu_sel = 1; }               /* default: No */
     } else {
         if (menu_sel == 0) quit(0);
         menu_screen = MENU_MAIN;
-        menu_sel = 2;
+        menu_sel = 3;
     }
 }
 
@@ -1457,7 +1507,7 @@ static void draw_buttons_page(float W, float H) {
     const char *dash = m_ttf ? "\xE2\x80\x94" : "-";
     (void)H;
     typedef struct { const char *what, *md, *gp; char other[48]; } Row;
-    Row r[8];
+    Row r[10];
     int n = 0;
     memset(r, 0, sizeof r);
     r[n] = (Row){"Move", NULL, "D-pad, left stick", ""};
@@ -1486,6 +1536,10 @@ static void draw_buttons_page(float W, float H) {
     if (MOBILE) snprintf(r[n].other, sizeof r[n].other, "%s", dash);
     else key_label(IN_FF, r[n].other, sizeof r[n].other);
     n++;
+    r[n] = (Row){"Go back 10 seconds", NULL, pad_label(pad_of[IN_REWIND]), ""};
+    if (MOBILE) snprintf(r[n].other, sizeof r[n].other, "In the menu");
+    else key_label(IN_REWIND, r[n].other, sizeof r[n].other);
+    n++;
     if (!MOBILE) {
         r[n] = (Row){"Pause, fullscreen, screenshot", NULL, dash, ""};
         snprintf(r[n++].other, sizeof r[0].other, "F10, F11, F12");
@@ -1493,9 +1547,10 @@ static void draw_buttons_page(float W, float H) {
 
     m_text(x_pad, 54.0f, 3.6f, "Gamepad", C_SOFT, 0);
     m_text(x_other, 54.0f, 3.6f, MOBILE ? "Touch" : "Keyboard", C_SOFT, 0);
+    float step = n > 8 ? 7.6f : 8.6f;                     /* nine rows on a desktop: closer */
     for (int i = 0; i < n; i++) {
-        float a = 57.5f + 8.6f * (float)i, base = a + 6.3f;
-        if (i & 1) m_box(pad_x, a, W - pad_x, a + 8.6f, 3.0f, 0x26346A, 0x22305F, 110);
+        float a = 57.5f + step * (float)i, base = a + step * 0.73f;
+        if (i & 1) m_box(pad_x, a, W - pad_x, a + step, 3.0f, 0x26346A, 0x22305F, 110);
         m_text(x_what, base, 4.2f, r[i].what, C_TEXT, 0);
         if (r[i].md) {                               /* the game's own name for it: the Mega Drive's button */
             char md[16];
@@ -1623,7 +1678,7 @@ static void menu_draw(void) {
         m_ox = m_oy = 0;
     } else {
         W = menu_screen == MENU_SETTINGS ? 288.0f : menu_screen == MENU_QUIT ? 176.0f : 168.0f;
-        H = menu_screen == MENU_SETTINGS ? 168.0f : menu_screen == MENU_QUIT ? 86.0f : 100.0f;
+        H = menu_screen == MENU_SETTINGS ? 168.0f : menu_screen == MENU_QUIT ? 86.0f : 116.0f;
         /* about the game's own scale, small enough that Settings always fits */
         m_S = fminf(fminf((float)ow / 320.0f, (float)oh / 224.0f),
                     fminf((float)ow * 0.95f / 288.0f, (float)oh * 0.92f / 168.0f));
@@ -1856,6 +1911,12 @@ static void audio_prime(int queued) {
 
 void platform_audio(const int16_t *samples, int count) {
     if (!audio || count <= 0 || paused) return;
+    static int16_t faded[2 * 8192];
+    float vol = rewind_volume();
+    if (vol < 0.999f && count <= 8192) {                  /* a rewind fades the sound too */
+        for (int i = 0; i < 2 * count; i++) faded[i] = (int16_t)((float)samples[i] * vol);
+        samples = faded;
+    }
     int queued = SDL_GetAudioStreamQueued(audio), bytes = count * 4;
     int now = (int)SDL_GetTicks();
     int idle = now - SDL_GetAtomicInt(&audio_last_push_ms) > 250;   /* the first sound, or after a pause or a menu */
@@ -1981,6 +2042,7 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
                 else screenshot_any(pixels, w, h, VDP_MAX_W);
             }
             if (e.key.key == SDLK_F10) paused = !paused;
+            if (sc == key_of[IN_REWIND]) rewind_now();
             if (e.key.key == SDLK_F9) cycle_battle_depth();
             if (e.key.key == SDLK_F8) cycle_battle_fog();
             break;
@@ -1995,7 +2057,10 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
                 else menu_open();
                 break;
             }
-            if (!menu_is_open()) break;
+            if (!menu_is_open()) {
+                if (b == pad_of[IN_REWIND] && !in_launcher) rewind_now();
+                break;
+            }
             if (b == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER || b == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) {   /* settings pages */
                 menu_turn_page(b == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER ? 1 : -1);
                 break;
@@ -2148,6 +2213,7 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
     }
     holding = 0;
     if (test_rumble_frame && frame_count == test_rumble_frame) rumble_test();
+    if (test_rewind_frame && frame_count == test_rewind_frame) rewind_now();   /* testing: Backspace then */
     rumble_output();
     uint8_t user = read_input() | touch_pad();
     for (int i = 0; i < n_test_keys; i++)                /* testing: scripted keys */
@@ -2465,6 +2531,11 @@ static void launcher(void) {
 }
 
 /* ------------------------------------------------------------------ main */
+/* the console's reset, on the game's own stack (game_run) */
+static void game_reset(void) {
+    m68k_call(rd32(4));
+}
+
 int main(int argc, char **argv) {
     int play_now = 0;
     for (int i = 1; i < argc; i++) {
@@ -2493,6 +2564,8 @@ int main(int argc, char **argv) {
             char *e;
             test_capture_frame = strtoull(argv[++i], &e, 10);
             test_capture_path = *e == ':' ? e + 1 : "capture.bmp";
+        } else if (!strcmp(argv[i], "--test-rewind") && i + 1 < argc) {
+            test_rewind_frame = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--test-keys") && i + 1 < argc) {
             /* F:KEYS:N,... -- keys held from frame F for N frames (UDLRABCS) */
             char *s = argv[++i];
@@ -2640,7 +2713,7 @@ int main(int argc, char **argv) {
     m68k.imask = 7;
     A(7) = rd32(0);
     diag_stack_top = A(7);
-    m68k_call(rd32(4));                                /* the game never returns from reset */
+    game_run(game_reset);                              /* on its own stack (rewind.h); never returns */
     quit(1);
     return 1;
 }

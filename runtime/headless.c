@@ -69,6 +69,7 @@
 #include "music.h"
 #include "fpview.h"
 #include "walkto.h"
+#include "rewind.h"
 #include "weather.h"
 #include "widemap.h"
 #include "rumble.h"
@@ -322,6 +323,8 @@ static void report_hot(void) {
 static FILE *replay;
 static const char *replay_path;
 static uint64_t logical, dump_at, mismatched_frames;
+static uint64_t rewind_keep_at, rewind_back_at;   /* --rewind-test S:R */
+static int rewind_back_done;
 
 /* --rumble-log: each effect with the logical frame it came on */
 static void rumble_print(const char *line) {
@@ -795,6 +798,19 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
             if (f >= presses[i].frame && f < presses[i].frame + presses[i].len) keys |= presses[i].keys;
         bus_pad[0] = keys;
     }
+    /* --rewind-test S:R: a state kept at S (with the input already set for
+     * S+1), put back at R; the game must go on from S exactly as it did */
+    if (fresh && rewind_keep_at && logical == rewind_keep_at && !rewind_back_done) {
+        rewind_keep_now();
+        printf("rewind: state kept at logical frame %llu (%u samples of sound so far)\n", (unsigned long long)logical,
+               (unsigned)wav_samples);
+    }
+    if (fresh && rewind_back_at && logical == rewind_back_at && !rewind_back_done) {
+        rewind_back_done = 1;
+        printf("rewind: going back at %u samples of sound\n", (unsigned)wav_samples);
+        if (!rewind_restore_frame(rewind_keep_at))
+            printf("rewind: no state at logical frame %llu\n", (unsigned long long)rewind_keep_at);
+    }
     if (f + 1 >= frame_limit) {
         report();
 #ifdef PSIV_TRACE
@@ -846,6 +862,18 @@ static int load_movie(const char *path) {
     fclose(f);
     printf("movie %s: %d events, last logical frame %llu\n", path, nmovie, (unsigned long long)movie_end);
     return 1;
+}
+
+/* the console's reset, on the game's own stack (game_run) */
+static void game_reset(void) {
+    m68k_call(rd32(4));
+}
+
+/* a rewind put an earlier state back: the movie and the shots go back with it */
+static void rewound(uint64_t game_frame) {
+    printf("rewind: back to logical frame %llu (from %llu)\n", (unsigned long long)game_frame,
+           (unsigned long long)logical);
+    logical = game_frame;
 }
 
 int main(int argc, char **argv) {
@@ -982,6 +1010,10 @@ int main(int argc, char **argv) {
                 if (k < 0) { fprintf(stderr, "no weather \"%s\"\n", e + 1); return 2; }
                 weather_force(k);
             }
+        } else if (!strcmp(argv[i], "--rewind-test") && i + 1 < argc) {
+            char *e;                                       /* S:R -- keep a state at S, put it back at R */
+            rewind_keep_at = strtoull(argv[++i], &e, 10);
+            rewind_back_at = *e == ':' ? strtoull(e + 1, NULL, 10) : 0;
         } else if (!strcmp(argv[i], "--weather-sound") && i + 1 < argc) {
             weather_set_sound(atoi(argv[++i]));            /* 0: the weather silent */
         } else if (!strcmp(argv[i], "--shot-range") && i + 1 < argc) {
@@ -1052,7 +1084,8 @@ int main(int argc, char **argv) {
     m68k.imask = 7;
     A(7) = rd32(0);
     diag_stack_top = A(7);
-    m68k_call(rd32(4));
+    rewind_on_restore = rewound;
+    game_run(game_reset);                              /* on its own stack (rewind.h) */
     printf("reset handler returned (unexpected)\n");
     report();
     return 1;

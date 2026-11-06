@@ -24,5 +24,9 @@ enum { SRAM_PORT, SRAM_EVERY_BYTE_16K, SRAM_EVERY_BYTE_8K };
 int bus_sram_import(const uint8_t *data, size_t n);     /* fills bus_sram; returns the format */
 size_t bus_sram_export(int format, uint8_t *out);       /* out: room for 16 KB; returns the size */
 const char *bus_sram_format_name(int format);
+/* rewind: the bus's own state as bytes (out NULL: the size); load returns
+ * the bytes it took */
+size_t bus_state_save(uint8_t *out);
+size_t bus_state_load(const uint8_t *in);
 
 #endif

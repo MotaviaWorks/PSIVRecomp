@@ -92,21 +92,33 @@ if(NOT EXISTS ${CMAKE_SOURCE_DIR}/third_party/stb/stb_truetype.h)
 endif()
 set_source_files_properties(runtime/hdtext.c PROPERTIES INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/third_party/stb)
 
+# The game's own stack (runtime/coro.h, for rewind): one routine in assembly per platform
+if(MSVC)
+  enable_language(ASM_MASM)
+  set(CORO_ASM runtime/coro_x64_win.asm)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+  enable_language(ASM)
+  set(CORO_ASM runtime/coro_arm64.S)
+else()
+  enable_language(ASM)
+  set(CORO_ASM runtime/coro_x64_sysv.S)
+endif()
+
 # Hardware: bus, VDP, sound, frame loop (object files, so the code<->hardware calls link either way)
 set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/sound.c runtime/algol.c runtime/snesbank.c runtime/music.c runtime/fpview.c runtime/walkto.c runtime/frame.c runtime/depth.c runtime/sfx.c runtime/sfxsynth.c runtime/hdtext.c
                runtime/romart.c runtime/uikit.c runtime/panels.c runtime/battleui.c runtime/battledesc.c runtime/rumble.c runtime/widemap.c runtime/mixbus.c
-               runtime/weather.c)
+               runtime/weather.c runtime/rewind.c runtime/coro.c ${CORO_ASM})
 set(TEST_SOURCES runtime/headless.c runtime/sha256.c runtime/testbot.c)
 
 # Headless front end: scripted input, PNG screenshots
 if(PSIV_TOOLS)
   add_executable(psiv_headless ${TEST_SOURCES} ${HW_SOURCES})
   target_link_libraries(psiv_headless PRIVATE psiv_code psiv_sound_chips)
-  target_compile_options(psiv_headless PRIVATE ${WARN})
+  target_compile_options(psiv_headless PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:${WARN}>)
 
   add_executable(psiv_headless_trace ${TEST_SOURCES} ${HW_SOURCES})
   target_link_libraries(psiv_headless_trace PRIVATE psiv_code_trace psiv_sound_chips)
-  target_compile_options(psiv_headless_trace PRIVATE ${WARN})
+  target_compile_options(psiv_headless_trace PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:${WARN}>)
 endif()
 
 # The game: SDL3 window, input, pacing, saves

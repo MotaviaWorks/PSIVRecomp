@@ -1,6 +1,7 @@
 #ifndef PSIV_YM2612_H
 #define PSIV_YM2612_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -17,6 +18,9 @@ void    ym_generate(int32_t *left, int32_t *right);
 /* the same, but only the channels in `mask` are heard (bit n = channel n+1;
  * bit 5 = channel 6 or the DAC): the chip runs exactly as with ym_generate */
 void    ym_generate_mask(int32_t *left, int32_t *right, unsigned mask);
+/* the chip's whole state, for rewind (out NULL: the size it takes) */
+size_t  ym_state_save(uint8_t *out);
+void    ym_state_load(const uint8_t *in, size_t n);
 
 #ifdef __cplusplus
 }

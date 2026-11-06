@@ -348,6 +348,10 @@ int sfx_request(uint8_t id) {
 /* the replacements are added as they are: a loud hit over loud music is
  * kept under full scale by the mix bus's limiter (mixbus.c), which turns
  * the whole mix down for a moment rather than bending the waveform */
+void sfx_stop_all(void) {
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].pcm = NULL;
+}
+
 void sfx_mix(float *samples, int frames) {
     for (int i = 0; i < MAX_VOICES; i++) {
         Voice *v = &voices[i];

@@ -257,6 +257,26 @@ static float mote_due;
 
 static int party_tile(uint16_t e) { int t = e & 0x7FF; return (e & 0x8000) && t >= 0x180 && t < 0x280; }
 
+/* rewind: the party as kept (the members' cells and their tiles' copy go
+ * with the game's state) */
+#define PARTY_FIELDS(F) F(members) F(home_x) F(standing) F(restore) F(shown) F(aura_level) F(aura_mix) F(shadow)
+size_t battleui_state_save(uint8_t *out) {
+    size_t n = 0;
+#define SAVE(x) if (out) memcpy(out + n, &(x), sizeof(x)); n += sizeof(x);
+    PARTY_FIELDS(SAVE)
+#undef SAVE
+    return n;
+}
+
+size_t battleui_state_load(const uint8_t *in) {
+    size_t n = 0;
+#define LOAD(x) memcpy(&(x), in + n, sizeof(x)); n += sizeof(x);
+    PARTY_FIELDS(LOAD)
+#undef LOAD
+    nmotes = 0;
+    return n;
+}
+
 /* command input: anything but the main menu and the battle playing out */
 static int choosing(int menu) { return menu != M_NONE && menu != M_MAIN; }
 

@@ -76,6 +76,24 @@ const char *bus_sram_format_name(int format) {
 uint8_t bus_pad[2];
 static uint8_t pad_th[2] = {0x40, 0x40};
 
+/* rewind: the bus's own state (the battery save itself is left as it is) */
+size_t bus_state_save(uint8_t *out) {
+    if (out) {
+        memcpy(out, &sram_mapped, sizeof sram_mapped);
+        memcpy(out + sizeof sram_mapped, pad_th, sizeof pad_th);
+        memcpy(out + sizeof sram_mapped + sizeof pad_th, bus_pad, sizeof bus_pad);   /* the next frame's input */
+    }
+    return sizeof sram_mapped + sizeof pad_th + sizeof bus_pad;
+}
+
+size_t bus_state_load(const uint8_t *in) {
+    memcpy(&sram_mapped, in, sizeof sram_mapped);
+    memcpy(pad_th, in + sizeof sram_mapped, sizeof pad_th);
+    memcpy(bus_pad, in + sizeof sram_mapped + sizeof pad_th, sizeof bus_pad);
+    m68k_rom_fast = sram_mapped ? 0x200000 : m68k_rom_size;
+    return sizeof sram_mapped + sizeof pad_th + sizeof bus_pad;
+}
+
 static uint8_t pad_read(int n) {
     uint8_t b = bus_pad[n], v;
     if (pad_th[n]) {                       /* TH=1: C B R L D U */

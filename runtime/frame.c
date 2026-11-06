@@ -23,6 +23,7 @@
 #include "algol.h"
 #include "rumble.h"
 #include "sfx.h"
+#include "rewind.h"
 #include "sound.h"
 #include "weather.h"
 #include "widemap.h"
@@ -93,7 +94,7 @@ void frame_run(void) {
     }
 
     frame_logical += (uint64_t)frame_vint_will_fire();
-    platform_frame(frame_pixels, w, h);
+    game_show_frame(frame_pixels, w, h);           /* platform_frame, from the program's own stack (rewind.h) */
     frame_count++;
 
     vdp.in_vblank = 1;

@@ -35,5 +35,6 @@ int  sfx_request(uint8_t id);
 /* add the playing samples to a frame of audio: interleaved stereo float at
  * 16-bit scale, SOUND_RATE (sound.h), before the mix bus (mixbus.h) */
 void sfx_mix(float *samples, int frames);
+void sfx_stop_all(void);                 /* silence what is playing (a rewind) */
 
 #endif

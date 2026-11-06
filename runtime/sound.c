@@ -231,6 +231,41 @@ static void advance(double n) {
     }
 }
 
+/* ------------------------------------------------------------------ rewind */
+#define STATE_FIELDS(F) F(z80) F(pins) F(z80_ram) F(busreq) F(reset_held) F(bank) F(frame_pos) \
+    F(sample_phase) F(psg_phase) F(irq_cycles) F(nsamples) F(total_samples) F(psg) F(sound_ticks)
+
+size_t sound_state_save(uint8_t *out) {
+    size_t n = 0;
+#define SAVE(x) if (out) memcpy(out + n, &(x), sizeof(x)); n += sizeof(x);
+    STATE_FIELDS(SAVE)
+#undef SAVE
+    size_t fill = (size_t)nsamples * 2 * sizeof(float);         /* this frame's samples so far */
+    if (out) memcpy(out + n, buffer, fill);
+    n += fill;
+    uint32_t ym = (uint32_t)ym_state_save(NULL);
+    if (out) memcpy(out + n, &ym, sizeof ym);
+    n += sizeof ym;
+    if (out) ym_state_save(out + n);
+    return n + ym;
+}
+
+size_t sound_state_load(const uint8_t *in) {
+    size_t n = 0;
+#define LOAD(x) memcpy(&(x), in + n, sizeof(x)); n += sizeof(x);
+    STATE_FIELDS(LOAD)
+#undef LOAD
+    if (nsamples < 0 || nsamples > MAX_SAMPLES) nsamples = 0;
+    size_t fill = (size_t)nsamples * 2 * sizeof(float);
+    memcpy(buffer, in + n, fill);
+    n += fill;
+    uint32_t ym;
+    memcpy(&ym, in + n, sizeof ym);
+    n += sizeof ym;
+    ym_state_load(in + n, ym);
+    return n + ym;
+}
+
 /* ------------------------------------------------------------------ 68000 side */
 void sound_init(void) {
     memset(z80_ram, 0, sizeof z80_ram);

@@ -25,7 +25,6 @@ public:
             }
         }
     }
-private:
     int32_t timer[2] = {-1, -1};
 };
 
@@ -75,6 +74,26 @@ extern "C" void ym_generate(int32_t *left, int32_t *right) {
     *left = out.data[0];
     *right = out.data[1];
     intf.tick(YM_CLOCKS_PER_SAMPLE);
+}
+
+// rewind: ymfm's own save/restore of the chip, then the two timers
+extern "C" size_t ym_state_save(uint8_t *out) {
+    std::vector<uint8_t> buf;
+    ymfm::ymfm_saved_state state(buf, true);
+    chip->save_restore(state);
+    if (out) {
+        memcpy(out, buf.data(), buf.size());
+        memcpy(out + buf.size(), intf.timer, sizeof intf.timer);
+    }
+    return buf.size() + sizeof intf.timer;
+}
+
+extern "C" void ym_state_load(const uint8_t *in, size_t n) {
+    if (n < sizeof intf.timer) return;
+    std::vector<uint8_t> buf(in, in + (n - sizeof intf.timer));
+    ymfm::ymfm_saved_state state(buf, false);
+    chip->save_restore(state);
+    memcpy(intf.timer, in + (n - sizeof intf.timer), sizeof intf.timer);
 }
 
 extern "C" void ym_generate_mask(int32_t *left, int32_t *right, unsigned mask) {

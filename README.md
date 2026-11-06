@@ -96,6 +96,22 @@ what the highlighted setting does. Battery saves go to `saves/psiv.srm`;
 `psiv --save FILE` plays another, an emulator's `.srm` too (BizHawk, Gens,
 Kega Fusion), written back in its own layout.
 
+**Rewind** (Backspace, the left shoulder, or "Go back 10 seconds" in the
+Esc menu; Settings > Game > Rewind; PsiLok's design): the picture and the
+sound fade to white, and fade back in on the game as it was about ten
+seconds before -- one state kept every ten seconds, the last two minutes of
+them; again while it fades back in, ten seconds more. A note in the corner
+says how far it went. A state is the whole machine (the 68000 and its RAM,
+the VDP, the Z80, the YM2612 and the PSG, the bus) and the game's own C
+stack: the recompiled game keeps its place in the C call chain, so it runs
+on a stack of its own (`runtime/coro.h`: a routine in assembly per platform,
+x86-64 Windows and System V, AArch64) and comes back to the program's stack
+at each frame, where its stack is copied. The battery save stays as it is.
+`psiv_headless --rewind-test S:R` keeps a state at logical frame S and puts
+it back at R: the game then goes on from S byte for byte as it did (RAM,
+VRAM, CRAM, VSRAM, registers, and the chips' sound, sample for sample;
+checked on Windows, Linux and the Odin 2).
+
 **Rumble** (Settings > Controls > Rumble: off / light / normal / strong; `pad.rumble`):
 the Mega Drive had none, so the port reads the moments from the game's
 memory (`runtime/rumble.c`, reads only, so the game is unchanged): a blow

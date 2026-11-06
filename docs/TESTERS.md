@@ -57,9 +57,9 @@ Controls
 | | |
 |---|---|
 | Keyboard | arrows = D-pad, Z / X / C = A / B / C, Enter = Start |
-| | Esc = menu, Tab (hold) = fast forward, F11 = fullscreen, F12 = screenshot |
+| | Esc = menu, Tab (hold) = fast forward, Backspace = go back 10 seconds, F11 = fullscreen, F12 = screenshot |
 | Gamepad | D-pad or left stick; west / south / east buttons = A / B / C; Start |
-| | Select / Back = menu, right shoulder (hold) = fast forward |
+| | Select / Back = menu, right shoulder (hold) = fast forward, left shoulder = go back 10 seconds |
 | Mouse | click to walk there; click a person or chest to walk up and talk or open it |
 | | click battle commands and targets; right click = back |
 | Touch | the on-screen pad; tap like a mouse click; the ≡ button = menu |
@@ -109,7 +109,8 @@ Not in this alpha
 -----------------
 
 - macOS.
-- Save states: the game's own saves only.
+- Save states: the game's own saves only. (Rewind goes back up to two minutes, ten
+  seconds a press: Backspace, the left shoulder, or "Go back 10 seconds" in the menu.)
 - The Algol music chip is an experiment (Settings > Sound > Music).
 
 
