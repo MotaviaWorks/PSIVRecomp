@@ -4,7 +4,12 @@ PSIV Recomp: alpha
 A native port of Phantasy Star IV for Windows, Linux and Android. The game's
 68000 code is translated into C and runs directly on your machine, with
 optional extras: widescreen, modern text and battle menus, battle depth and
-effects, click/tap to walk.
+effects, the port's own sound effects, click/tap to walk.
+
+The sound effects most heard in battle -- blades, claws, guns, the
+techniques, the combination attacks, enemies' blows -- are the port's own,
+synthesized as it starts. To hear the game's originals: Settings > Sound >
+Sound effects: Original.
 
 **It ships none of the game.** You supply your own ROM.
 
