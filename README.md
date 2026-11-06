@@ -119,6 +119,9 @@ original game, unchanged; **Enhanced** turns on the additions:
 
 - **Battle depth** (F9: off / subtle / strong): battles drawn as layers at
   different depths under a gently moving camera that leans in on attacks.
+  Sprites on a party member (a blow landing, a glow in a caster's hand) move
+  with the party, and sprites that touch move as one, so no picture comes
+  apart.
 - **Battle fog** (F8: off / light / heavy): drifting mist between the enemies
   and the party, tinted from each battle's background.
 - **Battle effects** (off / subtle / full): the game's own attack and
@@ -275,11 +278,13 @@ original game, unchanged; **Enhanced** turns on the additions:
   skill / item lists with costs or uses left and a description of the one
   highlighted, a marker and name over the enemy being targeted. The whole
   party stays on screen in their places all battle long (the original shows
-  only the member choosing, the one acting, or the one an enemy attacks,
-  moved in front of it): an attacker's place empties while they strike, an
-  enemy's attack lands on its target where they stand, a caster casts and
-  an archer throws from their own place, and the game's messages move to the
-  top of the screen. The cards run in the order the party stands.
+  only the member choosing, the one acting, or the one an enemy attacks):
+  an attacker's place empties while they strike; a caster, an archer and
+  the one an enemy attacks step under that enemy as in the original, so
+  every attack and technique plays exactly as the game draws it, with
+  whoever's place they step into standing behind them; and the game's
+  messages move to the top of the screen. The cards run in the order the
+  party stands.
   Whoever is choosing has a gold aura, an ally being targeted a cyan one;
   the commands sit in a strip under the party and the lists beside or above
   it, so no menu covers anyone. The game

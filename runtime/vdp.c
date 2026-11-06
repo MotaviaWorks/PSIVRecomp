@@ -196,7 +196,7 @@ const uint16_t *vdp_plane_a_override;
 const uint8_t *vdp_sprite_hidden;
 const uint8_t *vdp_plane_a_flags;
 const uint8_t *vdp_tile_shadow;
-const int16_t *vdp_sprite_dx;
+const uint16_t *vdp_plane_a_back;
 int (*vdp_margin_entry)(int plane, int x, int y, int px, int py);
 
 static int plane_cells(int bits) {
@@ -285,6 +285,7 @@ static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, uint
         }
         const uint8_t *src = vdp.vram;
         uint8_t below = 0;
+        uint16_t back = 0xFFFF;
         if (plane == 0 && vdp_plane_a_override && wcells == 64 && py < 256) {
             int cell = (py >> 3) * 64 + (px >> 3);
             uint16_t o = vdp_plane_a_override[cell];
@@ -295,8 +296,17 @@ static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, uint
                     if ((vdp_plane_a_flags[cell] & 2) && vdp_tile_shadow) src = vdp_tile_shadow;
                 }
             }
+            if (vdp_plane_a_back && vdp_tile_shadow) back = vdp_plane_a_back[cell];
         }
         out[i] = tile_pixel_in(src, e, px & 7, py & 7);
+        if (back != 0xFFFF) {                     /* someone behind (or in front of a low cell) */
+            uint8_t p = tile_pixel_in(vdp_tile_shadow, back, px & 7, py & 7);
+            if (p && (!out[i] || ((back & 0x8000) && !(e & 0x8000)))) {
+                out[i] = p;
+                e = back;
+                below = 1;
+            }
+        }
         if (entries) entries[i] = e;
         if (txy) txy[i] = (uint8_t)((px & 7) | (py & 7) << 3);
         if (under) under[i] = below;
@@ -374,37 +384,6 @@ static void render_sprites(int y, uint8_t *out, uint8_t *who, int x0, int width,
     } while (link && ++count < max_sprites);
 }
 
-/* sprites moved to the side for display (vdp_sprite_dx), after the real
- * evaluation: their pixels taken out, then drawn again where they go, in
- * link order, into pixels no other sprite holds */
-static void shift_sprites(int y, VdpLine *l, int x0, int width, int mode_w) {
-    int h40 = mode_w == 320;
-    uint32_t base = (uint32_t)(vdp.reg[5] & (h40 ? 0x7E : 0x7F)) << 9;
-    int max_sprites = h40 ? 80 : 64, link = 0, count = 0;
-    for (int i = 0; i < width; i++)
-        if (l->sprite[i] && vdp_sprite_dx[l->sprite_no[i] & 0x7F]) l->sprite[i] = 0;
-    do {
-        int me = link;
-        const uint8_t *s = &vdp.vram[(base + (uint32_t)link * 8) & 0xFFFF];
-        const uint8_t *c = &vdp.sat_cache[((uint32_t)link * 8) & sat_addr_mask()];
-        int sy = ((c[0] << 8 | c[1]) & 0x3FF) - 128, vs = (c[2] & 3) + 1, hs = (c[2] >> 2 & 3) + 1;
-        uint16_t attr = (uint16_t)(s[4] << 8 | s[5]);
-        int sx = ((s[6] << 8 | s[7]) & 0x1FF) - 128, dx = vdp_sprite_dx[me & 0x7F];
-        link = c[3] & 0x7F;
-        if (!dx || y < sy || y >= sy + vs * 8 || (vdp_sprite_hidden && vdp_sprite_hidden[me & 0x7F])) continue;
-        int ty = y - sy;
-        if (attr & 0x1000) ty = vs * 8 - 1 - ty;
-        for (int cx = 0; cx < hs * 8; cx++) {
-            int x = sx + dx + cx;
-            if (x < x0 || x >= x0 + width || l->sprite[x - x0]) continue;
-            int tx = (attr & 0x0800) ? hs * 8 - 1 - cx : cx;
-            uint16_t tile = (uint16_t)((attr & 0x07FF) + (tx >> 3) * vs + (ty >> 3));
-            uint8_t p = tile_pixel((uint16_t)((attr & 0xE000) | (tile & 0x07FF)), tx & 7, ty & 7);
-            if (p) { l->sprite[x - x0] = p; l->sprite_no[x - x0] = (uint8_t)me; }
-        }
-    } while (link && ++count < max_sprites);
-}
-
 void vdp_render_line(int y, VdpLine *l) {
     int mw = vdp_width(), x0 = vdp_view_x0, w = vdp_view_w;
     l->backdrop = vdp.reg[7] & 0x3F;
@@ -424,7 +403,6 @@ void vdp_render_line(int y, VdpLine *l) {
     if (vdp_sprite_hidden)
         for (int i = 0; i < w; i++)
             if (l->sprite[i] && vdp_sprite_hidden[l->sprite_no[i] & 0x7F]) l->sprite[i] = 0;
-    if (vdp_sprite_dx) shift_sprites(y, l, x0, w, mw);
 }
 
 void vdp_compose_line(const VdpLine *l, uint32_t *dst, int width) {

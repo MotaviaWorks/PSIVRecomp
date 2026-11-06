@@ -7,6 +7,9 @@
 /* The finished frame, 0xAARRGGBB, VDP_MAX_W pixels per row. */
 extern uint32_t frame_pixels[VDP_MAX_W * VDP_MAX_H];
 extern uint64_t frame_count;
+/* Frames that ended with the game's VInt (logical frames, as movies and
+ * reference traces count them), up to and including the one being shown. */
+extern uint64_t frame_logical;
 /* The same frame as separate layers, line by line (for enhancements that
  * recompose it, and for layer dumps). Valid inside platform_frame. */
 extern VdpLine frame_lines[VDP_MAX_H];

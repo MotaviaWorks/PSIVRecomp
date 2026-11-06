@@ -106,11 +106,14 @@ messages) are read back from their tiles and redrawn in the same style.
   to the centre. The port keeps a copy of each member's tiles from the main
   menu and draws absent members from it, behind low-priority sprites
   (vdp_plane_a_flags, vdp_tile_shadow); the one acting stays out while
-  low-priority sprites are on screen; a member the game moved goes back to
-  their place with the game's picture of them (white hit flash = their
-  cells in palette 2, damage box = tiles $5E4+ inside their block), and the
-  sprites on them follow, weighted by height so a bolt from the enemy bends
-  to them (vdp_sprite_dx, display only). Messages that would cover the party
+  low-priority sprites are on screen. A member the game moves (a caster or an
+  archer, the one an enemy attacks) stays where the game stands them, and
+  whoever's place that is shows behind them pixel by pixel
+  (vdp_plane_a_back). Until 2026-11-06 they went back to their own place and
+  the sprites on them followed, weighted by height (vdp_sprite_dx): that
+  tore sprites apart (an enemy's lunge left its tail behind, a technique's
+  ball split in two), and an effect that runs from a caster's hand up into
+  the enemy can't be in both places, so it was removed. Messages that would cover the party
   go to the top; party cards follow the order the party stands in (each
   one's x at the menus). An ambush still shows the original view until the
   first main menu (nobody to copy yet).

@@ -98,10 +98,13 @@ extern const uint8_t *vdp_sprite_hidden;
  * VRAM the port keeps (the game reuses that VRAM meanwhile). NULL = off. */
 extern const uint8_t *vdp_plane_a_flags;
 extern const uint8_t *vdp_tile_shadow;
-/* Per sprite-table entry: drawn this many pixels to the side (display only:
- * sprites are evaluated where the game put them, so the status flags it
- * reads are unchanged). NULL = off. */
-extern const int16_t *vdp_sprite_dx;
+/* With an override, per cell: a second picture (a name-table entry with its
+ * pixels from vdp_tile_shadow, 0xFFFF = none) that shows where the cell's own
+ * is transparent -- someone standing behind the one the game drew there -- or
+ * in front of it if the cell's own is low priority and this one high. Its
+ * pixels stay behind low-priority sprites, like the port's own (bit 0 above).
+ * NULL = off. */
+extern const uint16_t *vdp_plane_a_back;
 /* Widescreen margins: for each plane pixel drawn beyond the mode's width,
  * the name-table word to draw there instead of the plane's own (plane 0 = A,
  * 1 = B; x, y on the screen, px, py the pixel in the plane it falls on).

@@ -23,6 +23,7 @@
  * background is mirrored past its edges, which the camera can expose.
  */
 #include "depth.h"
+#include "frame.h"
 #include "m68k.h"
 
 #include <math.h>
@@ -162,6 +163,20 @@ enum { L_BG, L_ENEMY, L_ACTION, L_PARTY, L_UI, L_POINTER, NLAYERS };
 static uint8_t layer[NLAYERS][VDP_MAX_H][VDP_MAX_W];
 /* party pixels the port put back (battleui.c): the action sprites pass in front */
 static uint8_t party_under[VDP_MAX_H][VDP_MAX_W];
+/* Sprites on the party (a blow landing on someone, a glow in a caster's hand)
+ * follow the party's camera instead of the enemies', or the camera's lean
+ * would slide them off the one they are on. Sprites that touch make one
+ * object, moved as one; one coming down on someone eases over to the party's
+ * camera on the way. Here: those pixels, as 1 + object, and their colours. */
+static uint8_t near_obj[VDP_MAX_H][VDP_MAX_W];
+static uint8_t near_px[VDP_MAX_H][VDP_MAX_W];
+/* what the output already shows in front: 0 nothing, 1 the party, 2 a party
+ * picture put back (a low sprite passes in front), 3 a window or pointer */
+static uint8_t front[VDP_MAX_H * MAX_SCALE][VDP_MAX_W * MAX_SCALE];
+static int sprite_root(int *parent, int i) {
+    while (parent[i] != i) i = parent[i] = parent[parent[i]];
+    return i;
+}
 
 static void ease(float *v, float target, float k) { *v += (target - *v) * k; }
 
@@ -489,8 +504,10 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     t += dt;
 
     /* sort the frame into layers */
-    static int sx0[128], sy0[128], sx1[128], sy1[128], near_ui[128];
-    for (int i = 0; i < 128; i++) { sx0[i] = sy0[i] = 1 << 20; sx1[i] = sy1[i] = -1; }
+    static int sx0[128], sy0[128], sx1[128], sy1[128], near_ui[128], hi[128], on_party[128];
+    static int ptop_col[VDP_MAX_W];                           /* each column's highest party pixel */
+    for (int i = 0; i < 128; i++) { sx0[i] = sy0[i] = 1 << 20; sx1[i] = sy1[i] = -1; hi[i] = on_party[i] = 0; }
+    for (int x = 0; x < w; x++) ptop_col[x] = h;
     long act_n = 0, popups = 0;
     double act_x = 0, act_y = 0;
     static int pop_cnt[VDP_MAX_W];
@@ -512,6 +529,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                 else if (tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI) {
                     layer[L_PARTY][y][x] = a;
                     party_under[y][x] = l->plane_a_under[x];
+                    if (y < ptop_col[x]) ptop_col[x] = y;
                 }
                 else if (tile >= TILE_PARTY_HI && tile < TILE_UI_HI) {
                     layer[L_ENEMY][y][x] = a;                 /* a damage number */
@@ -520,16 +538,17 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                 else layer[L_UI][y][x] = a;
             }
             if (s) {
+                int id = l->sprite_no[x] & 127;
+                if (x < sx0[id]) sx0[id] = x;
+                if (x > sx1[id]) sx1[id] = x;
+                if (y < sy0[id]) sy0[id] = y;
+                if (y > sy1[id]) sy1[id] = y;
+                if (layer[L_PARTY][y][x]) on_party[id] = 1;
                 if (!(s & 0x80)) {
                     layer[L_ACTION][y][x] = s;
                     act_n++; act_x += x; act_y += y;
-                } else {
-                    int id = l->sprite_no[x] & 127;
-                    if (x < sx0[id]) sx0[id] = x;
-                    if (x > sx1[id]) sx1[id] = x;
-                    if (y < sy0[id]) sy0[id] = y;
-                    if (y > sy1[id]) sy1[id] = y;
-                }
+                } else
+                    hi[id] = 1;
             }
         }
     }
@@ -547,20 +566,60 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         }
     }
 
+    /* objects: sprites that touch, or all but touch (an enemy's lunge, a
+     * claw, a technique's burst), so no picture is ever split between layers */
+    static int parent[128], obj_ui[128], obj_party[128], ox0[128], oy0[128], ox1[128], oy1[128];
+    static float obj_w[128];
+    for (int i = 0; i < 128; i++) {
+        parent[i] = i;
+        obj_ui[i] = obj_party[i] = 0;
+        obj_w[i] = 0.0f;
+        ox0[i] = oy0[i] = 1 << 20;
+        ox1[i] = oy1[i] = -1;
+    }
+    for (int i = 0; i < 128; i++) {
+        if (sx1[i] < 0) continue;
+        for (int j = i + 1; j < 128; j++)
+            if (sx1[j] >= 0 && sx0[i] <= sx1[j] + 5 && sx0[j] <= sx1[i] + 5 && sy0[i] <= sy1[j] + 5 && sy0[j] <= sy1[i] + 5) {
+                int a = sprite_root(parent, i), b = sprite_root(parent, j);
+                if (a != b) parent[b] = a;
+            }
+    }
     /* high-priority sprites: menu cursors stay with their window, the
      * cursor over an enemy moves with the enemies */
     for (int id = 0; id < 128; id++) {
         near_ui[id] = 0;
         if (sx1[id] < 0) continue;
+        int r = sprite_root(parent, id);
+        if (sx0[id] < ox0[r]) ox0[r] = sx0[id];
+        if (sy0[id] < oy0[r]) oy0[r] = sy0[id];
+        if (sx1[id] > ox1[r]) ox1[r] = sx1[id];
+        if (sy1[id] > oy1[r]) oy1[r] = sy1[id];
+        if (on_party[id]) obj_party[r] = 1;
+        if (!hi[id]) continue;
         for (int y = sy0[id] - 4; y <= sy1[id] + 4 && !near_ui[id]; y++)
             for (int x = sx0[id] - 4; x <= sx1[id] + 4; x++)
                 if (y >= 0 && y < h && x >= 0 && x < w && layer[L_UI][y][x]) { near_ui[id] = 1; break; }
+        if (near_ui[id]) obj_ui[r] = 1;
     }
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
             uint8_t s = lines[y].sprite[x];
-            if (s & 0x80) layer[near_ui[lines[y].sprite_no[x] & 127] ? L_UI : L_POINTER][y][x] = s;
+            if (s & 0x80) layer[obj_ui[sprite_root(parent, lines[y].sprite_no[x] & 127)] ? L_UI : L_POINTER][y][x] = s;
         }
+    /* on the party: over someone's picture, or coming down on them (all the
+     * way by the time it reaches the top of their head) */
+    int any_near = 0;
+    for (int r = 0; r < 128; r++) {
+        if (ox1[r] < 0 || sprite_root(parent, r) != r || obj_ui[r]) continue;
+        int top = h;
+        for (int x = ox0[r] < 0 ? 0 : ox0[r]; x <= ox1[r] && x < w; x++)
+            if (ptop_col[x] < top) top = ptop_col[x];
+        if (top >= h) continue;                               /* no one below it */
+        float wgt = obj_party[r] ? 1.0f : (float)(oy1[r] + 1 - (top - 16)) / 16.0f;
+        obj_w[r] = wgt < 0.0f ? 0.0f : wgt > 1.0f ? 1.0f : wgt;
+        any_near |= obj_w[r] > 0.0f;
+    }
 
     /* the camera */
     const float two_pi = 6.2831853f;
@@ -586,8 +645,8 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             uint16_t target = (uint16_t)(m68k_ram[0x4144] << 8 | m68k_ram[0x4145]);
             uint16_t command = (uint16_t)(m68k_ram[0x4146] << 8 | m68k_ram[0x4147]);
             uint16_t routine = (uint16_t)(m68k_ram[0x4100] << 8 | m68k_ram[0x4101]);
-            printf("fx t=%.2f %s%s actor %04X target %04X command %04X routine %04X act %ld at (%.0f,%.0f) popups %ld\n",
-                   t, act_on != last_act ? (act_on ? "ACT+ " : "ACT- ") : "",
+            printf("fx t=%.2f L%llu %s%s actor %04X target %04X command %04X routine %04X act %ld at (%.0f,%.0f) popups %ld\n",
+                   t, (unsigned long long)frame_logical, act_on != last_act ? (act_on ? "ACT+ " : "ACT- ") : "",
                    (popups > 0) != (last_popups > 0) ? (popups > 0 ? "HIT+ " : "HIT- ") : "",
                    actor, target, command, routine, act_n,
                    act_n ? act_x / (double)act_n : 0.0, act_n ? act_y / (double)act_n : 0.0, popups);
@@ -674,16 +733,49 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         }
     }
 
+    /* sprites on the party: out of the enemies' layers, each object to be
+     * drawn where the party's camera puts it (eased, see obj_w) */
+    static int obj_dx[128], obj_dy[128];
+    float s_en = 1.0f + F_ENEMY * (zoom - 1.0f), s_pa = 1.0f + F_PARTY * (zoom - 1.0f);
+    if (any_near) {
+        for (int r = 0; r < 128; r++) {
+            if (obj_w[r] <= 0.0f) continue;
+            float ax = (float)(ox0[r] + ox1[r] + 1) / 2.0f, ay = (float)(oy0[r] + oy1[r] + 1) / 2.0f;
+            float ex = w / 2.0f + (ax - F_ENEMY * cam_x - w / 2.0f) * s_en;
+            float ey = h / 2.0f + (ay - F_ENEMY * cam_y - h / 2.0f) * s_en;
+            float px = w / 2.0f + (ax - F_PARTY * cam_x - w / 2.0f) * s_pa;
+            float py = (float)PARTY_FEET_Y + (ay - (float)PARTY_FEET_Y) * s_pa;
+            obj_dx[r] = (int)lroundf((px - ex) * obj_w[r] * (float)scale);
+            obj_dy[r] = (int)lroundf((py - ey) * obj_w[r] * (float)scale);
+        }
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                uint8_t s = lines[y].sprite[x];
+                near_obj[y][x] = 0;
+                if (!s) continue;
+                int r = sprite_root(parent, lines[y].sprite_no[x] & 127);
+                if (obj_w[r] <= 0.0f || layer[(s & 0x80) ? L_POINTER : L_ACTION][y][x] != s) continue;
+                near_obj[y][x] = (uint8_t)(r + 1);
+                near_px[y][x] = s;
+                layer[(s & 0x80) ? L_POINTER : L_ACTION][y][x] = 0;
+            }
+    }
+
     for (int Y = 0; Y < oh; Y++) {
         int vu = Y / scale, ve = row_en[Y], vp = row_pa[Y], vb = row_bg[Y];
+        uint8_t *fr = front[Y];
         uint32_t *dst = out + (size_t)Y * (size_t)out_stride;
         const uint8_t *nrow1 = noise[fog_row1[Y]], *nrow2 = noise[fog_row2[Y]];
         int prof = fog_profile[Y];
         for (int X = 0; X < ow; X++) {
             int u = -1, c;
             /* in front of the fog: cursor over an enemy, windows, party */
-            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_POINTER][ve][u]) != 0) { dst[X] = pal[c & 0x3F]; continue; }
-            if ((c = layer[L_UI][vu][X / scale]) != 0) { dst[X] = pal[c & 0x3F]; continue; }
+            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_POINTER][ve][u]) != 0) {
+                dst[X] = pal[c & 0x3F];
+                fr[X] = 3;
+                continue;
+            }
+            if ((c = layer[L_UI][vu][X / scale]) != 0) { dst[X] = pal[c & 0x3F]; fr[X] = 3; continue; }
             if (vp >= 0 && (u = col_pa[X]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0
                 && !(party_under[vp][u] && ve >= 0 && col_en[X] >= 0 && layer[L_ACTION][ve][col_en[X]])) {
                 uint32_t pc = pal[c & 0x3F];
@@ -693,6 +785,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                     pc = 0xFF000000u | (uint32_t)(r > 255 ? 255 : r) << 16 | (uint32_t)(g > 255 ? 255 : g) << 8 | (uint32_t)(b > 255 ? 255 : b);
                 }
                 dst[X] = pc;
+                fr[X] = party_under[vp][u] ? 2 : 1;
                 continue;
             }
             /* behind it: action, enemies, background */
@@ -719,6 +812,34 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                 far = 0xFF000000u | (uint32_t)(r > 255 ? 255 : r) << 16 | (uint32_t)(g > 255 ? 255 : g) << 8 | (uint32_t)(b > 255 ? 255 : b);
             }
             dst[X] = far;
+            fr[X] = 0;
+        }
+    }
+    /* the sprites on the party, each object through the enemies' camera and
+     * moved to where the party's puts it: in front of the fog and what is
+     * behind; a low-priority one behind the party (but over a picture the
+     * port put back), a high-priority one over the party too */
+    for (int r = 0; any_near && r < 128; r++) {
+        if (obj_w[r] <= 0.0f) continue;
+        int X0 = (int)floorf((w / 2.0f + ((float)ox0[r] - F_ENEMY * cam_x - w / 2.0f) * s_en) * (float)scale) + obj_dx[r] - scale;
+        int X1 = (int)ceilf((w / 2.0f + ((float)ox1[r] + 1.0f - F_ENEMY * cam_x - w / 2.0f) * s_en) * (float)scale) + obj_dx[r] + scale;
+        int Y0 = (int)floorf((h / 2.0f + ((float)oy0[r] - F_ENEMY * cam_y - h / 2.0f) * s_en) * (float)scale) + obj_dy[r] - scale;
+        int Y1 = (int)ceilf((h / 2.0f + ((float)oy1[r] + 1.0f - F_ENEMY * cam_y - h / 2.0f) * s_en) * (float)scale) + obj_dy[r] + scale;
+        if (X0 < 0) X0 = 0;
+        if (Y0 < 0) Y0 = 0;
+        if (X1 > ow) X1 = ow;
+        if (Y1 > oh) Y1 = oh;
+        for (int Y = Y0; Y < Y1; Y++) {
+            int sy = Y - obj_dy[r], ve;
+            if (sy < 0 || sy >= oh || (ve = row_en[sy]) < 0) continue;
+            uint32_t *dst = out + (size_t)Y * (size_t)out_stride;
+            for (int X = X0; X < X1; X++) {
+                int sx = X - obj_dx[r], u;
+                if (sx < 0 || sx >= ow || (u = col_en[sx]) < 0 || near_obj[ve][u] != r + 1) continue;
+                uint8_t c = near_px[ve][u], f = front[Y][X];
+                if ((c & 0x80) ? f == 3 : (f == 1 || f == 3)) continue;
+                dst[X] = pal[c & 0x3F];
+            }
         }
     }
     if (fx_on) fx_draw(out, out_stride, w, h, scale, cam_x, cam_y, zoom, fx_cur);

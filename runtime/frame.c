@@ -34,6 +34,7 @@
 
 uint32_t frame_pixels[VDP_MAX_W * VDP_MAX_H];
 uint64_t frame_count;
+uint64_t frame_logical;
 int frame_pending_lag;
 VdpLine frame_lines[VDP_MAX_H];
 int frame_wide_margin;
@@ -90,6 +91,7 @@ void frame_run(void) {
         vdp_compose_line(&frame_lines[y], &frame_pixels[y * VDP_MAX_W], w);
     }
 
+    frame_logical += (uint64_t)frame_vint_will_fire();
     platform_frame(frame_pixels, w, h);
     frame_count++;
 

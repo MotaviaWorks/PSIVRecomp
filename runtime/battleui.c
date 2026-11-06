@@ -57,7 +57,7 @@ static int enabled, active, vx0;
 static uint16_t override[64 * 32];
 static uint8_t cell_flags[64 * 32];       /* see vdp_plane_a_flags */
 static uint8_t shadow[0x10000];           /* the party's art as they stand, at its VRAM addresses */
-static int16_t sprite_dx[80];             /* see vdp_sprite_dx */
+static uint16_t back_cells[64 * 32];      /* see vdp_plane_a_back */
 static uint8_t hidden[80];
 
 void battleui_set_enabled(int on) { enabled = on; }
@@ -135,7 +135,7 @@ void battleui_frame(void) {
     vdp_sprite_hidden = NULL;
     vdp_plane_a_flags = NULL;
     vdp_tile_shadow = NULL;
-    vdp_sprite_dx = NULL;
+    vdp_plane_a_back = NULL;
     if (!enabled || !ui_ready()) { party_reset(); return; }
     if (r16(GAME_MODE_INDEX) / 4 != MODE_BATTLE || r16(VEHICLE_INDEX) != 0) { party_reset(); return; }
     if (!(vdp.reg[1] & 0x40) || (vdp.reg[16] & 3) != 1) return;    /* display on, 64-cell planes */
@@ -160,6 +160,8 @@ void battleui_frame(void) {
     memset(cell_flags, 0, sizeof cell_flags);
     vdp_plane_a_flags = cell_flags;
     vdp_tile_shadow = shadow;
+    memset(back_cells, 0xFF, sizeof back_cells);
+    vdp_plane_a_back = back_cells;
 
     /* cursor sprites: high priority, palette 3, the arrow tiles */
     memset(hidden, 0, sizeof hidden);
@@ -228,9 +230,10 @@ static int nth_fighter(int first, int last, int n) {
  * back into plane A wherever the game leaves a member out -- from the port's
  * copy of the tiles (the game reuses an attacker's VRAM for its attack
  * sprites) and behind low-priority sprites (so the game's attacks and
- * effects still pass in front). Members the game draws itself are left to it
- * (moved back to their place if it stood them elsewhere), the one acting
- * stays out while action sprites are on screen, the dead stay out. */
+ * effects still pass in front). Members the game draws itself are left to it,
+ * where it stands them (one acting or attacked, under the enemy), with
+ * whoever's place that is showing behind them; the one acting stays out of
+ * their place while action sprites are on screen; the dead stay out. */
 #define PARTY_ROW0 4
 #define PARTY_ROWS 17                       /* rows 4-20: the battle area above the status window */
 #define CURRENT_ACTOR 0x4142u               /* during the actions: fighter + 1 (shares RAM with the skill list) */
@@ -281,14 +284,6 @@ static int low_sprites(void) {
     return n;
 }
 
-/* the first row of a member's picture, 0 if none */
-static int member_top(const Member *m) {
-    for (int r = 0; r < PARTY_ROWS; r++)
-        for (int c = 0; c < 6; c++)
-            if (m->cell[r][c]) return r;
-    return 0;
-}
-
 /* Where the game draws a member when not in the columns of their x: an
  * archer (Kyra's throw) or a caster is drawn in the middle of the line with
  * the x left as it was. Their tiles, wherever they are, matched against the
@@ -319,7 +314,7 @@ static void party_frame(void) {
         if (id >= 0 && r16(CHAR_STATS + (unsigned)id * 0x80 + 0x0E) && !(r8(CHAR_STATS + (unsigned)id * 0x80 + 0x16) & 0x44))
             alive |= 1 << k;                         /* HP left, not dead (bit 2; bit 6 for androids) */
     }
-    int present = 0, moved = 0, now_col[5] = {0};
+    int present = 0, moved = 0;
     for (int k = 0; k < 5; k++) {
         Member *m = &members[k];
         if (bases[k] < 0) { m->valid = 0; continue; }
@@ -342,7 +337,6 @@ static void party_frame(void) {
                     if (party_tile(e) && t >= lo && t < hi) any = 1;
                 }
         }
-        now_col[k] = col0;
         if (!any) continue;
         present |= 1 << k;
         if (m->valid && col0 != m->col0) moved |= 1 << k;   /* stood in front of the action */
@@ -381,29 +375,13 @@ static void party_frame(void) {
                    r2, r16(COMD_INPUT), r16(CURRENT_ACTOR), present, moved, standing, restore);
         last = key;
     }
-    /* The game stands the one an enemy attacks (or a caster) in front of the
-     * action, often in another member's place. The party stays put instead:
-     * the game's picture of them there (with its hit flash and damage box)
-     * moves back to their own place, and so do the sprites on them, more the
-     * nearer they are to the party (a bolt from the enemy bends towards them). */
-    static uint16_t taken[5][PARTY_ROWS][6];
-    static uint8_t freed[64 * 32];
-    if (moved) memset(freed, 0, sizeof freed);
-    for (int k = 0; k < 5; k++) {
-        if (!(moved >> k & 1)) continue;
-        int r0 = member_top(&members[k]) - 2;
-        if (r0 < 0) r0 = 0;
-        for (int r = 0; r < PARTY_ROWS; r++)
-            for (int c = 0; c < 6; c++) {
-                int row = PARTY_ROW0 + r, col = now_col[k] + c;
-                uint16_t e = col >= 0 && col < 64 ? nt(row, col) : 0;
-                taken[k][r][c] = 0;
-                if (r < r0 || !(e & 0x8000) || !(e & 0x7FF) || ui_tile(e)) continue;
-                taken[k][r][c] = e;
-                override[row * 64 + col] = 0;
-                freed[row * 64 + col] = 1;
-            }
-    }
+    /* The game stands one acting (a caster, an archer) or one an enemy
+     * attacks under that enemy, often in another member's place, and plays
+     * the action there: what they cast reaches from their hands to the
+     * enemy, a lunge or a bolt lands on them. That stays as the game draws it
+     * (moving any of it apart from the rest is what broke sprites up); the
+     * rest keep their places, and one whose place the game drew someone in
+     * shows behind them, pixel by pixel (back_cells). */
     for (int k = 0; k < 5; k++) {
         const Member *m = &members[k];
         if (!(restore >> k & 1) || !m->valid) continue;
@@ -413,46 +391,14 @@ static void party_frame(void) {
                 int row = PARTY_ROW0 + r, col = m->col0 + c;
                 if (!e || col < 0 || col >= 64) continue;
                 uint16_t cur = nt(row, col);
-                if ((cur & 0x7FF) && !ui_tile(cur) && !(moved && freed[row * 64 + col]))
-                    continue;                                 /* the game drew something there */
+                if ((cur & 0x7FF) && !ui_tile(cur)) {
+                    back_cells[row * 64 + col] = e;           /* behind what the game drew there */
+                    continue;
+                }
                 override[row * 64 + col] = e;
                 cell_flags[row * 64 + col] = 3;               /* behind low sprites, from the copy */
             }
     }
-    memset(sprite_dx, 0, sizeof sprite_dx);
-    int shifted = 0;
-    for (int k = 0; k < 5; k++) {
-        const Member *m = &members[k];
-        if (!(moved >> k & 1)) continue;
-        for (int r = 0; r < PARTY_ROWS; r++)
-            for (int c = 0; c < 6; c++) {
-                int row = PARTY_ROW0 + r, col = m->col0 + c;
-                if (taken[k][r][c] && col >= 0 && col < 64) {
-                    override[row * 64 + col] = taken[k][r][c];
-                    cell_flags[row * 64 + col] = 0;           /* as the game drew it */
-                }
-            }
-        /* the sprites on them */
-        int dx = (m->col0 - now_col[k]) * 8, top = (PARTY_ROW0 + member_top(m)) * 8;
-        int bx0 = now_col[k] * 8 - 16, bx1 = now_col[k] * 8 + 64;
-        uint32_t sat = (uint32_t)(vdp.reg[5] & 0x7E) << 9;
-        int link = 0, count = 0;
-        do {
-            int me = link;
-            const uint8_t *s = &vdp.vram[(sat + (uint32_t)link * 8) & 0xFFFF];
-            const uint8_t *c = &vdp.sat_cache[((uint32_t)link * 8) & 0x3FF];
-            int sy = ((c[0] << 8 | c[1]) & 0x3FF) - 128, sx = ((s[6] << 8 | s[7]) & 0x1FF) - 128;
-            int sw = ((c[2] >> 2 & 3) + 1) * 8, sh = ((c[2] & 3) + 1) * 8;
-            link = c[3] & 0x7F;
-            if ((s[4] & 0x80) || sprite_dx[me] || sx + sw <= bx0 || sx >= bx1 || sy + sh <= top - 48 || sy >= 176)
-                continue;
-            float w = ((float)sy + (float)sh / 2.0f - (float)(top - 40)) / 40.0f;
-            w = w < 0.0f ? 0.0f : w > 1.0f ? 1.0f : w;
-            sprite_dx[me] = (int16_t)lroundf((float)dx * w);
-            shifted |= sprite_dx[me] != 0;
-        } while (link && ++count < 80);
-    }
-    vdp_sprite_dx = shifted ? sprite_dx : NULL;
 }
 
 static const char *const COMMANDS[5] = {"Attack", "Technique", "Skill", "Item", "Defend"};
