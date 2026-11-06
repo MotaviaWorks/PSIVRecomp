@@ -1047,33 +1047,188 @@ static int16_t *render_zap(int v, int *frames) {
     return finish(&out, -3.0f, 1.5f, frames);
 }
 
+/* ------------------------------------------------------------------ the combination set
+ * What the combination attacks ask for that the battle set hadn't made:
+ * Shooting Star's rockets and explosions, Black Hole's sparks, Tri-Blaster's
+ * Legeon, Conducted Thunder's and Circuit Break's Tandle, Grand Cross's
+ * Efess, Circuit Break's Phonon (the test bot's macros, tools/battle_test.py). */
+
+/* Burstroc's rocket (SFXID_Rifle, $D0): a crack of ignition, the rocket
+ * screaming away (a falling whistle over a rush), a sputtering rumble */
+static int16_t *render_rocket(int v, int *frames) {
+    Rng vr = seed(0x20C7u, v);
+    float len = 0.95f, k = 0.92f + 0.16f * urnd(&vr);
+    Buf ig = noise_sweep(len, 0.0f, 0.0005f, 0.02f, 7000.0f, 3500.0f, 0.03f, 0.8f, 0.0f, 0.0f, 0.8f, 0x20C8u, v);
+    Buf ru = noise_sweep(len, 0.0f, 0.01f, 0.09f, 6000.0f, 1500.0f, 0.18f, 1.2f, -0.3f, 0.6f, 0.3f, 0x20C9u, v);
+    Buf wh = tone_glide(len, 0.005f, 0.004f, 0.12f, 3400.0f * k, 900.0f * k, 0.09f, 0.5f, 0.006f, 0.3f);
+    Buf rb = noise_sweep(len, 0.05f, 0.04f, 0.35f, 320.0f, 140.0f, 0.6f, 0.7f, 0.2f, -0.2f, 0.0f, 0x20CAu, v);
+    pulse(&rb, 0.05f, 16.0f, 0.7f);                           /* it sputters */
+    Buf th = thump(len, 0.0f, 120.0f, 45.0f, 0.03f, 0.1f, 2.0f);
+    Buf out = buf_new(len);
+    mix(&out, &ig, -3.0f);
+    mix(&out, &ru, 0.0f);
+    mix(&out, &wh, -8.0f);
+    mix(&out, &rb, -4.0f);
+    mix(&out, &th, -6.0f);
+    buf_free(&ig); buf_free(&ru); buf_free(&wh); buf_free(&rb); buf_free(&th);
+    reverb(&out, 0.55f, 0.45f, 0.14f, 300.0f);
+    return finish(&out, -3.0f, 1.5f, frames);
+}
+
+/* Megid's blast (SFXID_Megid, $C0; also Shooting Star's meteors): the
+ * original's explosion -- bright, collapsing to a rumble that rolls on -- as
+ * a deep boom, a burst darkening fast, debris crackling, and the rumble */
+static int16_t *render_blast(int v, int *frames) {
+    Rng vr = seed(0xB1A5u, v);
+    float len = 1.6f, k = 0.92f + 0.16f * urnd(&vr);
+    Buf bm = thump(len, 0.0f, 95.0f * k, 34.0f * k, 0.06f, 0.3f, 2.4f);
+    Buf bu = noise_sweep(len, 0.0f, 0.003f, 0.16f, 8000.0f, 380.0f, 0.28f, 0.6f, -0.2f, 0.2f, 0.06f, 0xB1A6u, v);
+    Buf de = crackle(len, 0.05f, 0.4f, 70.0f, 2200.0f, 1.0f, 2.0f, 0xB1A7u, v);
+    Buf ru = noise_sweep(len, 0.1f, 0.1f, 0.5f, 240.0f, 110.0f, 1.0f, 0.7f, 0.3f, -0.3f, 0.0f, 0xB1A8u, v);
+    pulse(&ru, 0.1f, 14.0f, 0.6f);
+    Buf out = buf_new(len);
+    mix(&out, &bm, 0.0f);
+    mix(&out, &bu, -1.0f);
+    mix(&out, &de, -9.0f);
+    mix(&out, &ru, -5.0f);
+    buf_free(&bm); buf_free(&bu); buf_free(&de); buf_free(&ru);
+    reverb(&out, 0.75f, 0.4f, 0.22f, 200.0f);
+    return finish(&out, -2.0f, 1.8f, frames);
+}
+
+/* Spark (SFXID_Spark, $D3; Black Hole asks seven times): a crisp electric
+ * snap -- a crack, a tiny falling zap, a spit of crackle */
+static int16_t *render_spark(int v, int *frames) {
+    Rng vr = seed(0x5A4Cu, v);
+    float len = 0.2f, k = 0.85f + 0.3f * urnd(&vr), p = 0.6f * rnd(&vr);
+    Buf ck = noise_sweep(len, 0.0f, 0.0003f, 0.006f, 7500.0f * k, 5000.0f, 0.01f, 1.0f, p, p, 0.9f, 0x5A4Du, v);
+    Buf zp = tone_glide(len, 0.0f, 0.0008f, 0.025f, 5200.0f * k, 900.0f, 0.015f, 1.4f, 0.01f, p);
+    Buf cr = crackle(len, 0.002f, 0.06f, 400.0f, 5500.0f, 0.6f, 2.5f, 0x5A4Eu, v);
+    Buf out = buf_new(len);
+    mix(&out, &ck, 0.0f);
+    mix(&out, &zp, -6.0f);
+    mix(&out, &cr, -5.0f);
+    buf_free(&ck); buf_free(&zp); buf_free(&cr);
+    reverb(&out, 0.35f, 0.5f, 0.08f, 600.0f);
+    return finish(&out, -4.0f, 1.2f, frames);
+}
+
+/* Legeon (SFXID_Legeon, $BF: the Legeon skill, Tri-Blaster): a burst of
+ * holy light -- a hard bright strike, a glassy cluster ringing over air */
+static int16_t *render_radiance(int v, int *frames) {
+    float len = 0.75f, k = v ? 1.06f : 1.0f;
+    Buf st = noise_sweep(len, 0.0f, 0.0006f, 0.03f, 9000.0f, 4500.0f, 0.05f, 0.9f, -0.2f, 0.2f, 0.8f, 0x1E60u, v);
+    Buf gl = buf_new(len);
+    bell(&gl, 0.0f, 1567.98f * k, 0.28f, 1.0f, -0.4f);
+    bell(&gl, 0.004f, 2349.3f * k, 0.25f, 0.8f, 0.4f);
+    bell(&gl, 0.008f, 3135.96f * k, 0.22f, 0.6f, 0.0f);
+    normalize(&gl);
+    Buf ai = noise_sweep(len, 0.0f, 0.02f, 0.2f, 7000.0f, 9000.0f, 0.3f, 0.7f, 0.3f, -0.3f, 0.6f, 0x1E61u, v);
+    Buf out = buf_new(len);
+    mix(&out, &st, -2.0f);
+    mix(&out, &gl, 0.0f);
+    mix(&out, &ai, -10.0f);
+    buf_free(&st); buf_free(&gl); buf_free(&ai);
+    reverb(&out, 0.65f, 0.4f, 0.24f, 400.0f);
+    return finish(&out, -3.0f, 1.0f, frames);
+}
+
+/* Tandle (SFXID_Tandle, $CE: Tandle, Conducted Thunder asks nine times): an
+ * electric current -- bright noise buzzing ~30 times a second, crackling,
+ * a hum under it */
+static int16_t *render_current(int v, int *frames) {
+    float len = 1.0f, k = v ? 0.94f : 1.0f;
+    Buf bz = noise_sweep(len, 0.0f, 0.01f, 0.32f, 5200.0f * k, 3800.0f * k, 0.8f, 1.6f, -0.3f, 0.3f, 0.5f, 0x7A9Du, v);
+    pulse(&bz, 0.0f, 31.0f * k, 2.0f);
+    Buf cr = crackle(len, 0.0f, 0.7f, 260.0f, 6000.0f, 0.6f, 2.5f, 0x7A9Eu, v);
+    Buf hm = tone_glide(len, 0.0f, 0.02f, 0.3f, 120.0f * k, 116.0f * k, 1.0f, 1.0f, 0.01f, 0.0f);
+    pulse(&hm, 0.0f, 31.0f * k, 1.0f);
+    Buf out = buf_new(len);
+    mix(&out, &bz, 0.0f);
+    mix(&out, &cr, -5.0f);
+    mix(&out, &hm, -9.0f);
+    buf_free(&bz); buf_free(&cr); buf_free(&hm);
+    reverb(&out, 0.45f, 0.45f, 0.12f, 300.0f);
+    return finish(&out, -3.0f, 1.4f, frames);
+}
+
+/* Efess (SFXID_Efess, $C3: the Efess skill, Grand Cross): a flash of light,
+ * then a rising swell of shimmer, as the original's rising sweep */
+static int16_t *render_holy(int v, int *frames) {
+    float len = 1.05f, k = v ? 1.06f : 1.0f;
+    Buf fl = buf_new(len);
+    bell(&fl, 0.0f, 2093.0f * k, 0.18f, 1.0f, -0.3f);
+    bell(&fl, 0.003f, 2637.0f * k, 0.18f, 0.9f, 0.3f);
+    bell(&fl, 0.006f, 3136.0f * k, 0.16f, 0.8f, 0.0f);
+    normalize(&fl);
+    Buf ck = noise_sweep(len, 0.0f, 0.0005f, 0.02f, 8000.0f, 5000.0f, 0.03f, 0.8f, 0.0f, 0.0f, 0.8f, 0xEF55u, v);
+    Buf sw = noise_sweep(len, 0.15f, 0.45f, 0.15f, 900.0f, 8500.0f, 0.6f, 2.5f, -0.5f, 0.5f, 0.4f, 0xEF56u, v);
+    Buf tn = tone_glide(len, 0.15f, 0.45f, 0.15f, 700.0f * k, 2800.0f * k, 0.35f, 0.3f, 0.005f, 0.0f);
+    Buf out = buf_new(len);
+    mix(&out, &fl, 0.0f);
+    mix(&out, &ck, -6.0f);
+    mix(&out, &sw, -4.0f);
+    mix(&out, &tn, -12.0f);
+    buf_free(&fl); buf_free(&ck); buf_free(&sw); buf_free(&tn);
+    reverb(&out, 0.7f, 0.35f, 0.26f, 400.0f);
+    return finish(&out, -3.0f, 0.0f, frames);
+}
+
+/* Phonon (SFXID_Phonon, $C1: the Phonon skill, Circuit Break; also an
+ * enemy's): the original's two steady tones as a sonic beam -- a low and a
+ * high tone wavering against each other, swelling in, a ring at the end */
+static int16_t *render_sonic(int v, int *frames) {
+    float len = 0.7f, k = v ? 1.05f : 1.0f;
+    Buf lo = tone_glide(len, 0.0f, 0.03f, 0.25f, 420.0f * k, 400.0f * k, 0.2f, 0.6f, 0.012f, -0.25f);
+    Buf hi = tone_glide(len, 0.0f, 0.03f, 0.22f, 2500.0f * k, 2450.0f * k, 0.2f, 0.3f, -0.008f, 0.25f);
+    pulse(&lo, 0.0f, 11.0f, 0.4f);
+    pulse(&hi, 0.0f, 11.0f, 0.4f);
+    Buf rg = buf_new(len);
+    bell(&rg, 0.32f, 1250.0f * k, 0.2f, 1.0f, 0.0f);
+    normalize(&rg);
+    Buf out = buf_new(len);
+    mix(&out, &lo, 0.0f);
+    mix(&out, &hi, -5.0f);
+    mix(&out, &rg, -9.0f);
+    buf_free(&lo); buf_free(&hi); buf_free(&rg);
+    reverb(&out, 0.5f, 0.45f, 0.16f, 300.0f);
+    return finish(&out, -4.0f, 0.6f, frames);
+}
+
 /* ------------------------------------------------------------------ the list */
 static const SfxRecipe RECIPES[] = {
-    {"slash", "blade hit: a short swing, a slice, a ringing edge and a thump", 4, 3},
-    {"slasher", "thrown slasher: the throw, the spin flying off and coming back", 3, 1},
-    {"cursor", "menu cursor: a soft tick", 3, 1},
-    {"select", "menu choice: a two-note chime", 2, 2},
-    {"claw", "claws: three rakes across, a tear and a thud", 3, 3},
-    {"dissolve", "an enemy destroyed: a falling zap, a soft burst, glittering dust", 3, 3},
-    {"grind", "a grinding rumble pulsing under a growl (an enemy's attack)", 2, 1},
-    {"wind", "Zan: wind blades, two whistling gusts and the air after", 3, 2},
-    {"blow", "an enemy's blow: a punch, a crack, a body", 3, 2},
-    {"gnash", "an enemy's bites: six snapping clicks", 2, 1},
-    {"rod", "a staff's knock: hard wood, a click, a thump", 3, 2},
-    {"fire", "Foi: two puffs of flame, crackling", 2, 2},
-    {"heal", "Res: glass bells rising over a shimmer", 2, 1},
-    {"cast", "a technique cast: a chime, a rising rush, falling glitter", 2, 1},
-    {"shot", "Wren's gun: a crack, a falling pew, a punch", 3, 2},
-    {"glimmer", "Moonshade: rising glitter and a breathing fifth", 2, 1},
-    {"swipe", "an enemy's swipe: falling air, a tone, a thud", 3, 2},
-    {"healcast", "a healing cast: a soft rise into a major chord", 2, 1},
-    {"miss", "a miss: a whiff of air", 2, 1},
-    {"gravity", "Gra: one deep pulse of the warp (chained, they throb)", 3, 3},
-    {"recover", "recovery: an arpeggio rising four times", 2, 1},
-    {"breath", "fire breath: a flickering roar and a growl", 2, 1},
-    {"buff", "a buff: a tone and its fifth climbing, a sparkle at the top", 2, 1},
-    {"surge", "Brose: crackling energy pulsing, a bright line falling", 2, 1},
-    {"zap", "Tsu: a crack, falling zaps, crackling electricity, a rumble", 2, 2},
+    {"slash", "blade hit: a short swing, a slice, a ringing edge and a thump", 4, 3, 0.000f},
+    {"slasher", "thrown slasher: the throw, the spin flying off and coming back", 3, 1, 0.000f},
+    {"cursor", "menu cursor: a soft tick", 3, 1, 0.000f},
+    {"select", "menu choice: a two-note chime", 2, 2, 0.000f},
+    {"claw", "claws: three rakes across, a tear and a thud", 3, 3, 0.045f},
+    {"dissolve", "an enemy destroyed: a falling zap, a soft burst, glittering dust", 3, 3, 0.100f},
+    {"grind", "a grinding rumble pulsing under a growl (an enemy's attack)", 2, 1, 0.300f},
+    {"wind", "Zan: wind blades, two whistling gusts and the air after", 3, 2, 0.400f},
+    {"blow", "an enemy's blow: a punch, a crack, a body", 3, 2, 0.050f},
+    {"gnash", "an enemy's bites: six snapping clicks", 2, 1, 0.200f},
+    {"rod", "a staff's knock: hard wood, a click, a thump", 3, 2, 0.050f},
+    {"fire", "Foi: two puffs of flame, crackling", 2, 2, 0.100f},
+    {"heal", "Res: glass bells rising over a shimmer", 2, 1, 0.300f},
+    {"cast", "a technique cast: a chime, a rising rush, falling glitter", 2, 1, 0.200f},
+    {"shot", "Wren's gun: a crack, a falling pew, a punch", 3, 2, 0.050f},
+    {"glimmer", "Moonshade: rising glitter and a breathing fifth", 2, 1, 0.250f},
+    {"swipe", "an enemy's swipe: falling air, a tone, a thud", 3, 2, 0.050f},
+    {"healcast", "a healing cast: a soft rise into a major chord", 2, 1, 0.200f},
+    {"miss", "a miss: a whiff of air", 2, 1, 0.050f},
+    {"gravity", "Gra: one deep pulse of the warp (chained, they throb)", 3, 3, 0.000f},
+    {"recover", "recovery: an arpeggio rising four times", 2, 1, 0.500f},
+    {"breath", "fire breath: a flickering roar and a growl", 2, 1, 0.250f},
+    {"buff", "a buff: a tone and its fifth climbing, a sparkle at the top", 2, 1, 0.250f},
+    {"surge", "Brose: crackling energy pulsing, a bright line falling", 2, 1, 0.400f},
+    {"zap", "Tsu: a crack, falling zaps, crackling electricity, a rumble", 2, 2, 0.150f},
+    {"rocket", "Burstroc: ignition, a rocket screaming away, a sputtering rumble", 3, 2, 0.100f},
+    {"blast", "Megid: a deep boom, a burst darkening, debris, a rolling rumble", 3, 2, 0.150f},
+    {"spark", "Spark: a crisp electric snap", 3, 3, 0.030f},
+    {"radiance", "Legeon: a strike of holy light, a glassy cluster ringing", 2, 1, 0.200f},
+    {"current", "Tandle: an electric current buzzing, crackling, humming", 2, 1, 0.350f},
+    {"holy", "Efess: a flash of light, a rising swell of shimmer", 2, 1, 0.300f},
+    {"sonic", "Phonon: two tones wavering into a sonic beam", 2, 1, 0.250f},
 };
 
 typedef int16_t *(*RenderFn)(int, int *);
@@ -1081,7 +1236,9 @@ static const RenderFn RENDER[] = {render_slash, render_slasher, render_cursor, r
                                   render_claw, render_dissolve, render_grind, render_wind, render_blow,
                                   render_gnash, render_rod, render_fire, render_heal, render_cast, render_shot,
                                   render_glimmer, render_swipe, render_healcast, render_miss, render_gravity,
-                                  render_recover, render_breath, render_buff, render_surge, render_zap};
+                                  render_recover, render_breath, render_buff, render_surge, render_zap,
+                                  render_rocket, render_blast, render_spark, render_radiance, render_current,
+                                  render_holy, render_sonic};
 
 int sfxsynth_count(void) { return (int)(sizeof RECIPES / sizeof RECIPES[0]); }
 

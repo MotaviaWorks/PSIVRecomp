@@ -55,6 +55,7 @@ static struct {
     int cmd[5], pick, targets, main, macro;
     int saw_victory, saw_run, saw_defeat;
     int vehicle, tries, slot;      /* board this vehicle first (1-3); attempts; its place in the item list */
+    unsigned combo;                /* the last combination logged ($FF4146 while the actions play) */
     unsigned cam;                  /* the camera when it last moved, and when */
     uint64_t moved;
     uint8_t *keys;                 /* the pad given at each logical frame */
@@ -118,6 +119,9 @@ static void begin_battle(uint64_t L) {
     b.phase = BATTLE;
     b.battles++;
     b.plan = b.battles <= NPLANS ? b.battles - 1 : P_MIX;
+    const char *pl = getenv("PSIV_BOT_PLAN");
+    for (int i = 0; pl && i < NPLANS; i++)
+        if (!strcmp(pl, plan_name[i])) b.plan = i;
     b.round = b.run_tried = b.saw_victory = b.saw_run = b.saw_defeat = 0;
     b.st = 0xFFFF;
     b.pick = -1;
@@ -229,6 +233,8 @@ static int macro_pick(void) {
         if (used) c[n++] = (int)s;
     }
     if (!n) return -1;
+    const char *want = getenv("PSIV_BOT_MACRO");           /* a given slot (1-8) */
+    if (want && atoi(want) >= 1 && atoi(want) <= 8) return atoi(want) - 1;
     return c[n > 1 ? 1 + (int)rnd((uint32_t)n - 1) : 0];   /* the first is often "everyone attacks" */
 }
 
@@ -241,7 +247,7 @@ static uint8_t main_menu(uint64_t L) {
         if (b.plan == P_RUN && !b.run_tried) {
             b.main = 2;
             b.run_tried = 1;
-        } else if (b.plan == P_MACRO && b.round <= 2 && (b.macro = macro_pick()) >= 0) {
+        } else if (b.plan == P_MACRO && (b.round <= 2 || getenv("PSIV_BOT_PLAN")) && (b.macro = macro_pick()) >= 0) {
             b.main = 1;
         }
         printf("bot %llu: round %d: %s\n", (unsigned long long)L, b.round,
@@ -291,6 +297,16 @@ static uint8_t command(uint64_t L, int f) {
 static uint8_t list(uint64_t L, int f, unsigned st) {
     int kind = st == 0x08 ? 1 : st == 0x11 ? 2 : 3;        /* tech, skill, item */
     if (f < 0 || f > 4) return 0;
+    if (b.pick < 0 && getenv("PSIV_BOT_LISTS")) {         /* every list it opens (for making macros) */
+        printf("bot %llu:   %s's %s list:", (unsigned long long)L, who(f), cmd_name[kind]);
+        int cnt = kind == 1 ? 16 : kind == 2 ? 8 : 44;
+        for (int i = 0; i < cnt; i++) {
+            unsigned id = kind == 1 ? r8(TECH_LIST + (unsigned)i) : kind == 2 ? r8(SKILL_LIST + 2u * (unsigned)i)
+                                    : r8(ITEM_LIST + (unsigned)i);
+            if (id) printf(" %02X", id);
+        }
+        printf("\n");
+    }
     if (b.pick < 0) {
         int c[44], n = 0;
         if (kind == 1) {
@@ -359,6 +375,12 @@ static uint8_t battle(uint64_t L) {
         b.taps = 0;
     }
     uint64_t still = L - b.since;
+    /* a combination attack: the game turns the command into $08xx (xx its ID)
+     * while the actions play (no menu up; in input that RAM is the skill list) */
+    unsigned cw = r16(0x4146);
+    if (st == 0 && (cw >> 8) == 8 && cw != b.combo)
+        printf("bot %llu: COMBINATION %u\n", (unsigned long long)L, cw & 0xFF);
+    if (st == 0) b.combo = cw;
     if (still < 3) return 0;
     int f = (int)r16(COMD_INPUT);
     switch (st) {

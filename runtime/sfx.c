@@ -27,6 +27,7 @@ typedef struct {
     int frames[MAX_FILES];
     float gain;
     int overlap;                         /* how many may sound at once; 1 = a new one cuts the last */
+    float min_gap;                       /* seconds: a request sooner after the last start is taken in silence */
 } Bank;
 
 typedef struct {
@@ -177,6 +178,7 @@ static void add_synth(Bank *b, const char *name) {
         b->nfiles++;
     }
     b->overlap = r->overlap;
+    b->min_gap = r->min_gap;
 }
 
 static char *trim(char *s) {
@@ -253,6 +255,14 @@ static const struct { uint8_t id; const char *recipe; float gain_db; } MODERN[] 
     {0xBC, "buff", -5.4f},          /* SFXID_BuffCast: Saner, Shift, Deban */
     {0xCB, "surge", -1.0f},         /* SFXID_Brose: Brose, Diem */
     {0xC5, "zap", -4.4f},           /* SFXID_LaserAttack: Tsu, Flare */
+    /* the combination set: what the combination attacks ask for besides */
+    {0xD0, "rocket", 1.5f},         /* SFXID_Rifle: Burstroc (Shooting Star) */
+    {0xC0, "blast", -6.7f},         /* SFXID_Megid: Megid, Shooting Star's meteors */
+    {0xD3, "spark", 0.7f},          /* SFXID_Spark: Spark, Black Hole */
+    {0xBF, "radiance", 2.2f},       /* SFXID_Legeon: Legeon, Tri-Blaster */
+    {0xCE, "current", -2.4f},       /* SFXID_Tandle: Tandle, Conducted Thunder, Circuit Break */
+    {0xC3, "holy", 2.0f},           /* SFXID_Efess: Efess, Grand Cross */
+    {0xC1, "sonic", -3.5f},         /* SFXID_Phonon: Phonon, Circuit Break */
 };
 
 int sfx_synth_load(void) {
@@ -300,6 +310,13 @@ int sfx_request(uint8_t id) {
     if (log_on) fprintf(stderr, "frame %llu: sound request %02X%s\n", (unsigned long long)frame_count, id,
                         b ? " (replaced)" : "");
     if (!b) return 0;
+    /* asked again too soon (Nazan's wind every 4 frames, a fire per target in
+     * one frame): the one sounding carries on, and the request is taken anyway */
+    if (b->min_gap > 0)
+        for (int i = 0; i < MAX_VOICES; i++)
+            if (voices[i].pcm && voices[i].id == id && voices[i].fade_step >= 0
+                && voices[i].pos < (int)(b->min_gap * (float)SOUND_RATE))
+                return 1;
     int pick = b->nfiles == 1 ? 0 : (int)(next_rand() % (uint32_t)b->nfiles);
     if (b->nfiles > 1 && pick == b->last) pick = (pick + 1) % b->nfiles;   /* no immediate repeats */
     b->last = pick;

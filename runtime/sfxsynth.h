@@ -19,6 +19,8 @@ typedef struct {
     const char *what;      /* one line for the logs and the docs */
     int variants;          /* how many differ (for random picks) */
     int overlap;           /* how many of it may sound at once (1: a new one cuts the last) */
+    float min_gap;         /* seconds: a request sooner after the last start is taken in silence
+                              (Nazan asks for Zan's wind every 4 frames; one Gifoi asks twice) */
 } SfxRecipe;
 
 int  sfxsynth_count(void);

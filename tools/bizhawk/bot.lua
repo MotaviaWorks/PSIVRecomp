@@ -93,6 +93,8 @@ local ok, err = pcall(function()
     b.phase = "BATTLE"
     b.battles = b.battles + 1
     b.plan = b.battles <= NPLANS and b.battles - 1 or 6
+    local pl = os.getenv("PSIV_BOT_PLAN")                -- every battle one plan (e.g. macro)
+    for i = 0, NPLANS - 1 do if pl == PLANS[i] then b.plan = i end end
     b.round, b.run_tried, b.saw_victory, b.saw_run, b.saw_defeat = 0, false, false, false, false
     b.st, b.pick, b.cmd = 0xFFFF, -1, {}
     log(L, string.format("battle %d (%s)", b.battles, PLANS[b.plan]))
@@ -195,6 +197,8 @@ local ok, err = pcall(function()
       if used then c[#c + 1] = s end
     end
     if #c == 0 then return -1 end
+    local want = tonumber(os.getenv("PSIV_BOT_MACRO") or "")   -- a given slot (1-8)
+    if want and want >= 1 and want <= 8 then return want - 1 end
     if #c > 1 then return c[2 + rnd(#c - 1)] end
     return c[1]
   end
@@ -205,7 +209,7 @@ local ok, err = pcall(function()
       b.cmd, b.pick, b.main = {}, -1, 0
       if b.plan == 5 and not b.run_tried then
         b.main, b.run_tried = 2, true
-      elseif b.plan == 4 and b.round <= 2 then
+      elseif b.plan == 4 and (b.round <= 2 or os.getenv("PSIV_BOT_PLAN")) then
         b.macro = macro_pick()
         if b.macro >= 0 then b.main = 1 end
       end
@@ -311,6 +315,10 @@ local ok, err = pcall(function()
     local st = r2 & 0x7FFF
     if r2 ~= b.st then b.st, b.since, b.taps = r2, L, 0 end
     local still = L - b.since
+    -- a combination attack: the command turns into $08xx while the actions play
+    local cw = r16(0x4146)
+    if st == 0 and (cw >> 8) == 8 and cw ~= b.combo then log(L, string.format("COMBINATION %d", cw & 0xFF)) end
+    if st == 0 then b.combo = cw end
     if still < 3 then return "" end
     local f = r16(COMD_INPUT)
     if st == 0x02 then return main_menu(L) end
