@@ -44,7 +44,14 @@
  *                        (battleui.h); R: the right button; repeatable
  *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
  *                        (next to the trace, or build/bizhawk/port.*)
+ *     --dump-to PREFIX   ... to PREFIX.ram.bin etc. instead
  *     --rumble-log       print each rumble effect as it's detected (rumble.h)
+ *     --bot SEED[:WALK[:N[:V]]]  play by itself (testbot.h): Continue from the
+ *                        save, walk (WALK = LR, UD, RL or DU) until a battle,
+ *                        fight N battles with planned commands, save in slot 1,
+ *                        stop; V: board a vehicle first (1 Land Rover, 2 Ice
+ *                        Digger, 3 Hydrofoil)
+ *     --bot-movie FILE   write the bot's input as a movie (--movie, movie.lua)
  *
  * Prints game-mode changes and, at the end, a RAM checksum. Built with
  * PSIV_TRACE it also prints the hottest code blocks.
@@ -67,6 +74,7 @@
 #include "mixbus.h"
 #include "sha256.h"
 #include "sound.h"
+#include "testbot.h"
 #include "vdp.h"
 
 #include <stdio.h>
@@ -212,8 +220,13 @@ void platform_fatal(const char *text) {
 }
 
 static const char *sram_out;           /* --sram-out */
+static const char *bot_movie;          /* --bot-movie: the bot's input, as a movie */
 
 static void report(void) {
+    if (bot_movie && testbot_on()) {
+        FILE *mf = fopen(bot_movie, "w");
+        if (mf) { testbot_movie(mf); fclose(mf); printf("wrote %s\n", bot_movie); }
+    }
     if (sram_out) {
         FILE *sf = fopen(sram_out, "wb");
         if (sf) { fwrite(bus_sram, 1, sizeof bus_sram, sf); fclose(sf); printf("wrote %s\n", sram_out); }
@@ -221,6 +234,20 @@ static void report(void) {
     uint32_t hash = 2166136261u;                       /* FNV-1a over work RAM */
     for (int i = 0; i < 0x10000; i++) hash = (hash ^ m68k_ram[i]) * 16777619u;
     printf("frames %llu, RAM FNV-1a %08X, audio peak %d\n", (unsigned long long)frame_count, hash, audio_peak);
+    /* the game's own state, for comparing runs with the port's additions on
+     * and off: without the sound driver's RAM ($5000-$55FF: the port's sound
+     * effects take their requests out of its queue), the stack ($4800-$4FFF:
+     * registers left there differ when widescreen keeps more sprites), the
+     * sprite table and its counters ($FC00-$FE85, $EF18-$EF1B: widescreen's
+     * margins) and VInt's copy of the VDP status ($EF22) */
+    uint32_t game = 2166136261u;
+    for (int i = 0; i < 0x10000; i++) {
+        if ((i >= 0x4800 && i < 0x5600) || (i >= 0xFC00 && i < 0xFE86) || (i >= 0xEF18 && i < 0xEF1C)
+            || (i >= 0xEF22 && i < 0xEF24))
+            continue;
+        game = (game ^ m68k_ram[i]) * 16777619u;
+    }
+    printf("game RAM FNV-1a %08X (without sound, stack and sprite table)\n", game);
     uint64_t limited, all;
     double deepest;
     mixbus_stats(&limited, &all, &deepest);
@@ -345,8 +372,12 @@ static void dump_state(const char *prefix) {
     printf("dumped %s.{ram,vram,cram,vsram,regs}.bin\n", prefix);
 }
 
+static const char *dump_to;            /* --dump-to: where --dump-at writes without a trace */
+
 static void dump_prefix(char *out, size_t n, const char *tag) {
-    if (replay_path) {
+    if (dump_to) {
+        snprintf(out, n, "%s", dump_to);
+    } else if (replay_path) {
         const char *dot = strrchr(replay_path, '.');
         size_t base = dot ? (size_t)(dot - replay_path) : strlen(replay_path);
         snprintf(out, n, "%.*s.%s", (int)base, replay_path, tag);
@@ -669,8 +700,9 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         last_mode = mode;
     }
     /* with a movie or a replay, screenshots and input are by logical frame */
-    uint64_t when = (movie || replay) ? logical : f;
-    int fresh = !movie || frame_vint_will_fire();      /* a logical frame only counts once */
+    int bylogical = movie || replay || testbot_on();
+    uint64_t when = bylogical ? logical : f;
+    int fresh = (!movie && !testbot_on()) || frame_vint_will_fire();   /* a logical frame only counts once */
     /* battle depth and modern text: shots show what the player sees */
     int hs = depth_scale ? depth_scale : fp_scale ? fp_scale : text_scale;
     if (fresh) {
@@ -705,24 +737,31 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         if (shots[i].frame == when) {
             if (depth_active) save_png_stride(shots[i].path, depth_buf, sw, sh, sw);
             else save_png(shots[i].path, pixels, width, height);
-            printf("%s %llu: saved %s (%dx%d)\n", (movie || replay) ? "logical" : "frame",
+            printf("%s %llu: saved %s (%dx%d)\n", bylogical ? "logical" : "frame",
                    (unsigned long long)when, shots[i].path, sw, sh);
         }
     for (int i = 0; i < nlayer_dumps; i++) {
         if (layer_dumps[i].frame == when && frame_vint_will_fire())
             dump_layers(layer_dumps[i].prefix, when, width, height);
     }
-    if ((movie || replay) && shot_every && fresh && logical % shot_every == 0
+    if (bylogical && shot_every && fresh && logical % shot_every == 0
         && logical >= shot_from && (!shot_to || logical <= shot_to)) {
         char p[512];
         snprintf(p, sizeof p, "%s/%06llu.png", shot_dir, (unsigned long long)logical);
         if (depth_active) save_png_stride(p, depth_buf, sw, sh, sw);
         else save_png(p, pixels, width, height);
     }
-    if (movie && fresh) {
+    if ((movie || testbot_on()) && fresh) {
         uint8_t keys = 0;
         for (int i = 0; i < nmovie; i++)
             if (logical >= movie[i].frame && logical < movie[i].frame + movie[i].len) keys |= movie[i].keys;
+        if (testbot_on()) {
+            keys |= testbot_keys(logical);
+            if (testbot_done()) {
+                report();
+                exit(0);
+            }
+        }
         if (trace_pad && (keys || bus_pad[0]))
             printf("logical %llu: pad %02X -> %02X; game Joypad_Held %02X Pressed %02X\n",
                    (unsigned long long)logical, bus_pad[0], keys, m68k_ram[0xEF02], m68k_ram[0xEF03]);
@@ -746,7 +785,7 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
     if (test_fatal_frame && f == test_fatal_frame) m68k_call(0x123456);
     if (music_id >= 0 && f == music_frame) m68k_ram[0x500A] = 0xFE;
     if (music_id >= 0 && f == music_frame + 2) m68k_ram[0x500A] = (uint8_t)music_id;
-    if (!replay && !movie) {
+    if (!replay && !movie && !testbot_on()) {
         uint8_t keys = 0;
         for (int i = 0; i < npress; i++)
             if (f >= presses[i].frame && f < presses[i].frame + presses[i].len) keys |= presses[i].keys;
@@ -831,10 +870,26 @@ int main(int argc, char **argv) {
             frame_limit = UINT64_MAX;
         } else if (!strcmp(argv[i], "--dump-at") && i + 1 < argc) {
             dump_at = strtoull(argv[++i], NULL, 10);
+        } else if (!strcmp(argv[i], "--dump-to") && i + 1 < argc) {
+            dump_to = argv[++i];
         } else if (!strcmp(argv[i], "--keep-going")) {
             keep_going = 1;
         } else if (!strcmp(argv[i], "--movie") && i + 1 < argc) {
             if (!load_movie(argv[++i])) return 1;
+        } else if (!strcmp(argv[i], "--bot") && i + 1 < argc) {
+            char *s = argv[++i], *e, walk[3] = "LR";
+            uint32_t seed = (uint32_t)strtoul(s, &e, 10);
+            int battles = 0, vehicle = 0;
+            if (*e == ':' && e[1] && e[2]) {
+                walk[0] = e[1];
+                walk[1] = e[2];
+                e += 3;
+            }
+            if (*e == ':') battles = (int)strtol(e + 1, &e, 10);
+            if (*e == ':') vehicle = atoi(e + 1);
+            testbot_start(seed, walk, battles, vehicle);
+        } else if (!strcmp(argv[i], "--bot-movie") && i + 1 < argc) {
+            bot_movie = argv[++i];
         } else if (!strcmp(argv[i], "--shot-every") && i + 1 < argc) {
             char *e;
             shot_every = strtoull(argv[++i], &e, 10);

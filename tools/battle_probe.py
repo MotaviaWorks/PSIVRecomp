@@ -182,4 +182,5 @@ def main():
     print(f'{len(jobs)} probes; screenshots in {a.out}')
 
 
-main()
+if __name__ == '__main__':
+    main()

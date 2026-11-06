@@ -9,6 +9,9 @@
                                                      psiv_headless --movie) in BizHawk, then replay
     python tools/bizhawk/check.py --dump-at N        also dump raw memory at logical frame N
                                                      on both sides and diff them
+    python tools/bizhawk/check.py --bot 8:LR:7 --sram SAVE
+                                                     the test bot plays in BizHawk from SAVE
+                                                     (tools/bizhawk/bot.lua), then the port replays
 
 Recording runs EmuHawk with tools/bizhawk/newgame.lua (unthrottled, it closes
 itself). Replay runs build/native-Release/psiv_headless --replay, which stops
@@ -35,7 +38,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 OUT = ROOT / "build" / "bizhawk"
 BIZHAWK = Path(os.environ.get("PSIV_BIZHAWK", r"H:\Emulation\08 - Tools\BizHawk\EmuHawk.exe"))
-HEADLESS = ROOT / "build" / ("native-Release/psiv_headless.exe" if os.name == "nt" else "native/psiv_headless")
+HEADLESS = Path(os.environ.get("PSIV_HEADLESS") or
+                ROOT / "build" / ("native-Release/psiv_headless.exe" if os.name == "nt" else "native/psiv_headless"))
 
 
 SRAM_SIZE = 0x2000          # the cartridge's battery RAM: odd bytes of $200001-$203FFF
@@ -65,7 +69,8 @@ def port_sram(b: bytes) -> bytes:
 
 
 def record(scenario: str, dump_at: int | None, movie: Path | None = None,
-           sram_in: Path | None = None, play: bool = False) -> Path:
+           sram_in: Path | None = None, play: bool = False, bot: str | None = None,
+           name: str | None = None) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     rom = OUT / "psiv.md"
     if not rom.exists():
@@ -83,9 +88,15 @@ def record(scenario: str, dump_at: int | None, movie: Path | None = None,
         lua = ROOT / "tools" / "bizhawk" / "record_play.lua"
         timeout = None
     else:
-        if movie:
+        if bot:
+            # the test bot plays by itself (tools/bizhawk/bot.lua)
+            name = name or "bot_" + bot.replace(":", "_")
+            env["PSIV_BOT_SPEC"] = bot
+            lua = ROOT / "tools" / "bizhawk" / "bot.lua"
+            timeout = 1800
+        elif movie:
             # a movie: tools/bizhawk/movie.lua plays it by logical frame
-            name = movie.stem
+            name = name or movie.stem
             env["PSIV_MOVIE_FILE"] = str(movie.resolve())
             lua = ROOT / "tools" / "bizhawk" / "movie.lua"
             timeout = 1800
@@ -110,7 +121,13 @@ def record(scenario: str, dump_at: int | None, movie: Path | None = None,
               "done; the port then replays your session.", flush=True)
     else:
         print(f"recording {name} in BizHawk (the window closes itself)...", flush=True)
-    p = subprocess.Popen([str(BIZHAWK), f"--lua={lua}", str(rom)], env=env)
+    kw = {}
+    if os.name == "nt" and not play:
+        si = subprocess.STARTUPINFO()                 # automated: minimized, not taking the focus
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 7                            # SW_SHOWMINNOACTIVE
+        kw["startupinfo"] = si
+    p = subprocess.Popen([str(BIZHAWK), f"--lua={lua}", str(rom)], env=env, **kw)
     try:
         p.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -134,6 +151,11 @@ def main() -> int:
     ap.add_argument("--sram", help="battery save to start from (the port's, BizHawk's or Gens / Kega "
                                    "Fusion's .srm); default: the movie's '# from-save: NAME' line, if any")
     ap.add_argument("--dump-at", type=int, help="dump raw memory at this logical frame on both sides")
+    ap.add_argument("--bot", metavar="SEED:WALK:N",
+                    help="let the test bot play in BizHawk (tools/bizhawk/bot.lua; start it with --sram)")
+    ap.add_argument("--name", help="name of the trace (build/bizhawk/NAME.trace)")
+    ap.add_argument("--port-args", default="",
+                    help="extra psiv_headless options for the replay, e.g. the additions")
     args = ap.parse_args()
 
     movie = Path(args.movie) if args.movie else None
@@ -145,7 +167,8 @@ def main() -> int:
     if args.trace:
         trace = Path(args.trace)
     else:
-        trace = record(args.scenario, args.dump_at, movie, sram_in, play=args.play)
+        trace = record(args.scenario, args.dump_at, movie, sram_in, play=args.play, bot=args.bot,
+                       name=args.name)
     # the save BizHawk started from (the recorder keeps it next to the trace)
     start = trace.with_suffix(".start.sram")
     if start.exists() and not args.sram:
@@ -157,6 +180,7 @@ def main() -> int:
         cmd += ["--sram", str(sram_in)]
     if args.dump_at:
         cmd += ["--dump-at", str(args.dump_at), "--keep-going"]
+    cmd += args.port_args.split()
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     sys.stdout.write(r.stdout + r.stderr)
     sys.stdout.flush()

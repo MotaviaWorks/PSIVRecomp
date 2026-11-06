@@ -341,7 +341,38 @@ new moves off a movie and takes screenshots, for authoring.
   kept locally, not in git)
 
 `check.py --movie M --sram FILE` starts both sides from a battery save of
-your own, in any layout the port reads. `tools/battle_probe.py FOLDER` takes
+your own, in any layout the port reads.
+
+### The test bot: battles and saves from anywhere in the game
+
+`psiv_headless --bot SEED:WALK:N[:V]` plays by itself (`runtime/testbot.c`).
+It Continues from the battery save, walks the world map back and forth
+(`WALK` is `LR`, `UD`, `RL` or `DU`) until a random battle starts, and fights
+N battles to the end through the game's own menus, which it reads from RAM.
+Each battle has a plan: attacks, techniques, skills, items, a macro, running,
+a mix, with a random usable entry and target each time. Then it saves in
+slot 1. `V` boards a vehicle first (1 Land Rover, 2 Ice Digger, 3 Hydrofoil,
+used as items from the field menu) for vehicle battles. `--bot-movie FILE`
+keeps its input as a movie. `tools/bizhawk/bot.lua` is the same bot for
+BizHawk (`check.py --bot 8:LR:7 --sram SAVE`): there the reference fights its
+own battles, and the port replays them frame by frame.
+
+`tools/battle_test.py FOLDER` runs it from every save in a folder:
+
+- finds a walk that meets a battle without entering a town;
+- lets the bot play, then replays its input with the port's additions on (two
+  sets): the game must end in the same state, checked by its RAM (less the
+  sound driver, the stack and the sprite table) and by the battery save it
+  writes;
+- screenshots every battle with the additions on;
+- checks the save the bot wrote: its checksum, and that Continue brings it
+  back;
+- with `--bizhawk`, BizHawk plays too, one save at a time (EmuHawk starts
+  minimized, and waits while yours is open), and its screenshots of the
+  gravity techniques' raster effect are held against the port's.
+
+Results go to `build/bot/` (`results.json`, `bizhawk.json`, the bot's logs and
+the screenshots). `tools/battle_probe.py FOLDER` takes
 a folder of saves (from anywhere in the game: keep collected saves out of
 git, `imported saves/` is ignored), Continues each, walks until a random
 battle and screenshots the battle menus: the commands, the technique and

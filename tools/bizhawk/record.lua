@@ -51,6 +51,9 @@ local FRAMES = PSIV_FRAMES
 local SCRIPT = PSIV_SCRIPT
 local MOVIE = PSIV_MOVIE
 local LOGICAL_END = PSIV_LOGICAL_END
+-- PSIV_BOT(logical) -> keys for that logical frame, PSIV_BOT_DONE() -> stop
+-- (bot.lua: the test bot plays by itself)
+local BOT, BOT_DONE = PSIV_BOT, PSIV_BOT_DONE
 
 local VINT, VINT_FLAG = 0x524, 0xEF12
 -- UpdateRNGSeed2 ($4239E) mixes the VDP's beam counter into the battle random
@@ -237,9 +240,17 @@ else
   emu.limitframerate(true)
   event.onexit(finish, "psiv-finish")
 end
+local bot_seen, bot_keys = -1, ""
 while true do
   local f = emu.framecount()
-  if MOVIE then
+  if BOT then
+    -- asked once per logical frame, like psiv_headless --bot; held through lag
+    if logical ~= bot_seen then
+      bot_seen = logical
+      bot_keys = BOT(logical + 1)
+    end
+    hold(bot_keys)
+  elseif MOVIE then
     -- the game reads the pad in the next VInt that finds VInt_Flag set,
     -- i.e. logical frame logical+1; lag frames ignore it
     local want, keys = logical + 1, ""
@@ -264,6 +275,7 @@ while true do
   if not AUTOMATED and f % 30 == 0 then pcall(sram_snapshot) end
   if FRAMES and emu.framecount() >= FRAMES then break end
   if LOGICAL_END and logical >= LOGICAL_END then break end
+  if BOT_DONE and BOT_DONE() then break end
 end
 finish()
 -- leave BizHawk as we found it: its own save (it writes the save to disk on
