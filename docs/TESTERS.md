@@ -67,8 +67,9 @@ Controls
 
 The launcher has **Start game**, the switch between **Enhanced** (the port's
 additions) and **Classic** (the original game, unchanged), **Settings** and
-**Quit**. In the game, Settings are in the menu too (Esc, Select, Back or ≡), on five pages: Game,
-Display, Sound, Battles and Controls. Turn pages with the shoulder buttons,
+**Quit**. In the game, Settings are in the menu too (Esc, Select, Back or ≡), on six pages: Game,
+Display, Sound, Battles, Controls, and Buttons (what each button and key does, with your
+gamepad's own names for them). Turn pages with the shoulder buttons,
 Tab, or a tap on a page's name; the line at the bottom says what the
 highlighted setting does. **Mode: Classic** (on the Game page) switches every
 addition off and gives you the original game.

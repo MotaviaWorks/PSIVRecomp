@@ -1000,14 +1000,17 @@ static const MenuItem CONTROL_ITEMS[] = {
      "phone's motor.", apply_rumble},
 };
 
-typedef struct { const char *name, *about; const MenuItem *items; int n; } MenuPage;
-#define PAGE(name, about, items) {name, about, items, (int)(sizeof items / sizeof items[0])}
+/* a page has settings, or (items NULL) shows something else: draw fills it */
+typedef struct { const char *name, *about; const MenuItem *items; int n; void (*draw)(float W, float H); } MenuPage;
+#define PAGE(name, about, items) {name, about, items, (int)(sizeof items / sizeof items[0]), NULL}
+static void draw_buttons_page(float W, float H);
 static const MenuPage PAGES[] = {
     PAGE("Game", "Classic or Enhanced, and the text.", GAME_ITEMS),
     PAGE("Display", "Fullscreen, widescreen, and how the pixels are drawn.", DISPLAY_ITEMS),
     PAGE("Sound", "The volume, the music and the sound effects.", SOUND_ITEMS),
     PAGE("Battles", "The battle menus, and what's drawn over battles.", BATTLE_ITEMS),
     PAGE("Controls", "Clicks and taps, and rumble.", CONTROL_ITEMS),
+    {"Buttons", "What each button and key does.", NULL, 0, draw_buttons_page},
 };
 #define N_PAGES (int)(sizeof PAGES / sizeof PAGES[0])
 #define MAX_ROWS 5                    /* the longest page: the panel keeps its size */
@@ -1079,6 +1082,12 @@ static int menu_is_open(void) { return menu_screen != MENU_CLOSED; }
 
 static const MenuPage *page_now(void) { return &PAGES[menu_page]; }
 
+/* into Settings: the page's first setting, or the page bar on a page without any */
+static void settings_enter(void) {
+    menu_screen = MENU_SETTINGS;
+    menu_sel = page_now()->n ? 0 : -1;
+}
+
 /* the next or previous settings page (shoulder buttons, Tab, the page bar) */
 static void menu_turn_page(int dir) {
     if (menu_screen != MENU_SETTINGS) return;
@@ -1102,7 +1111,7 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
         if (ok) {
             if (menu_sel == L_START) launcher_go = 1;
             else if (menu_sel == L_MODE) item_change(MODE_ITEM, 1);
-            else if (menu_sel == L_SETTINGS) { menu_screen = MENU_SETTINGS; menu_sel = 0; }
+            else if (menu_sel == L_SETTINGS) settings_enter();
             else quit(0);
         }
         return;
@@ -1116,8 +1125,8 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
             else item_change(&page_now()->items[menu_sel], right ? 1 : -1);
         }
         if (ok) {
-            if (menu_sel < 0) menu_sel = 0;
-            else item_change(&page_now()->items[menu_sel], 1);
+            if (menu_sel >= 0) item_change(&page_now()->items[menu_sel], 1);
+            else if (n) menu_sel = 0;
         }
         return;
     }
@@ -1128,7 +1137,7 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
     if (!ok) return;
     if (menu_screen == MENU_MAIN) {
         if (menu_sel == 0) menu_close();
-        else if (menu_sel == 1) { menu_screen = MENU_SETTINGS; menu_sel = 0; }
+        else if (menu_sel == 1) settings_enter();
         else { menu_screen = MENU_QUIT; menu_sel = 1; }               /* default: No */
     } else {
         if (menu_sel == 0) quit(0);
@@ -1272,7 +1281,7 @@ static const char *pad_button_name(SDL_GamepadButton b) {
 static const char *pad_shoulder_names(void) {
     switch (pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_UNKNOWN) {
     case SDL_GAMEPAD_TYPE_XBOX360:
-    case SDL_GAMEPAD_TYPE_XBOXONE: return "LB / RB";
+    case SDL_GAMEPAD_TYPE_XBOXONE: return MOBILE ? "L1 / R1" : "LB / RB";   /* handhelds pass for an Xbox pad */
     case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
     case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR: return "L / R";
     default: return "L1 / R1";
@@ -1283,6 +1292,13 @@ static const char *pad_shoulder_names(void) {
 static void menu_hint(char *out, size_t n) {
     const char *sep = m_ttf ? "   \xC2\xB7   " : "   ";
     int settings_screen = menu_screen == MENU_SETTINGS;
+    if (settings_screen && !page_now()->n) {             /* a page to read: only the pages to turn */
+        if (touch_visible()) snprintf(out, n, "Tap a page's name%sTap outside to go back", sep);
+        else if (menu_last_pad && pad)
+            snprintf(out, n, "Left / Right or %s page%s%s back", pad_shoulder_names(), sep, pad_button_name(pad_of[IN_B]));
+        else snprintf(out, n, "Left / Right or Tab page%sEsc back", sep);
+        return;
+    }
     if (menu_screen == MENU_LAUNCHER) {
         if (touch_visible()) snprintf(out, n, "Tap to choose");
         else snprintf(out, n, "%s select%sLeft / Right switch the mode",
@@ -1322,18 +1338,30 @@ static void draw_settings(float W, float H, const char *hint) {
     m_arrow(bx0 + 7.5f, (by0 + by1) / 2, 4.0f, 3, C_SOFT);
     m_text(bx0 + 12.0f, by0 + 9.1f, 4.2f, "Back", C_VALUE, 0);
     m_hit(bx0, by0, bx1, by1, HIT_BACK, 0);
-    /* the pages */
-    float x = pad, t0 = 26.0f, t1 = 40.0f;
+    /* the pages: their names smaller if they wouldn't fit across (SDL's 8x8 font) */
+    float x = pad, t0 = 26.0f, t1 = 40.0f, cap = 4.6f, room = 14.0f;
+    for (;;) {
+        float all = 3.0f * (N_PAGES - 1);
+        for (int i = 0; i < N_PAGES; i++) all += m_width(PAGES[i].name, cap) + room;
+        if (all <= W - 2 * pad || cap <= 3.0f) break;
+        cap -= 0.2f;
+        room = 10.0f;
+    }
     for (int i = 0; i < N_PAGES; i++) {
-        float w = m_width(PAGES[i].name, 4.6f) + 14.0f;
+        float w = m_width(PAGES[i].name, cap) + room;
         int on = i == menu_page, focus = on && menu_sel < 0;
         if (focus) m_box(x, t0, x + w, t1, 7.0f, C_GOLD, C_GOLD_LOW, 255);
         else if (on) m_box(x, t0, x + w, t1, 7.0f, 0x3A4C8E, 0x2A3870, 255);
-        m_text(x + w / 2, t0 + 9.8f, 4.6f, PAGES[i].name, focus ? C_INK : on ? C_TEXT : C_SOFT, 2);
+        m_text(x + w / 2, t0 + 9.8f, cap, PAGES[i].name, focus ? C_INK : on ? C_TEXT : C_SOFT, 2);
         m_hit(x, t0, x + w, t1, HIT_PAGE, i);
         x += w + 3.0f;
     }
     m_box(pad, 44.5f, W - pad, 45.0f, 0, C_RULE, C_RULE, 80);
+    if (pg->draw) {                                  /* a page without settings draws its own */
+        pg->draw(W, H);
+        m_text(pad + 2.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
+        return;
+    }
     /* its settings: the label, the value; the highlighted one with arrows */
     for (int i = 0; i < pg->n; i++) {
         const MenuItem *it = &pg->items[i];
@@ -1360,6 +1388,122 @@ static void draw_settings(float W, float H, const char *hint) {
                       : item_disabled(&pg->items[menu_sel]) ? CLASSIC_NOTE : pg->items[menu_sel].help;
     m_wrap(pad + 2.0f, 138.0f, W - 2 * pad - 4.0f, 8.6f, 2, 4.0f, about, C_VALUE, 0);
     m_text(pad + 2.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
+}
+
+/* ------------------------------------------------------------------ the Buttons page */
+/* A button by the name printed on this gamepad (with none connected: an Xbox
+ * pad's). Handhelds pass for an Xbox pad but print L1 / R1 on their shoulders. */
+static const char *pad_label(SDL_GamepadButton b) {
+    SDL_GamepadType t = pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_STANDARD;
+    int ps = t == SDL_GAMEPAD_TYPE_PS3 || t == SDL_GAMEPAD_TYPE_PS4 || t == SDL_GAMEPAD_TYPE_PS5;
+    int nin = t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO || t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT ||
+              t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT || t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR;
+    int xbox = !MOBILE && (t == SDL_GAMEPAD_TYPE_XBOX360 || t == SDL_GAMEPAD_TYPE_XBOXONE);
+    switch (b) {
+    case SDL_GAMEPAD_BUTTON_INVALID: return m_ttf ? "\xE2\x80\x94" : "-";   /* none: a dash */
+    case SDL_GAMEPAD_BUTTON_SOUTH:
+    case SDL_GAMEPAD_BUTTON_EAST:
+    case SDL_GAMEPAD_BUTTON_WEST:
+    case SDL_GAMEPAD_BUTTON_NORTH:
+        switch (pad ? SDL_GetGamepadButtonLabel(pad, b) : SDL_GetGamepadButtonLabelForType(t, b)) {
+        case SDL_GAMEPAD_BUTTON_LABEL_A: return "A";
+        case SDL_GAMEPAD_BUTTON_LABEL_B: return "B";
+        case SDL_GAMEPAD_BUTTON_LABEL_X: return "X";
+        case SDL_GAMEPAD_BUTTON_LABEL_Y: return "Y";
+        case SDL_GAMEPAD_BUTTON_LABEL_CROSS: return "Cross";
+        case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE: return "Circle";
+        case SDL_GAMEPAD_BUTTON_LABEL_SQUARE: return "Square";
+        case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE: return "Triangle";
+        default: break;
+        }
+        return b == SDL_GAMEPAD_BUTTON_SOUTH ? "South" : b == SDL_GAMEPAD_BUTTON_EAST ? "East"
+             : b == SDL_GAMEPAD_BUTTON_WEST ? "West" : "North";
+    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return nin ? "L" : xbox ? "LB" : "L1";
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return nin ? "R" : xbox ? "RB" : "R1";
+    case SDL_GAMEPAD_BUTTON_START: return ps ? "Options" : nin ? "+" : "Start";
+    case SDL_GAMEPAD_BUTTON_BACK:
+        return t == SDL_GAMEPAD_TYPE_PS5 ? "Create" : ps ? "Share" : nin ? "-"
+             : xbox ? (t == SDL_GAMEPAD_TYPE_XBOXONE ? "View" : "Back") : "Select";
+    case SDL_GAMEPAD_BUTTON_LEFT_STICK: return "L3";
+    case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return "R3";
+    default: {
+        const char *s = SDL_GetGamepadStringForButton(b);              /* SDL's own name for the rest */
+        return s ? s : "?";
+    }
+    }
+}
+
+/* a bound key by its name on the keyboard (Return is Enter on most) */
+static void key_label(int in, char *out, size_t n) {
+    const char *s = key_of[in] != SDL_SCANCODE_UNKNOWN ? SDL_GetScancodeName(key_of[in]) : "";
+    if (!*s) s = m_ttf ? "\xE2\x80\x94" : "-";
+    else if (!strcmp(s, "Return")) s = "Enter";
+    snprintf(out, n, "%s", s);
+}
+
+/* what each button does: the game's buttons (the Mega Drive's A, B and C),
+ * then the port's own; this gamepad's names, and the keyboard (on a phone or a
+ * handheld, the on-screen pad) */
+static void draw_buttons_page(float W, float H) {
+    const float pad_x = 10.0f, x_what = pad_x + 7.0f, x_pad = 150.0f, x_other = 220.0f;
+    const char *dash = m_ttf ? "\xE2\x80\x94" : "-";
+    (void)H;
+    typedef struct { const char *what, *md, *gp; char other[48]; } Row;
+    Row r[8];
+    int n = 0;
+    memset(r, 0, sizeof r);
+    r[n] = (Row){"Move", NULL, "D-pad, left stick", ""};
+    if (MOBILE) snprintf(r[n].other, sizeof r[n].other, "On-screen pad");
+    else if (key_of[IN_UP] == SDL_SCANCODE_UP && key_of[IN_DOWN] == SDL_SCANCODE_DOWN &&
+             key_of[IN_LEFT] == SDL_SCANCODE_LEFT && key_of[IN_RIGHT] == SDL_SCANCODE_RIGHT)
+        snprintf(r[n].other, sizeof r[n].other, "Arrow keys");
+    else {
+        char k[4][16];
+        const int order[4] = {IN_UP, IN_LEFT, IN_DOWN, IN_RIGHT};             /* as W A S D */
+        for (int i = 0; i < 4; i++) key_label(order[i], k[i], sizeof k[i]);
+        snprintf(r[n].other, sizeof r[n].other, "%s %s %s %s", k[0], k[1], k[2], k[3]);
+    }
+    n++;
+    static const struct { const char *what, *md; int in; } GAME[] = {
+        {"Talk, check, OK", "C", IN_C}, {"Cancel, back", "B", IN_B}, {"The game's menu", "A", IN_A}, {"Start", NULL, IN_START},
+    };
+    for (int i = 0; i < 4; i++, n++) {
+        r[n] = (Row){GAME[i].what, GAME[i].md, pad_label(pad_of[GAME[i].in]), ""};
+        if (MOBILE) snprintf(r[n].other, sizeof r[n].other, "%s", GAME[i].md ? GAME[i].md : "Start");
+        else key_label(GAME[i].in, r[n].other, sizeof r[n].other);
+    }
+    r[n] = (Row){"This menu", NULL, pad_label(SDL_GAMEPAD_BUTTON_BACK), ""};
+    snprintf(r[n++].other, sizeof r[0].other, "%s", MOBILE ? "Top-left button, Back" : "Esc");
+    r[n] = (Row){"Fast forward (hold)", NULL, pad_label(pad_of[IN_FF]), ""};
+    if (MOBILE) snprintf(r[n].other, sizeof r[n].other, "%s", dash);
+    else key_label(IN_FF, r[n].other, sizeof r[n].other);
+    n++;
+    if (!MOBILE) {
+        r[n] = (Row){"Pause, fullscreen, screenshot", NULL, dash, ""};
+        snprintf(r[n++].other, sizeof r[0].other, "F10, F11, F12");
+    }
+
+    m_text(x_pad, 54.0f, 3.6f, "Gamepad", C_SOFT, 0);
+    m_text(x_other, 54.0f, 3.6f, MOBILE ? "Touch" : "Keyboard", C_SOFT, 0);
+    for (int i = 0; i < n; i++) {
+        float a = 57.5f + 8.6f * (float)i, base = a + 6.3f;
+        if (i & 1) m_box(pad_x, a, W - pad_x, a + 8.6f, 3.0f, 0x26346A, 0x22305F, 110);
+        m_text(x_what, base, 4.2f, r[i].what, C_TEXT, 0);
+        if (r[i].md) {                               /* the game's own name for it: the Mega Drive's button */
+            char md[16];
+            snprintf(md, sizeof md, "(%s)", r[i].md);
+            m_text(x_what + m_width(r[i].what, 4.2f) + 2.5f, base, 3.6f, md, C_DIM, 0);
+        }
+        m_text(x_pad, base, 4.2f, r[i].gp, C_GOLD, 0);
+        m_text(x_other, base, 4.2f, r[i].other, C_VALUE, 0);
+    }
+    m_box(pad_x, 127.5f, W - pad_x, 128.0f, 0, C_RULE, C_RULE, 80);
+    m_wrap(pad_x + 2.0f, 138.0f, W - 2 * pad_x - 4.0f, 8.6f, 2, 4.0f,
+           MOBILE ? "Tap the field to walk there; touch the screen to bring the on-screen pad back. "
+                    "Change the buttons in psiv.ini, under [pad]."
+                  : "Mouse: click the field to walk there, or a person to talk; a right click is Cancel. "
+                    "Change the keys and buttons in psiv.ini, under [keys] and [pad].",
+           C_VALUE, 0);
 }
 
 /* the launcher: its title under the emblem, the choices, what the highlighted
@@ -1402,7 +1546,7 @@ static void draw_launcher(float W, float H, const char *hint) {
                                : "Start game asks for your copy of Phantasy Star IV (USA): a .bin, .md, .gen or .smd file, or the .zip it came in.")
         : menu_sel == L_MODE ? (classic ? "Classic: the original game, unchanged. Every addition is off."
                                 : "Enhanced: modern text and battle menus, widescreen, battle depth and effects, and the port's other additions.")
-        : menu_sel == L_SETTINGS ? "The display, sound, battles and controls, on five pages."
+        : menu_sel == L_SETTINGS ? "The display, sound, battles and controls, and what each button does."
         : "Leave the game.";
     float ab = y0 + 6.0f + row * N_LAUNCHER + 9.5f;
     m_wrap(cx - 95.0f, ab, 190.0f, 7.6f, 2, 3.8f, about, C_VALUE, 1);
@@ -1543,7 +1687,7 @@ static void menu_tap(float rx, float ry) {
             if ((h->index == 1) != classic_mode()) item_change(MODE_ITEM, 1);
         } else if (h->kind == HIT_PAGE) {
             menu_page = h->index;
-            menu_sel = 0;
+            menu_sel = page_now()->n ? 0 : -1;
         } else if (menu_screen == MENU_SETTINGS) {   /* a setting: a step on (or back, left of its value) */
             menu_sel = h->index;
             item_change(&page_now()->items[h->index], h->kind == HIT_STEP_BACK ? -1 : 1);
@@ -1981,7 +2125,7 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         if (test_menu_settings) {
             menu_screen = MENU_SETTINGS;
             menu_page = test_menu_page >= 0 && test_menu_page < N_PAGES ? test_menu_page : 0;
-            menu_sel = test_menu_row >= -1 && test_menu_row < page_now()->n ? test_menu_row : 0;
+            menu_sel = test_menu_row >= -1 && test_menu_row < page_now()->n ? test_menu_row : page_now()->n ? 0 : -1;
         }
     }
     if (paused || menu_is_open()) rumble_off();          /* the game holds: so does the rumble */
