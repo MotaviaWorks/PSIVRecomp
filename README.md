@@ -50,6 +50,7 @@ is committed in `res/fonts/` with its licence.
 | Linux | `cmake -S . -B build/linux -G Ninja && ninja -C build/linux` (system SDL3) | below |
 | Linux, portable | SDL3 built static from source, then `-DPSIV_PORTABLE=ON -DPSIV_TOOLS=OFF -DCMAKE_PREFIX_PATH=<its prefix>` | `python3 tools/package.py linux <build> dist` |
 | Android | `tools/build_android.sh <SDL3 source>` on Linux (SDK, NDK r30, build-tools 36, JDK 17; no Gradle) | the `.apk` it makes |
+| macOS | SDL3 built static from source with `-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0`, then the same for the port with `-DPSIV_PORTABLE=ON -DPSIV_TOOLS=OFF -DCMAKE_PREFIX_PATH=<its prefix>` | `python3 tools/package.py macos <build> dist` (on the Mac: sips, iconutil, codesign, ditto) |
 
 - **The launcher:** the app opens on it -- Start game, the mode (Enhanced /
   Classic, a switch), Settings (the same five pages as in the game), Quit --
@@ -77,8 +78,12 @@ is committed in `res/fonts/` with its licence.
   when a gamepad or key is used; Back opens the menu. The APK is signed with
   `~/.psiv-keys/psiv-alpha.jks` (made on first build, password beside it):
   keep that key, since Android only installs updates signed with the same one.
-- **macOS:** not packaged yet. The code is ready for it (an app bundle's
-  home is the pref path); it needs a Mac to build and sign.
+- **macOS (Apple Silicon, 11+):** `PSIV Recomp.app`. Its home is the pref
+  path, `~/Library/Application Support/PSIV Recomp`, since a downloaded app
+  runs from a read-only copy (App Translocation). The fonts sit in
+  `Contents/Resources`, which is SDL's base path in a bundle. The app is
+  signed ad hoc, not notarized. `runtime/coro_arm64.S` assembles for Mach-O
+  too.
 - `docs/TESTERS.md` is the README that goes into every package.
 
 ### Controls

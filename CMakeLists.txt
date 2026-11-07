@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # The version shown in the menu, the log and crash reports: base + commit
-set(PSIV_VERSION_BASE "0.1.0-alpha")
+set(PSIV_VERSION_BASE "0.1.1-alpha")
 set(PSIV_VERSION "" CACHE STRING "version string (empty: ${PSIV_VERSION_BASE} + the git commit)")
 if(PSIV_VERSION)
   set(PSIV_VERSION_STRING ${PSIV_VERSION})

@@ -1,14 +1,24 @@
-/* The game's own stack (coro.h), AArch64 (Android, Linux).
+/* The game's own stack (coro.h), AArch64 (Android, Linux, macOS).
  *
  * coro_switch(void **save, void *load): x19-x30 and d8-d15 go onto this
  * stack (176 bytes, 16-aligned), its pointer into *save; then the same come
  * off the stack at `load`, and ret goes to the x30 found there. coro_prepare
  * (coro.c) lays out a first frame in this shape. */
+#ifdef __APPLE__
+/* Mach-O: C names carry a leading underscore; no .type/.size or ELF notes */
+#define SYM(name)       _##name
+#define FUNC(name)
+#define END(name)
+#else
+#define SYM(name)       name
+#define FUNC(name)      .type name, %function
+#define END(name)       .size name, .-name
+#endif
     .text
-    .globl  coro_switch
-    .type   coro_switch, %function
+    .globl  SYM(coro_switch)
+    FUNC(coro_switch)
     .p2align 2
-coro_switch:
+SYM(coro_switch):
     sub     sp, sp, #176
     stp     x19, x20, [sp, #0]
     stp     x21, x22, [sp, #16]
@@ -35,16 +45,18 @@ coro_switch:
     ldp     d14, d15, [sp, #144]
     add     sp, sp, #176
     ret
-    .size   coro_switch, .-coro_switch
+    END(coro_switch)
 
 /* the first switch to a new stack returns here: entry(arg), from x19 and x20 */
-    .globl  coro_start
-    .type   coro_start, %function
+    .globl  SYM(coro_start)
+    FUNC(coro_start)
     .p2align 2
-coro_start:
+SYM(coro_start):
     mov     x0, x20
     blr     x19
     brk     #0
-    .size   coro_start, .-coro_start
+    END(coro_start)
 
+#ifndef __APPLE__
     .section .note.GNU-stack,"",%progbits
+#endif
