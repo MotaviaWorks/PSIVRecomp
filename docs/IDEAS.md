@@ -532,7 +532,13 @@ within ~1-2 dB of the original song, loops sample-exact with no click.
   decoders: ask before fetching); a fade-in to follow the driver's ($FF5028);
   the menu could list which songs have a file.
 
-### Instrument banks from SNES games you own (PsiLok, 2026-11-04) -- v1: Lufia II (`runtime/snesbank.c`)
+### Instrument banks from SNES games you own (PsiLok, 2026-11-04) -- v1: Lufia II (`runtime/snesbank.c`) -- PAUSED 2026-11-06
+Taken out of `psiv.ini` and the README's feature list for now (PsiLok). The
+code stays: `PSIV_MUSIC_BANK=path/to/rom` in the environment turns it on in
+the app, `psiv_headless --algol-bank ROM` still renders it. To bring it back:
+the `enhance.music_bank` row in main_sdl.c's settings table and its read in
+apply_enhancements, and the README paragraph (git history, 2026-11-06).
+
 Players with a copy of a SNES game can have PSIV's music played on that
 game's instruments: decoded from their ROM at startup, nothing shipped (no
 samples from the internet). PsiLok's picks are in `custom soundtrack ideas/SNES/`

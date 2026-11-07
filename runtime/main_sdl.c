@@ -206,7 +206,6 @@ static Setting settings[] = {
     {"enhance.music", "original", "music: algol = the port's modern sound chip plays the game's music (new instruments, drums and reverb); original = the YM2612 and PSG"},
     {"enhance.click_walk", "on", "mouse: on = a click on the field walks the party there (a person or a chest: up to it, then C to talk or open); right click stops; with text up a click is C, a right click B; touch: a tap is a click; off = clicks and taps only work the system menu"},
     {"enhance.custom_music", "on", "your music: on = audio files in the music folder play in place of the game's songs (music/8F.wav, or named in music/music.ini; see runtime/music.h); off = the game's"},
-    {"enhance.music_bank", "", "with Algol: a SNES game you own whose instruments play the music instead of Algol's (the path to its ROM, e.g. Lufia II); empty = Algol's own"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
     {"enhance.battle_fx", "1", "attack and technique effects light the scene; sparks, flashes, embers, lens flares: 0 off, 1 subtle, 2 full"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
@@ -951,9 +950,10 @@ static void apply_enhancements(void) {
         path_in_home(dir, sizeof dir, "music");
         music_set_folder(!classic_mode() && SDL_strcasecmp(setting("enhance.custom_music"), "off") ? dir : NULL);
     }
-    /* the instrument bank: decoded from that ROM when the setting changes */
+    /* the instrument bank (paused 2026-11-06: no setting; PSIV_MUSIC_BANK=ROM
+     * brings it back for development): decoded from that ROM when it changes */
     static char bank_now[1100];
-    const char *bank = setting("enhance.music_bank");
+    const char *bank = SDL_getenv("PSIV_MUSIC_BANK") ? SDL_getenv("PSIV_MUSIC_BANK") : "";
     if (strcmp(bank, bank_now)) {
         char path[1100];
         if (!*bank || bank[0] == '/' || bank[0] == '\\' || bank[1] == ':') snprintf(path, sizeof path, "%s", bank);

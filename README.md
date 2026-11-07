@@ -177,16 +177,10 @@ original game, unchanged; **Enhanced** turns on the additions:
   (`PSIV_ALGOL_LOG=1` lists them) and the drums of any song (`song 8F =
   rock` or `= standard`); `psiv_headless --algol` renders with it.
 
-  **Instruments from a SNES game you own** (`enhance.music_bank` in
-  `psiv.ini`: the path to its ROM): Algol plays the music with that game's
-  own instruments and drums instead of its synthesizers, decoded from your
-  copy at startup (`runtime/snesbank.c`: the S-DSP's BRR decoder, each
-  sample with its loop, envelope and the game's tuning). Nothing from the
-  game ships. Known so far: **Lufia II** (37 instruments). Which sample plays
-  what can be changed in `algol.ini` (`bank lead = 35`, optionally a
-  transposition in semitones: `bank bass = 26 -12`; `PSIV_ALGOL_LOG=1` lists
-  them); `psiv_headless --algol-bank ROM` renders with it. Adding a game
-  means finding how it stores its samples: `tools/snes/sound_ram.py`.
+- **SNES instrument banks -- paused** (2026-11-06): not in `psiv.ini` for
+  now; `PSIV_MUSIC_BANK=ROM` turns it on for development and
+  `psiv_headless --algol-bank ROM` still renders it (`runtime/snesbank.c`,
+  docs/IDEAS.md).
 
 - **First-person dungeons -- paused** (2026-11-05): not in the menu or
   `psiv.ini` until it plays well; `PSIV_FIRST_PERSON=1` turns it on for
