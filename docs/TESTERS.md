@@ -120,6 +120,10 @@ Credits and legal
 Phantasy Star is a trademark of SEGA. This is an unofficial fan project and is
 not affiliated with or endorsed by SEGA. You need your own copy of the game.
 
+PSIV Recomp is Copyright (C) 2026 MotaviaWorks, free software under the GNU
+General Public License v3.0 (`LICENSE.txt`), with no warranty. Its source:
+https://github.com/MotaviaWorks/PSIVRecomp
+
 Built with SDL3 (zlib), ymfm (BSD-3-Clause), floooh's z80.h (zlib),
 stb_truetype (MIT / public domain) and the Noto Sans font (SIL OFL 1.1). Their
 licences are in the `LICENSES` folder.

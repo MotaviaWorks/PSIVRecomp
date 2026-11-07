@@ -68,6 +68,10 @@ def stage(kind, build, folder, sdl_license):
     with open(os.path.join(folder, 'README.txt'), 'w', encoding='utf-8', newline=nl) as f:
         f.write(readme)
     licenses(os.path.join(folder, 'LICENSES'), sdl_license)
+    # the port's own licence (GPL-3.0): it travels with every copy
+    text = open(os.path.join(ROOT, 'LICENSE'), encoding='utf-8').read()
+    with open(os.path.join(folder, 'LICENSE.txt'), 'w', encoding='utf-8', newline=nl) as f:
+        f.write(text)
 
 
 def main():

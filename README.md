@@ -461,3 +461,14 @@ Windows (`asl` on Linux) and fails unless the result is byte-identical.
 
 The disassembly is for informational and educational use; commercial use is
 prohibited by its author.
+
+## License
+
+PSIV Recomp is Copyright (C) 2026 MotaviaWorks and is free software under the
+[GNU General Public License v3.0](LICENSE). It contains none of the game:
+Phantasy Star is a trademark of SEGA, this is an unofficial fan project not
+affiliated with or endorsed by SEGA, and players supply their own ROM.
+
+The libraries it builds with keep their own licences (copies ship in each
+package's `LICENSES` folder): SDL3 (zlib), ymfm (BSD-3-Clause), floooh's
+`z80.h` (zlib), stb_truetype (MIT / public domain) and Noto Sans (SIL OFL 1.1).
