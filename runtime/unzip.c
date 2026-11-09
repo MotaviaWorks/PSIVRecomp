@@ -220,3 +220,80 @@ size_t unzip_rom(const uint8_t *zip, size_t n, uint8_t *out, size_t cap, char *e
     snprintf(err, errn, "the .zip holds no Mega Drive ROM (.md, .bin, .gen or .smd)");
     return 0;
 }
+
+/* ------------------------------------------------------------------ any archive: its files */
+/* the end-of-directory record: the number of entries and where the directory starts */
+static int directory(const uint8_t *zip, size_t n, size_t *entries, size_t *dir) {
+    for (size_t i = n >= 22 ? n - 22 : 0; n >= 22; i--) {
+        if (le32(zip + i) == 0x06054B50) {
+            *entries = le16(zip + i + 10);
+            *dir = le32(zip + i + 16);
+            return 1;
+        }
+        if (i == 0 || n - i > 22 + 65535) break;
+    }
+    return 0;
+}
+
+static int ends_with(const char *name, size_t nlen, const char *suffix) {
+    size_t s = strlen(suffix);
+    if (nlen < s) return 0;
+    for (size_t k = 0; k < s; k++)
+        if ((name[nlen - s + k] | 0x20) != (suffix[k] | 0x20)) return 0;
+    return nlen == s || name[nlen - s - 1] == '/';          /* the whole last part(s) of the path */
+}
+
+int unzip_find(const uint8_t *zip, size_t n, const char *suffix, char *name, size_t namen) {
+    size_t entries, dir;
+    if (!directory(zip, n, &entries, &dir)) return 0;
+    for (size_t e = 0, p = dir; e < entries; e++) {
+        if (p + 46 > n || le32(zip + p) != 0x02014B50) return 0;
+        size_t nlen = le16(zip + p + 28), xlen = le16(zip + p + 30), clen = le16(zip + p + 32);
+        const char *nm = (const char *)(zip + p + 46);
+        if (p + 46 + nlen > n) return 0;
+        if (ends_with(nm, nlen, suffix) && nlen < namen) {
+            memcpy(name, nm, nlen);
+            name[nlen] = 0;
+            return 1;
+        }
+        p += 46 + nlen + xlen + clen;
+    }
+    return 0;
+}
+
+int unzip_each(const uint8_t *zip, size_t n, uint8_t *buf, size_t cap,
+               int (*fn)(const char *name, size_t nlen, const uint8_t *data, size_t size, void *ud), void *ud,
+               char *err, size_t errn) {
+    size_t entries, dir;
+    if (!directory(zip, n, &entries, &dir)) { snprintf(err, errn, "the .zip is damaged or incomplete"); return -1; }
+    int count = 0;
+    for (size_t e = 0, p = dir; e < entries; e++) {
+        if (p + 46 > n || le32(zip + p) != 0x02014B50) { snprintf(err, errn, "the .zip is damaged"); return -1; }
+        uint32_t method = le16(zip + p + 10), flags = le16(zip + p + 8);
+        size_t csize = le32(zip + p + 20), usize = le32(zip + p + 24);
+        size_t nlen = le16(zip + p + 28), xlen = le16(zip + p + 30), clen = le16(zip + p + 32);
+        size_t local = le32(zip + p + 42);
+        const char *name = (const char *)(zip + p + 46);
+        p += 46 + nlen + xlen + clen;
+        if (p > n) { snprintf(err, errn, "the .zip is damaged"); return -1; }
+        if (!nlen || name[nlen - 1] == '/') continue;                         /* a folder */
+        if (flags & 1) { snprintf(err, errn, "the .zip is encrypted"); return -1; }
+        if (usize > cap) { snprintf(err, errn, "the .zip holds a file too big (%.*s)", (int)nlen, name); return -1; }
+        if (local + 30 > n || le32(zip + local) != 0x04034B50) { snprintf(err, errn, "the .zip is damaged"); return -1; }
+        size_t data = local + 30 + le16(zip + local + 26) + le16(zip + local + 28);
+        if (data > n || csize > n - data) { snprintf(err, errn, "the .zip is damaged"); return -1; }
+        if (method == 0) {
+            if (csize != usize) { snprintf(err, errn, "the .zip is damaged"); return -1; }
+            memcpy(buf, zip + data, usize);
+        } else if (method == 8) {
+            Inflate s = {zip + data, zip + data + csize, 0, 0, 0, buf, 0, usize};
+            if (!inflate_raw(&s) || s.len != usize) { snprintf(err, errn, "the .zip is damaged"); return -1; }
+        } else {
+            snprintf(err, errn, "the .zip uses a compression this port can't read (method %u)", (unsigned)method);
+            return -1;
+        }
+        count++;
+        if (!fn(name, nlen, buf, usize, ud)) break;
+    }
+    return count;
+}

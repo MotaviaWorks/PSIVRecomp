@@ -27,6 +27,8 @@ void scenevox_set_enabled(int on);
 /* the pack: its index's contents, and a function that reads a clip by its
  * file name (malloc'd contents, or NULL); the number of pages it voices */
 int  scenevox_load(const char *index, size_t len, void *(*read)(const char *name, size_t *len));
+int  scenevox_pages(void);                 /* the pages the loaded pack voices (0: none) */
+void scenevox_unload(void);                /* forget the pack (before loading another) */
 
 void scenevox_frame(const VdpLine *lines, int w, int h);   /* once a frame, after it is drawn */
 void scenevox_mix(float *samples, int frames);

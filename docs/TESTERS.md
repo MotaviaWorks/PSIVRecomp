@@ -131,7 +131,9 @@ Not in this alpha
 - Save states: the game's own saves only. (Rewind goes back up to two minutes, ten
   seconds a press: Backspace, the left shoulder, or "Go back 10 seconds" in the menu.)
 - The Algol music chip is an experiment (Settings > Sound > Music).
-- Voiced story scenes and remixed music: optional packs, coming separately.
+- Voiced story scenes and remixed music: optional packs, separate downloads. To
+  install the voice pack, choose Settings > Sound > Voice pack and pick its
+  `.zip`, or put the `.zip` in the game's folder before starting.
 
 
 Credits and legal

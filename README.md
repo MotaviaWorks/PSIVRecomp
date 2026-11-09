@@ -202,8 +202,15 @@ original game, unchanged; **Enhanced** turns on the additions:
   same setting plays voiced story scenes from an optional pack in
   `voices/scenes` (`runtime/scenevox.c`: each line is found by the text on
   screen, and a flashback turns the scene to sepia); the pack is not part of
-  the port. **Auto-advance** (V / the north button) moves a voiced scene on
-  once each line is said. `psiv_headless --voices DIR` / `--scene-voices DIR`.
+  the port. **Voice pack** (Sound page) installs one: choose its `.zip` in the
+  file picker (Android's too) and it is unpacked into `voices/scenes` and
+  played at once; a pack's `.zip` left in the home folder installs itself at
+  the start, once (`voices/scenes/pack.txt` remembers it). Only `.wav` and
+  `.txt` files under the folder holding `scenes.txt` are written
+  (`unzip_each` in `runtime/unzip.c`); `--test-voice-pack FILE` answers the
+  picker for tests. **Auto-advance** (V / the north button) moves a voiced
+  scene on once each line is said. `psiv_headless --voices DIR` /
+  `--scene-voices DIR`.
 - **Living water** and **trees** (Display page: on / off each): the sea,
   rivers and pools get ripples, light, glints and foam, and the field's
   trees sway in the breeze with light flickering through their leaves, both

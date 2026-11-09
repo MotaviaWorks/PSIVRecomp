@@ -149,6 +149,135 @@ static void *scene_clip(const char *name, size_t *len) {
     return copy;
 }
 
+/* ------------------------------------------------------------------ the voice pack
+ * The voiced scenes' pack (scenevox.h) is a .zip of voices/scenes -- its index,
+ * scenes.txt, and the clips it names -- unpacked into the home folder: chosen
+ * in Settings > Sound > Voice pack, or dropped into the home folder (installed
+ * at the start; voices/scenes/pack.txt remembers the .zip, so it is unpacked
+ * once). Only .wav and .txt files under the folder holding scenes.txt are
+ * written, each name checked to stay inside voices/scenes. */
+#define PACK_FILE_MAX (16u << 20)            /* the biggest file a pack may hold */
+
+typedef struct { char prefix[300]; size_t plen; int files; char err[400]; } PackJob;
+
+static int pack_file(const char *name, size_t nlen, const uint8_t *data, size_t size, void *ud) {
+    PackJob *j = ud;
+    if (nlen <= j->plen || SDL_strncasecmp(name, j->prefix, j->plen)) return 1;      /* not in the pack's folder */
+    char rel[300];
+    size_t rlen = nlen - j->plen;
+    if (rlen >= sizeof rel) return 1;
+    memcpy(rel, name + j->plen, rlen);
+    rel[rlen] = 0;
+    for (char *c = rel; *c; c++)
+        if (*c == '\\') *c = '/';
+    const char *dot = strrchr(rel, '.');
+    if (rel[0] == '/' || strstr(rel, "..") || strchr(rel, ':') || !dot ||
+        (SDL_strcasecmp(dot, ".wav") && SDL_strcasecmp(dot, ".txt")))
+        return 1;                                                                    /* never outside voices/scenes */
+    char sub[400], path[1400];
+    snprintf(sub, sizeof sub, "voices/scenes/%s", rel);
+    path_in_home(path, sizeof path, sub);
+    char *slash = strrchr(path, '/');
+    if (slash) { *slash = 0; SDL_CreateDirectory(path); *slash = '/'; }
+    FILE *f = fopen(path, "wb");
+    int ok = f && fwrite(data, 1, size, f) == size;
+    if (f && fclose(f)) ok = 0;
+    if (!ok) { snprintf(j->err, sizeof j->err, "couldn't write %s", path); return 0; }
+    j->files++;
+    return 1;
+}
+
+/* the installed pack, loaded (again): the pages it voices */
+static int load_scene_pack(void) {
+    char idx[1200];
+    path_in_home(idx, sizeof idx, "voices/scenes/scenes.txt");
+    size_t n = 0;
+    void *d = SDL_LoadFile(idx, &n);
+    if (!d) return 0;
+    scenevox_unload();
+    int pages = scenevox_load(d, n, scene_clip);
+    SDL_free(d);
+    SDL_Log("voiced scenes: %d pages", pages);
+    return pages;
+}
+
+/* a voice pack's .zip (a path, or the Android picker's content URI) into
+ * voices/scenes, then loaded: the pages it voices; 0 if it failed, -1 if it
+ * isn't a voice pack (the reason in err either way) */
+static int voicepack_install(const char *path, char *err, size_t errn) {
+    size_t n = 0;
+    uint8_t *zip = SDL_LoadFile(path, &n);
+    if (!zip) { snprintf(err, errn, "That file couldn't be read (%s).", SDL_GetError()); return 0; }
+    char index[300];
+    if (!unzip_is_zip(zip, n) || (!unzip_find(zip, n, "scenes/scenes.txt", index, sizeof index) &&
+                                  !unzip_find(zip, n, "scenes.txt", index, sizeof index))) {
+        SDL_free(zip);
+        snprintf(err, errn, "That isn't a voice pack: a voice pack is a .zip with voices/scenes/scenes.txt in it.");
+        return -1;
+    }
+    PackJob *j = calloc(1, sizeof *j);
+    uint8_t *buf = malloc(PACK_FILE_MAX);
+    char zerr[300] = "";
+    int r = -1;
+    if (j && buf) {
+        j->plen = strlen(index) - strlen("scenes.txt");
+        memcpy(j->prefix, index, j->plen);
+        r = unzip_each(zip, n, buf, PACK_FILE_MAX, pack_file, j, zerr, sizeof zerr);
+    } else {
+        snprintf(zerr, sizeof zerr, "out of memory");
+    }
+    SDL_free(zip);
+    free(buf);
+    if (r < 0 || !j || j->err[0]) {
+        snprintf(err, errn, "The voice pack couldn't be installed: %s.", j && j->err[0] ? j->err : zerr);
+        free(j);
+        return 0;
+    }
+    SDL_Log("voice pack: %d files from %s", j->files, path);
+    free(j);
+    int pages = load_scene_pack();
+    if (pages <= 0) { snprintf(err, errn, "The voice pack was unpacked, but its index names no pages."); return 0; }
+    return pages;
+}
+
+/* a voice pack's .zip dropped into the home folder (or beside the program)
+ * installs itself at the start, once: 1 if one did (and is loaded) */
+static int voicepack_nearby(void) {
+    char dirs[2][1100], mark[1200], last[700] = "";
+    int nd = 0;
+    snprintf(dirs[nd++], sizeof dirs[0], "%s", home);
+    if (base_dir[0] && strcmp(base_dir, home)) snprintf(dirs[nd++], sizeof dirs[0], "%s", base_dir);
+    path_in_home(mark, sizeof mark, "voices/scenes/pack.txt");
+    FILE *f = fopen(mark, "rb");
+    if (f) { size_t k = fread(last, 1, sizeof last - 1, f); last[k] = 0; fclose(f); }
+    for (int d = 0; d < nd; d++) {
+        int count = 0;
+        char **names = SDL_GlobDirectory(dirs[d], "*.zip", SDL_GLOB_CASEINSENSITIVE, &count);
+        if (!names) continue;
+        for (int i = 0; i < count; i++) {
+            char path[1400], id[700], err[700];
+            SDL_PathInfo info;
+            snprintf(path, sizeof path, "%s%s", dirs[d], names[i]);
+            if (!SDL_GetPathInfo(path, &info) || info.type != SDL_PATHTYPE_FILE || info.size < 1024 ||
+                info.size > ((Sint64)1 << 30))
+                continue;
+            snprintf(id, sizeof id, "%s %lld\n", names[i], (long long)info.size);
+            if (!strcmp(id, last)) continue;                                 /* unpacked already */
+            int pages = voicepack_install(path, err, sizeof err);
+            if (pages > 0) {
+                f = fopen(mark, "wb");
+                if (f) { fputs(id, f); fclose(f); }
+                SDL_Log("voice pack: installed %s (%d pages)", path, pages);
+                SDL_free(names);
+                return 1;
+            }
+            if (pages == 0) SDL_Log("voice pack: %s: %s", path, err);           /* (not a pack: quietly) */
+        }
+        SDL_free(names);
+    }
+    return 0;
+}
+
 /* the party's battle voices (battlevox.h): yours in the home folder's
  * voices folder first, else the port's beside the program (or the APK's
  * assets), else a development build's res/voices */
@@ -172,15 +301,9 @@ static void load_voices(void) {
                 }
             }
     SDL_Log("voices: %d takes (%d of yours)", battlevox_count(), yours);
-    /* a voiced-scenes pack, if there is one: voices/scenes/scenes.txt */
-    char idx[1200];
-    path_in_home(idx, sizeof idx, "voices/scenes/scenes.txt");
-    size_t n = 0;
-    void *d = SDL_LoadFile(idx, &n);
-    if (d) {
-        SDL_Log("voiced scenes: %d pages", scenevox_load(d, n, scene_clip));
-        SDL_free(d);
-    }
+    /* a voiced-scenes pack, if there is one: a .zip just dropped in, or the
+     * one installed (voices/scenes/scenes.txt) */
+    if (!voicepack_nearby()) load_scene_pack();
 }
 
 static void find_home(void) {
@@ -694,6 +817,50 @@ static int pick_rom(uint8_t *rom, uint32_t *size) {
     return 1;
 }
 
+/* Settings > Sound > Voice pack: choose the pack's .zip, install it */
+static const char *test_voicepack;       /* testing: --test-voice-pack FILE answers its file dialog */
+
+static void voicepack_choose(void) {
+    dialog_done = 0;
+    dialog_path[0] = dialog_error[0] = 0;
+    if (test_voicepack || no_dialogs) {
+        if (test_voicepack) snprintf(dialog_path, sizeof dialog_path, "%s", test_voicepack);
+        dialog_done = 1;
+    } else {
+#if defined(SDL_PLATFORM_ANDROID)
+        SDL_ShowOpenFileDialog(on_pick, NULL, window, NULL, 0, NULL, false);
+#else
+        static const SDL_DialogFileFilter filters[] = {{"Voice pack (.zip)", "zip"}, {"All files", "*"}};
+        SDL_ShowOpenFileDialog(on_pick, NULL, window, filters, 2, NULL, false);
+#endif
+    }
+    while (!dialog_done) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e))
+            if (e.type == SDL_EVENT_QUIT) quit(0);
+        SDL_Delay(10);
+    }
+    char msg[1600];
+    if (dialog_error[0]) {                                   /* no picker on this system */
+        snprintf(msg, sizeof msg, "A file picker couldn't open (%s).\n\nPut the voice pack's .zip in this folder and "
+                 "start the game again: it installs itself.\n%s", dialog_error, home);
+        message(SDL_MESSAGEBOX_ERROR, msg, window);
+        return;
+    }
+    if (!dialog_path[0]) return;                             /* cancelled */
+    int pages = voicepack_install(dialog_path, msg, sizeof msg);
+    if (pages > 0) {
+        snprintf(msg, sizeof msg, "The voice pack is installed: %d page%s of the story voiced.\n\nVoices, on this "
+                 "page, turns them on and off (they're off in Classic mode). The .zip you chose isn't needed any "
+                 "more.", pages, pages == 1 ? "" : "s");
+        message(SDL_MESSAGEBOX_INFORMATION, msg, window);
+    } else {
+        message(SDL_MESSAGEBOX_ERROR, msg, window);
+    }
+}
+
+static const char *voicepack_label(void) { return scenevox_pages() > 0 ? "Installed" : "Install..."; }
+
 /* The ROM the game will run: looked for quietly at the start (the installed
  * copy, or a dump dropped in the folder), asked for when the game starts. */
 static uint8_t rom_buf[0x400000];
@@ -1112,6 +1279,8 @@ typedef struct {
     int enhancement;                  /* off (greyed) in Classic mode */
     const char *help;                 /* what it does */
     void (*apply)(void);
+    void (*action)(void);             /* a row that does something when chosen (no setting) */
+    const char *(*shown)(void);       /* ... and what it shows as its value */
 } MenuItem;
 
 static const MenuItem GAME_ITEMS[] = {
@@ -1162,6 +1331,9 @@ static const MenuItem SOUND_ITEMS[] = {
     {"Voices", "enhance.voices", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "The party shout as they attack, grunt when hit, draw breath as they cast. Your own in the voices folder.",
      apply_enhancements},
+    {"Voice pack", NULL, {0}, {0}, 0, 0, 0, 0,
+     "The optional voice pack for the story scenes: choose its .zip to install it, or a newer one. A pack's .zip "
+     "left in the game's folder installs itself at the start.", NULL, voicepack_choose, voicepack_label},
     {"Your music", "enhance.custom_music", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "Audio files you put in the music folder play in place of the game's songs.", apply_enhancements},
     {"Sound effects", "enhance.sfx", {"modern", "custom", "original"}, {"Modern", "Your samples", "Original"},
@@ -1251,6 +1423,7 @@ static int item_disabled(const MenuItem *it) {
 }
 
 static void item_value(const MenuItem *it, char *buf, size_t n) {
+    if (it->shown) { snprintf(buf, n, "%s", it->shown()); return; }
     if (it->step) { snprintf(buf, n, "%d%%", setting_int(it->key)); return; }
     const char *v = setting(it->key);
     for (int i = 0; i < item_values(it); i++)
@@ -1274,6 +1447,10 @@ static void item_set(const MenuItem *it, int v) {
 }
 
 static void item_change(const MenuItem *it, int dir) {
+    if (it->action) {                                 /* chosen (OK, right, a click): it does its thing */
+        if (dir > 0 && !item_disabled(it)) it->action();
+        return;
+    }
     if (!it->key || item_disabled(it)) return;
     if (it->step) {                                   /* a number: a step up or down */
         item_set(it, setting_int(it->key) + dir * it->step);
@@ -1777,10 +1954,11 @@ static void draw_settings(float W, float H, const char *hint) {
             m_hit(sx0 - SLIDER_GRIP, a, sx1 + SLIDER_GRIP, b, HIT_SLIDER, i);
         } else {
             if (sel && !off) {
-                m_arrow(vr - vw - 6.5f, mid, 4.0f, 3, C_INK_SOFT);
+                if (!it->action) m_arrow(vr - vw - 6.5f, mid, 4.0f, 3, C_INK_SOFT);
                 m_arrow(vr + 6.5f, mid, 4.0f, 2, C_INK_SOFT);
             }
-            m_hit(vr - vw - 14.0f, a, vr - vw * 0.5f, b, HIT_STEP_BACK, i);   /* the value's left: a step back */
+            if (!it->action)                         /* the value's left: a step back */
+                m_hit(vr - vw - 14.0f, a, vr - vw * 0.5f, b, HIT_STEP_BACK, i);
         }
         m_hit(pad, a, W - pad, b, HIT_ROW, i);
     }
@@ -2140,7 +2318,7 @@ static uint64_t menu_signature(int ow, int oh) {
                         (uint64_t)oh, (uint64_t)touch_visible(), (uint64_t)(menu_last_pad && pad),
                         pad ? (uint64_t)SDL_GetGamepadID(pad) : 0, (uint64_t)rom_ready, (uint64_t)(rom_problem[0] != 0),
                         (uint64_t)j_tab, (uint64_t)j_scroll, (uint64_t)(j_hint_step + 2), (uint64_t)(j_hint_job + 1),
-                        journal_signature()};
+                        journal_signature(), (uint64_t)scenevox_pages()};
     uint64_t h = 1469598103934665603ull;
     for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) h = (h ^ parts[i]) * 1099511628211ull;
     for (int i = 0; i < NSETTINGS; i++)
@@ -3112,6 +3290,7 @@ int main(int argc, char **argv) {
         /* testing the first run: --test-pick FILE answers the file dialog;
          * --no-dialogs writes message boxes to the log instead */
         else if (!strcmp(argv[i], "--test-pick") && i + 1 < argc) test_pick = argv[++i];
+        else if (!strcmp(argv[i], "--test-voice-pack") && i + 1 < argc) test_voicepack = argv[++i];   /* its dialog */
         else if (!strcmp(argv[i], "--no-dialogs")) no_dialogs = 1;
         /* testing the rumble: --test-rumble F (see test_pad_rumble) */
         else if (!strcmp(argv[i], "--test-rumble") && i + 1 < argc) test_rumble_frame = strtoull(argv[++i], NULL, 10);

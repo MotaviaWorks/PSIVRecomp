@@ -282,6 +282,18 @@ int scenevox_sounding(void) { return play_p != NULL || next_p != NULL; }
 
 void scenevox_stop(void) { play_p = next_p = NULL; current = last_page = -1; mood = mood_to = 0.0f; }
 
+int scenevox_pages(void) { return npages; }
+
+void scenevox_unload(void) {
+    scenevox_stop();
+    for (int i = 0; i < nclips; i++) { free(clip_pcm[i]); clip_pcm[i] = NULL; }
+    nclips = npages = first_page = 0;
+    line_clip_now = pressed_page = -1;
+    press_frames = 0;
+    line_frames = 0;
+    boxless = 0;
+}
+
 void scenevox_mix(float *samples, int frames) {
     for (int j = 0; j < frames; j++) {
         if (!play_p && next_p) {
