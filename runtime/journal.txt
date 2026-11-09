@@ -1,0 +1,699 @@
+# The journal's words (the menu's Journal, runtime/journal.h): the story in
+# steps, then the Hunters' Guild's jobs. tools/make_journal.py makes them into
+# journal_data.h (its docstring has the format); tools/journal_check.py runs
+# them against saves.
+#
+# Written for the port from the game's script and code (the disassembly's
+# event flags), in its own words. Rules: no spoilers -- a step's title, next
+# and hint say only what the party knows by then; done says what happened.
+# ASCII only (the fallback font is SDL's 8x8). The '# set by' lines say where
+# the game sets each flag.
+
+
+# ---------------------------------------------------------------- the story
+
+# Arc A: Motavia, part 1. From a new game to Rika joining the party (fan saves 01-08).
+# Sources: ps4disasm/ps4.asm (events, map data) and script/dialogue N.asm (entries as $N).
+# Directions were checked on the maps themselves: the Motavia world map's walkable cells
+# (its 16 BG bands, loc_10BE02, with chunk collision from loc_1065A2) and the town and
+# dungeon layouts, against what the townspeople and the party's Talk lines (dialogue 31) say.
+
+arc Motavia
+
+step START
+# set by: always reached. A new game runs Event_GameStart (dialogue 17 $36-$41), which ends by
+#   setting PiataFirstTime on Map_PiataAcademy_F1; RunEvent_PiataChazAlone then sets
+#   PiataChazControl at once (dialogue 1 $6D). Both are set before the player has control and
+#   never cleared, so they get no step of their own: this one covers them.
+title Chaz's First Job
+done Chaz, now a full Hunter, came with his partner Alys to Motavia Academy in Piata for a job. Wandering off on his own, he lost track of her.
+next Find Alys somewhere in Motavia Academy.
+hint Chaz starts at the east end of the long hall on the Academy's upper floor. Walk west along the hall: Alys is only a short way along it.
+
+step AlysFound
+# set by: Event_AlysFound, run by RunEvent_FindingAlys on Map_PiataAcademy_F1 when Chaz walks
+#   up to her (x = $260); her words are dialogue 1 $29. The principal only talks business once
+#   this is set (dialogue 33 $0: AlysFound -> $15).
+title Meeting the Principal
+done Chaz found Alys again. She wanted to see the principal who had sent for them and hear what the job was.
+next Go to the principal's office and hear about the job.
+hint His office is at the back of this upper floor. From where you found Alys, go a little west, then north up the wide passage in the middle of the hall to his door.
+
+step PrincipalMeeting
+# set by: Cutscene_PiataPrincipal (dialogue 33 $0 -> $15 -> $17). Stepping out of the office
+#   onto F1 then sets PrincipalSuspicious at once (RunEvent_SuspicionOnPrincipal, dialogue 1
+#   $6E); that brings no new goal, so it has no step. Hahn only lets you by after this
+#   (dialogue 33 $10 -> $14).
+title Monsters in the Basement
+done The principal hired them to wipe out the monsters that had appeared in the Academy basement, but he brushed off Alys's questions about where they came from.
+next Go down to the Academy basement and destroy the monsters.
+hint The stairs down are at the west end of this floor's hall. On the ground floor, the way to the basement is the doorway on the north side of the hall. A young man stands in the way there: talk to him.
+
+step HahnJoined
+# set by: Event_MeetingHahn (dialogue 33 $10 -> $14 -> $11), needs PrincipalMeeting. Below it,
+#   entering the bottom room sets BasementContainers (RunEvent_BasementContainers, dialogue 33
+#   $F) and the fight sets Igglanova (Event_IgglanovaBattle, from the action-button spot on
+#   the monster); both keep the same goal, so neither has a step.
+title Hahn Tags Along
+done Alys was sure the principal was hiding something. By the basement stairs they met Hahn, Professor Holt's assistant: Holt went to study Birth Valley and never came back. Hahn paid 100 meseta to tag along.
+next Search the basement for the monsters and destroy them.
+hint The basement has three levels. On the first two, the stairs down are west of where you arrive. In the small room at the bottom, walk up to the big monster and press the action button to fight it.
+
+step AfterIgglanova
+# set by: Event_AfterIgglanova, run by RunEvent_AfterIgglanova on Map_AcademyBasement_B2 right
+#   after the Igglanova battle (dialogue 33 $12).
+title Strange Containers
+done They destroyed the monster. Its room was full of glass containers that looked made for breeding monsters, and Hahn swore he knew nothing about them.
+next Go back to the principal and make him explain the containers.
+hint Climb back up to the Academy's ground floor, take the stairs on the west side of the hall to the upper floor, and walk to the principal's office at the back.
+
+step PrincipalConfession
+# set by: Event_PrincipalConfession (dialogue 33 $0 -> $16 once Igglanova is set; text $13).
+#   Until now the guards at Piata's gate keep everyone in (dialogue 2 $53).
+title Bound for Birth Valley
+done The principal confessed: Holt traced the monsters to ancient ruins in Birth Valley and never came back, and a man named Zio scared the principal into silence. Hahn hired the hunters to find Holt.
+next Head northeast to Birth Valley with Hahn and look for Professor Holt.
+hint Leave Piata by its south gate; the guards let you pass now. Outside, go north (a little east) to the village of Mile, then east-northeast to Zema. Birth Valley is entered through the north end of Zema.
+
+step ZemaPetrified|HoltPetrified
+# set by: ZemaPetrified is set by MapDataMan_ZemaPetrifiedFlag (data manager $1A of Map_Zema
+#   and Map_ZemaHouse2) on every visit to Zema before IgglanovaZema, and cleared once
+#   IgglanovaZema is set. HoltPetrified can only come after this first visit (Birth Valley is
+#   reached through Zema) and stays set, so the step stays reached.
+title A Village of Stone
+done Zema was silent when they arrived: every villager had been turned to stone.
+next Go on through Zema into Birth Valley and find Professor Holt.
+hint Walk straight up Zema's main street to the passage at its north end. In the valley, follow the path north to the way down. On the lower level, go to the far north end, by a large door, and talk to everyone there.
+
+step HoltPetrified
+# set by: Cutscene_ProfHolt, from talking to Holt on Map_BirthValley_B1 (dialogue 3 $6A, text
+#   $66). It leaves the party at the north end of Zema. Molcum's guards keep the party out of
+#   the village until this is set (Map_Molcum objects; MapDataMan_MolcumCitizens).
+title In Search of Alshline
+done Deep in Birth Valley, Professor Holt and his team had been turned to stone too. Alys recalled a medicine, Alshline, that can undo it, last heard of in the Motavian village of Molcum.
+next Travel to Molcum, a Motavian village far south of Zema, to look for Alshline.
+hint From Zema, head southwest, keeping the big inland water on your left, then keep going south. Molcum is a long walk away, a little west of due south from Zema.
+
+step RuneJoined
+# set by: Cutscene_MeetingRune, from talking to Rune in the ruins of Molcum (dialogue 7 $2,
+#   text $3). Saya (Event_MeetingSaya, walking into Krup's kindergarten) is optional and can
+#   happen any time after leaving Piata, even before Molcum; the Alys-wounded cutscene sets
+#   the flag later for players who skipped her. So it has no step.
+title The Road to Tonoe
+done Zio had destroyed Molcum. In the ruins Alys met an old friend, Rune, who said Alshline could be had in Tonoe, north of Krup, and invited himself along.
+next Go east to the village of Krup, then north through the valley that leads to Tonoe.
+hint Krup is a short walk east of Molcum. From Krup go north (a little east), between two lakes, to the valley entrance. People say a rock blocks it; go anyway with Rune in the party.
+
+step TonoePathOpen
+# set by: Event_RuneFlaeli, run by RunEvent_RuneFlaeli as soon as the party enters
+#   Map_ValleyMazeOutside with Rune (dialogue 7 $26). The maze forks three times
+#   (Map_ValleyMaze, _Part3, _Part5); the east branches (_Part2, _Part4, _Part6) are dead ends.
+title The Valley Maze
+done A big rock sealed the valley, but Rune blasted it apart with a power he called magic, opening the way to Tonoe.
+next Find your way through the valley to Tonoe and ask about Alshline.
+hint At each of the valley's three forks take the left (west) branch. Tonoe is just north of the far end. Grandfather Dorin lives in the northeast of town: answer his three questions No, No, Yes.
+
+step GryzJoined
+# set by: Cutscene_Dorin, run by RunEvent_Dorin right after Event_MeetingDorin sets Dorin
+#   (dialogue 7 $17 -> $18-$1A: only No, No, Yes gets there; text $25). The rusted door
+#   (TonoeDoorOpen: Event_TonoeBasementDoor, dialogue 7 $29 -> $24) only opens with Gryz along
+#   and brings no new goal, so it has no step.
+title Dorin's Warehouse
+done After a punch from Alys, Grandfather Dorin said the Alshline is in the old basement warehouse out back. Rune went off with Dorin on business of his own, and young Gryz came along as their guide.
+next Search the warehouse basement for the Alshline, with Gryz as your guide.
+hint The warehouse is the building at the north end of Tonoe. Its basement door is rusted shut: examine it and Gryz will open it. The Alshline is in a chest on the bottom (fourth) level.
+
+step AlshlineFound
+# set by: Event_AlshlineFound, run by RunEvent_FindingAlshline on Map_TonoeBasement_B3 once the
+#   Alshline chest is opened (dialogue 7 $27).
+title The Alshline
+done They found the Alshline. Gryz, who lost his parents when Zio destroyed Molcum, asked to come along for good, and Alys welcomed him.
+next Hurry back to Zema with the Alshline to help the people turned to stone.
+hint Go back through the valley, southwest toward Krup, then north the way you came; or use Chaz's Ryuka (learned at level 9). Just walk into Zema: there is no need to use the Alshline from the menu.
+
+step AfterIgglanovaZema
+# set by: Cutscene_ZemaIgglanovaDefeated, after the battle that ends Cutscene_Alshline (run by
+#   RunEvent_UsingAlshline on entering Zema; it sets IgglanovaZema just before the fight, so that
+#   flag gets no step). Text: dialogue 3 $67-$69 (DialogueTree3 is loaded for them in English).
+title Back to Birth Valley
+done The Alshline turned Zema's people and Professor Holt back to flesh, and Holt hurried deeper into Birth Valley. A monster then blocked the way in; once it fell, Hahn paid the hunters to go after him.
+next Go back into Birth Valley and find Professor Holt in its depths.
+hint Go through Zema's north passage and down to the valley's lower level. The large door at its north end, where Holt stood, opens with the action button. Inside, open elevator doors the same way and ride down to the bottom.
+
+step RikaJoined
+# set by: Cutscene_MeetingRika, run by RunEvent_MeetingRika on Map_BioPlant_B4_Part2 (dialogue
+#   34 $0-$4): it sets BioPlantEscape, then RikaJoined outside Zema, in one cutscene. RikaJoined
+#   also mends the bridge northwest of Zema (world map band patch loc_53D16). No main-story
+#   flag is set again until inside Zio's Fort (FortuneTeller and the guild jobs are optional),
+#   so this hint covers the whole trip there. Walking checks: Zema has no path to the fort
+#   except through Aiedo's passage; Kadary and the fort share one walled-in pocket.
+title Seed's Request
+done Holt was safe in the Bio-plant, an ancient lab, thanks to Rika. Its computer, Seed, said the old systems were failing and asked them to free the android Demi from Zio. Rika joined; then the plant blew up.
+next Rescue Demi from Zio's Fort, the castle beyond the quicksand near Mile.
+hint The quicksand blocks the way, so go around: cross the mended bridge northwest of Zema, head west to Aiedo, and take the passage just north of Aiedo through the mountains to Kadary. The fort is southeast of Kadary.
+
+# Motavia, part 2: from Rika joining (RikaJoined, fan save 08) to the shuttle leaving
+# Zelan for Kuran (fan saves 09-21). The Dezolis arrival (RajaTemple...) is the next arc.
+#
+# Left out on purpose:
+#   Juza, Zio, ZioNurvus: each is set as its boss fight starts, and the flag after it
+#     (JuzaDefeated, DemiJoined, GryzGone) follows straight after the fight, so they are
+#     folded into those steps. While the Nurvus fight is on, the ZioFortBarrier step stays
+#     current, and its hint carries the Psycho-wand tip.
+#   AfterAlysDeath2, MotaSpaceport: set in the same cutscenes as AfterAlysDeath / GryzGone.
+#   PlateSystem, PlateEngine: optional. PlateSystem is only set by talking to one man in
+#     Monsen (dialogue 12 $A -> Event_MonsenEarthquake), and the Plate System is a dead-end
+#     dungeon (Phonon chest). Cutscene_ZioDefeated sets PlateEngine for everyone anyway.
+#   WreckageSystem: optional lore (Rika reads the Parmanian ship near Nalya, Event_WreckageEngine,
+#     dialogue 8 $46-$47); only palettes and that dialogue test it.
+#   CancellerReminder: only if you head for the elevator on Zelan without the Canceller
+#     (RunEvent_CancellerReminder -> Event_CancellerReminder, dialogue 35 $C).
+#   FortuneTeller: optional (Aiedo fortune teller with Alys, dialogue 10 $1D, $F2 $0B).
+#   GirlsCaught: optional (resting in the Aiedo supermarket; the Stain in Life job).
+# None of the flags used here is ever cleared (EventFlags_Clear is only called for Penguin,
+# ZemaPetrified, PenguinNoMoney, the fifth-member picks, Rocky's escapes and Bail).
+
+arc Motavia
+
+step JuzaDefeated
+# set by: Event_JuzaDefeated (RunEvent_JuzaDefeated in Map_ZioFortJuzaRoom) right after the Juza battle; Juza is set by Event_Juza (dialogue 13 $47-$48) as that fight starts
+title Juza Defeated
+done The party fought deep into Zio's Fort and beat Juza, who barred the way to Zio. With Juza beaten, a hidden stairway opened in his room.
+next Climb the new stairs and free Demi, the android Zio is holding in the fort.
+hint The stairs appeared in Juza's room. Climb them and the next flight to the fort's top floor, then walk north to find Demi. Heal up before you go.
+
+step DemiJoined
+# set by: end of Cutscene_AlysWounded (dialogue 13 $43, then dialogue 6 $2C-$2D in Krup); Zio is set in Cutscene_DemiRescue (dialogue 13 $42) just before the scripted Zio battle
+title Alys Wounded
+done The party freed Demi, but Zio appeared, and Alys took his dark wave to shield Chaz. They fell back to Hahn's home village, Krup, and put her to bed. Demi joined; Hahn stayed to look after Alys.
+next Find Rune: Alys believes he knows how to beat Zio's magic barrier. To cross the quicksand, get the Land Rover from the Machine Center south of Krup.
+hint Gryz thinks Rune went to the Ladea Tower, beyond the quicksand in the east. The Machine Center lies buried south of Krup, a little to the east: walk there and Demi will raise it.
+
+step MachineCenter
+# set by: Event_MachineCenterAppearing (RunEvent_MachineCenter on the Motavia map: needs Zio, walking over the spot south of Krup; dialogue 43 $B)
+title The Machine Center
+done South of Krup, the buried Machine Center rose out of the ground, and Demi invited everyone inside.
+next Go inside and start up the Land Rover.
+hint Ride the elevator down. The Land Rover won't start without the Control Key, which is in a chest on that lower floor. Then go south into the hangar where the Land Rover waits.
+
+step LandRover
+# set by: Event_GettingLandRover (RunEvent_GettingLandRover in Map_MachineCenter_B1_Part2; needs the Control Key chest in Map_MachineCenter_B1; dialogue 34 $9)
+title The Land Rover
+done In the Machine Center's hangar, Demi started up the Land Rover, an armored car of the ancient civilization that drives straight over quicksand.
+next Drive east across the quicksand to the Ladea Tower and look for Rune there.
+hint The tower stands beyond the quicksand far to the east, south of the village of Termi. Drive straight over the sand; when you're on foot, use the Land Rover from the Item menu.
+
+step RuneJoinedAgain
+# set by: Event_RuneLadaeTower (RunEvent_RuneLadeaTower on Map_LadeaTower_F2; dialogue 34 $6)
+title Rune Returns
+done Rune was in the Ladea Tower, after the Psycho-wand: the one weapon that can break Zio's magic barrier. When he heard what happened to Alys, he joined the party.
+next Climb to the top of the Ladea Tower with Rune and take the Psycho-wand.
+hint The wand lies in a chest on the topmost floor. A monster will challenge you there; it hits hard and breathes fire, so go up with full HP and plenty of healing items.
+
+step GyLaguiah
+# set by: Event_PsycoWandChest (RunEvent_FindingPsycoWand on Map_LadeaTower_F5; dialogue 34 $7-$8), as the Gy-Laguiah fight starts; the barrier round the chest goes once it is set (MapDataMan_LadeaTower_F5)
+title Gy-Laguiah's Ambush
+done At the top, Gy-Laguiah came to seize the Psycho-wand on Zio's orders, and the party had to fight it.
+next Defeat Gy-Laguiah, then open the chest and take the Psycho-wand.
+hint Gy-Laguiah hits hard and now and then breathes fire at one of you: keep everyone's HP up. Once it falls, the barrier around the chest is gone; open the chest to claim the wand.
+
+step AfterAlysDeath
+# set by: end of Cutscene_PsycoWand (RunEvent_PsycoWandFound once the wand's chest is open; dialogue 34 $5, dialogue 6 $2E), together with AfterAlysDeath2
+title Farewell, Alys
+done With the wand in hand, Rune and Rika sensed trouble and the party hurried back to Krup. Alys's wound was beyond even Rune's power; she died with Chaz at her side. Hahn went back to the Academy.
+next Take the Psycho-wand to Zio's Fort. Rune can break the invisible barrier there and open the way down to Nurvus.
+hint The fort is across the quicksand just north-west of Mile; drive the Land Rover over the sand. The barrier is straight north of where you enter the fort: stand at it and press the talk button.
+
+step ZioFortBarrier
+# set by: Event_ZioFortBarrier (barrier objects in Map_ZioFort, dialogue 13 $49; needs AfterAlysDeath, else dialogue 13 $4A); Rune's lines are dialogue 13 $44-$45
+title The Barrier Breaks
+done At Zio's Fort, Rune shattered the invisible barrier. The stairs beyond lead down to Nurvus, the plant that feeds energy to all of Motavia's systems.
+next Go down into Nurvus beneath the fort and reach its core, so Demi can shut it down.
+hint Nurvus is a maze of elevators and tunnels: keep heading down to the core. Zio waits there. In that fight, use the Psycho-wand on him from the Item menu first; until then he can't be hurt.
+
+step GryzGone
+# set by: end of Cutscene_ZioDefeated (RunEvent_ZioDefeated in Map_Nurvus_B4_Part2; dialogue 36 $0), with MotaSpaceport (and PlateEngine); ZioNurvus is set by Event_ZioNurvus (dialogue 36 $B) as the fight starts
+title Zio Defeated
+done Zio fell in Nurvus. Demi linked herself to Nurvus to halt it and stayed to tend the systems, and Gryz went home to look after his little sister. A shuttle now stands ready.
+next Take the emergency shuttle up to the satellite Zelan and find Wren, Demi's master.
+hint The spaceport rose just north-west of Zio's Fort. Walk north inside to board the shuttle and choose Zelan. On Zelan, ride the elevator up; Wren waits at the far end of the upper floor.
+
+arc Zelan
+
+step WrenJoined
+# set by: Cutscene_MeetingWren (talking to Wren on Map_Zelan_F1, dialogue 35 $9 -> $1)
+title Wren of Zelan
+done On Zelan the party met Wren, the android who runs it. The trouble comes from another satellite, Kuran, which someone has seized, and Wren joined them to set it right.
+next Pick up the Stealth Canceller, then take the shuttle to Kuran.
+hint Kuran is in stealth mode, hidden from the shuttle's radar. The Canceller is in a chest in the room on the right side of Zelan's upper floor; the room on the left holds gear too.
+
+step WrenJoined Canceller
+# set by: WrenJoined as above; Canceller by MapUpdate_ZelanCanceller on Map_Zelan_F1 once the Canceller chest (ChestFlag_Canceller) is open. The chest can be opened before or after meeting Wren, hence both flags here (with Canceller alone the step before still fits)
+title The Stealth Canceller
+done The party found the Stealth Canceller, so the shuttle can track down Kuran despite its stealth mode.
+next Ride the elevator down to the docking bay and board the shuttle for Kuran.
+hint The shuttle is on Zelan's lower floor, where you arrived. Walk into it with Wren in the party and set course for Kuran.
+
+step ChaosSorcr
+# set by: Cutscene_SpaceshipSabotage (RunEvent_SpaceshipSabotage on Map_Zelan: needs WrenJoined and Canceller; dialogue 35 $2), as the Chaos Sorcerer fight starts; the crash-landing cutscene (RajaTemple, next arc) follows the fight at once
+title Saboteur Aboard
+done On the way to Kuran, strange energy flared in the shuttle's engine room: a Chaos Sorcerer had slipped aboard to sabotage the ship.
+next Defeat the Chaos Sorcerer before it can wreck the shuttle.
+hint It casts techniques such as Flaeli and Hewn at the party. Keep everyone's HP high, heal often, and hit it with your strongest attacks.
+
+# Arc C: Dezolis, from the crash landing at Raja's temple to the Hydrofoil
+# (fan saves 21-33). Order checked against the fan saves and the code.
+#
+# Flags looked at and left out (not every player sets them):
+#   NearDarkForce1, DarkForce1: set on the way into the Kuran fight; the
+#     IceDigger cutscene follows the battle at once, so they never last.
+#   CarnivorousTrees: set at the start of the Kyra rescue; Cutscene_MeetingKyra
+#     (KyraJoined) follows at once.
+#   Spector: the fake-torch chest fight; Lashiec appears right after it
+#     (RunEvent_LashiecAppearing needs only Spector).
+#   DarkForce2: set as the tower-top battle starts; SnowstormGone follows it.
+#   InnerSanctGuard1: talking to the old attendant in the inner sanctuary is
+#     optional (he doesn't move and nothing tests the flag but his own line).
+#   Reshel: zombie battle on entering ruined Reshel, a dead-end town map.
+#   WeaponPlant, Burstroc: optional dungeon (Wren: safe to leave it; only gear
+#     and Wren's Burstroc). Hijammer: optional chest on Kuran F1.
+#   DezoGyLaguiah, DElmLars, ClimateCenter, DElmLarsDefeated: the climate
+#     center is a trap with only gear in it; nothing else tests these flags.
+#   MuskCats, SilverTusk: optional Myst Vale visit. (MuskCats is also set by
+#     Event_PosiBolt in Vahal Fort.) Penguin, PenguinNoMoney: Zosa toggles.
+# None of the flags used below is ever cleared (EventFlags_Clear only hits
+# Penguin, PenguinNoMoney, ZemaPetrified, the *Picked flags, the Rocky
+# escapes, Bail and the first guild job).
+
+arc Dezolis
+
+step RajaTemple RajaJoined
+# set by: Cutscene_CrashLanding (RunEvent_CrashLanding, needs ChaosSorcr); dialogue 14:$8. Both flags in the same cutscene.
+title Crash Landing on Dezolis
+done The crippled shuttle crash-landed on Dezolis, right on the temple of Raja, an old Dezolisian priest. He let it go if you took him along, then told of an ancient Parmanian spaceship in the town of Tyler.
+next Leave the temple and look for that spaceship, so you can still reach Kuran. Raja says Tyler is a short way northwest.
+hint The ship's secret lies in Tyler, but ask Gyuna first: he runs the pub in Ryuon, the town just north of the temple, and hears every rumor on Dezolis.
+
+step Snowstorm
+# set by: Event_OutsideRajaTemple (RunEvents $31 on the Dezolis map, the first step outside); dialogue 14:$6
+title The Endless Blizzard
+done Outside, a fierce blizzard raged. Raja said it has lasted three months and blamed the Garuberk Tower, while Wren suspects the planet's climate control system.
+next Find the old ship. Raja suggests a stop in Ryuon, just north of the temple, before going on to Tyler.
+hint In Ryuon's pub, talk to Gyuna, the owner. Say No to his first three topics (the storm, the Garuberk Tower, Raja), then Yes when he offers to tell you about the spaceship.
+
+step LandaleWhereabouts
+# set by: Event_Gyuna (dialogue 16:$30, Ryuon pub). Set only if the talk ends on his spaceship answer (16:$3C; the test is the '.' that starts $3D).
+title A Ship Beneath Tyler
+done Gyuna, an old friend of Raja's, said the ship lies underground in Tyler, and that a close look at the grave there will open the way.
+next Go to Tyler, northwest of Ryuon, and examine the big grave at the edge of town.
+hint Tyler is the Parmanian town northwest of Raja's temple. The grave of its founder stands on the west side of town: read the plate on it, and the plate will move.
+
+step TylerGrave
+# set by: Event_TylerGraveOpening (dialogue 14:$1D -> $23 once LandaleWhereabouts is set; text 14:$1E)
+title The Grave Opens
+done Reading the inscription on Tyler's grave, Chaz found that its plate could move. With a push, the grave opened onto a passage leading underground.
+next Go down beneath the grave and find the ship.
+hint Step into the opening where the grave stood, on the west side of Tyler, and walk on through the hidden hangar below.
+
+step DezoSpaceport
+# set by: Cutscene_Landale -> Event_DezoSpaceportAppearing (RunEvent_FindingLandale in Map_Hangar, needs TylerGrave); dialogue 14:$24
+title The Landale
+done Below lay the Landale, the ship that brought the first Parmanians to Dezolis, almost perfectly preserved. Wren readied it, and a spaceport rose out of the ground beside Tyler.
+next Board the Landale at the new spaceport by Tyler and fly to the satellite Kuran.
+hint The spaceport stands just south of Tyler. Inside, walk up to the ship to board it, then choose Kuran from the list of destinations.
+
+step Kuran
+# set by: Event_KuranArrival (RunEvents $2C on Map_Kuran); dialogue 35:$4. NearDarkForce1/DarkForce1 follow on Kuran_F3 (35:$5, $6).
+title Satellite Kuran
+done The Landale docked at Kuran, the satellite someone seized to throw the planets' environment systems out of control.
+next Make your way to Kuran's main control center so Wren can find the cause of the trouble.
+hint Work up from the dock through the first and second floors; the control center is on the top floor. Heal before you go in. A side room on the first floor holds a weapon unit for Wren.
+
+step IceDigger
+# set by: Cutscene_DarkForce1Defeated (RunEvent_DarkForce1Defeated after the DarkForce1 battle; dialogue 35:$7, $8). Ends on Zelan; the Canceller item becomes the Ice Digger.
+title The Storm Goes On
+done In Kuran's control center lurked Dark Force, the power behind Zio. You destroyed it and Wren restored Kuran, but from Zelan you saw the storm on Dezolis rage on. Wren loaded an Ice Digger onto the Landale.
+next Fly back to Dezolis and find the cause of the storm. The Ice Digger breaks walls of ice. Raja still blames the Garuberk Tower.
+hint Board the Landale at Zelan's dock and pick Dezolis. Use the Ice Digger from the item menu; drive into walls of ice to smash them. Head east past Zosa to Meese and talk to the Esper upstairs in its clinic.
+
+step RajaSick
+# set by: Cutscene_RajaSick, from the Esper upstairs in the Meese clinic (Map_MeeseClinic_F1; dialogue 18:$64, then 18:$59, $62, $63)
+title Fever in Meese
+done Meese was gripped by a deadly fever, tended by Espers in the old inn. Raja fell ill too; Rune and Rika felt the Black Energy Wave from the Garuberk Tower. Word came that Kyra, a young Esper, had gone there alone.
+next Raja must stay in bed. Hurry to the forest of carnivorous trees northeast of Meese and help Kyra.
+hint Leave Meese and head northeast toward the Garuberk Tower. Kyra is under attack where the forest of carnivorous trees begins, just south of the tower.
+
+step KyraJoined
+# set by: Cutscene_MeetingKyra (after Event_SavingKyra sets CarnivorousTrees; needs RajaSick); dialogue 37:$26, $27, $28
+title Kyra of the Espers
+done You saved Kyra from the carnivorous trees, but they kept growing back and you had to retreat. Kyra joined you, sure that Lutz, the legendary chief of the Espers, knows how to beat them.
+next Go with Kyra to the Esper Mansion, east of Meese, and ask to see Lutz.
+hint The mansion lies east of Meese, a little to the south. With Kyra along, the gate guards let you in. The way to Lutz is past the guards at the north end of the mansion: talk to them.
+
+step InnerSanctuary
+# set by: Event_PersistentEsperGuards (guards in Map_EspMansionNorth, dialogue 21:$34 -> 20:$2E)
+title The Inner Sanctuary
+done The guards at the inner sanctuary would not let even Kyra through, until Rune spoke up. Then they let everyone in.
+next Enter the inner sanctuary and find Lutz.
+hint Go past the guards, cross the courtyard behind them and enter the inner sanctuary. Walk on to the stairs at its far end.
+
+step LutzRevelation
+# set by: Cutscene_LutzRevelation (RunEvent_LutzRevelation by the stairs in Map_InnerSanctuary); dialogue 20:$2A, $2F
+title The Legacy of Lutz
+done Lutz died long ago, but his will lives on: Rune is the fifth Lutz. He chose Chaz to fight the evil behind Algo's troubles. Only the Eclipse Torch can burn away the carnivorous trees.
+next Go to the Gumbious Temple, in the mountain valley west of the Esper Mansion, and ask to borrow the Eclipse Torch.
+hint The temple stands just north of the Dezolisian town of Jut. Go upstairs to the hall of the holy flame and talk to the priest standing before it.
+
+step EclipseTorchStolen
+# set by: Event_EclipseTorchStolen (priest on Map_Gumbious_F1, dialogue 38:$24 -> $35 once LutzRevelation is set; text 37:$32)
+title The Stolen Torch
+done The priest refused to lend the Torch, then three witches from the Air Castle snatched it, taunting Lutz. Rune says the castle once floated over Parma. Get it back, and the priest will lend it.
+next Go back to the spaceport by Tyler so Wren can search for the Air Castle with the Landale's sensors.
+hint The spaceport is just south of Tyler, in the far west of Dezolis. Wren starts the search as soon as you walk in.
+
+step AirCastleFound
+# set by: Cutscene_FindingAirCastle (RunEvent_FindingAirCastle on entering Map_DezoSpaceport); dialogue 39:$18. The Air Castle joins the Landale's destinations.
+title Finding the Air Castle
+done With the Landale's sensors, Wren picked up a faint trace and found the Air Castle.
+next Fly the Landale to the Air Castle and take back the Eclipse Torch.
+hint Board the ship in the spaceport and choose the Air Castle from the destinations.
+
+step AirCastle
+# set by: Event_AirCastleArrival (RunEvent_EnterAirCastle on Map_AirCastle); dialogue 22:$35
+title Into the Air Castle
+done The Landale reached the Air Castle. Its air and gravity had been set up for visitors: you were expected.
+next Search the castle for the three witches who stole the Eclipse Torch.
+hint The first witches you meet are only illusions behind invisible barriers. Find the room where the real three wait and defeat them; the barriers vanish when they fall.
+
+step XeAThoul
+# set by: Event_XeAThoulBeforeBattle (RunEvent_FindXeAThoul in Map_AirCastleXeAThoulRoom); dialogue 22:$36. MapDataMan_AirCastleXeAThoul then clears the illusions.
+title The Three Witches
+done The real witches, the Xe-A-Thoul trio, wanted only Lutz dead. You defeated all three, and their illusions and barriers faded away.
+next Find the master of the castle and take back the Eclipse Torch.
+hint With the barriers gone, enter the inner castle and search its lower floors for the room where the Torch is kept.
+
+step Lashiec
+# set by: Event_LashiecAppearance (after Spector: the fake-torch chest in Map_AirCastleInner_B1_Part3, 22:$3C); then Cutscene_LashiecDefeated (22:$37, $38, $39)
+title The Torch Recovered
+done The chest held a fake, guarded by a Spector. Then Lashiec, old foe of the first Lutz, rose for revenge. You beat him and escaped his crumbling castle with the real Torch, which the priest lent you.
+next Take the Eclipse Torch to the forest of carnivorous trees below the Garuberk Tower and burn a way through.
+hint The forest is northeast of Meese, just south of the tower. Walk up to the trees with the Torch in your bag; its light does the rest.
+
+step EclipseTorch
+# set by: Event_EclipseTorchUsed (RunEvents $36 on the Dezolis map at the forest, needs Lashiec); dialogue 37:$2A
+title The Trees Burn
+done The holy light of the Eclipse Torch burned the carnivorous trees to ashes, opening the way to the Garuberk Tower.
+next Climb the Garuberk Tower and stop whatever is causing the storm.
+hint The tower stands just north of the burned forest. Climb all the way to the top. Stock up on healing items first: a hard fight waits up there.
+
+step SnowstormGone
+# set by: Cutscene_DarkForce2Defeated (RunEvent_DarkForce2Defeated after the DarkForce2 battle on Map_GaruberkTower_Part7); dialogue 22:$3A, $3B. Kyra leaves here.
+title The Storm Lifts
+done Atop the tower waited a second Dark Force. With it destroyed, the storm and the Black Energy Wave stopped, and Kyra went home to Meese. Then pillars of fire rose over the Gumbious Temple.
+next Hurry to the Gumbious Temple to see what has happened.
+hint The temple is north of Jut, west of the Esper Mansion. Only its lowest floor is left: walk up to the bishop, who waits in the back room.
+
+arc Motavia
+
+step Hydrofoil Hydrofoil2
+# set by: Cutscene_GumbiousBishop (RunEvent_GumbiousBishop in Map_Gumbious_B2_Part2; dialogue 37:$33, then 39:$17 at the Motavia spaceport). Both flags together; the Eclipse Torch item becomes the Hydrofoil.
+title The Hydrofoil
+done The bishop warned that the Profound Darkness still stirs, and that the Aero-Prism will show the way to Rykros. Rune knew it is kept in the Soldiers' Temple on Motavia. Back there, Demi met you with a Hydrofoil.
+next Take the Hydrofoil across the lake by Krup to the Soldiers' Temple and find the Aero-Prism.
+hint Ryuka or a Telepipe takes you to Krup, southeast of the spaceport. At the lakeshore, use the Hydrofoil from the item menu and sail east to the small island; the way to the temple starts in a cave there.
+
+# Arc D: the end game, from the Hydrofoil to the final battle.
+# Order checked against fan saves 33-35 and 40-44 and the code. Saves 36-39 are
+# Hunters' Guild jobs and are left out. MuskCats (save 39) is set by
+# Event_PosiBolt (the Positron Bolt chest in Vahal Fort F3, Silver Soldier job)
+# or by the Myst Vale musk cats (Event_MuskCatsGuarding): not part of this arc.
+# None of the flags used here is ever cleared (only the five *Picked toggles
+# are, in Event_PickingFifthCharacter; no bclr touches Event_Flags directly).
+# No step of their own:
+#   SethConversation1/2: automatic on entering Island Cave F1/F3 (folded into SethJoined).
+#   Rykros: set by Cutscene_Rykros on the approach; Le Roof speaks the moment
+#     the Landale lands in his room, with no player control in between.
+#   Tower sub-flags StrengthTowerTop/CourageTowerTop, DeVars/SaLews (fight
+#     start), DeVarsDefeated/SaLewsDefeated: all on the top floor, folded.
+#   LeRoofStory1 (set together with LeRoofStory2), AeroPrism2 (with AeroPrism1),
+#     Hydrofoil2 (with Hydrofoil).
+#   InnerSanctGuard2: optional talk with the old priest; never tested in code.
+#   AngerTower, AlysFight, ReFaze, AngerTowerEnd: the Anger Tower is optional;
+#     nothing on the way to the last dungeon tests these flags.
+#   HahnPicked..KyraPicked: the fifth-member toggle, mentioned in Reunion only.
+
+arc Motavia
+
+
+step SethJoined
+# set by: Cutscene_MeetingSeth ($8019, 42:$0) via RunEvent_MeetingSeth on the one Motavia tile ($77,$9B) in front of the Island Cave ($77,$9A); assumed unavoidable
+title Through the Island Cave
+done At the island's cave, a polite stranger named Seth, a traveling archeologist, asked to come along to the temple ruins because of the monsters inside. Chaz agreed.
+next Lead the way through the island cave to the Soldiers' Temple.
+hint Keep climbing; side passages only lead to chests or dead ends. On the floor above the entrance, take the stairs to the south, not the east. The floor after that opens north onto the temple grounds.
+
+step SoldiersTemple
+# set by: Event_SoldiersTempleReached ($9C, 42:$10) on first entering the temple grounds (Map_SoldiersTempleOutside)
+title The Soldiers' Temple
+done The party came out of the cave onto the temple grounds. Seth thanked them and asked to stay a little longer, in case there were more monsters.
+next Go into the Soldiers' Temple and find the Aero-Prism.
+hint The temple door is northwest of the cave exit. Inside is a single hall, and the Aero-Prism is in the chest straight ahead.
+
+step AeroPrism1
+# set by: Event_AeroPrismFound ($9D, 42:$11) as soon as the Aero-Prism chest is opened; AeroPrism2 is set in the same instant
+title The Aero-Prism
+done The party found the Aero-Prism in the temple. But no one, not even Rune, knew how it would point the way to Rykros.
+next Take the Aero-Prism back outside and see how it points the way to Rykros.
+hint Nothing else is in the temple, and raising the prism indoors does nothing. Heal up, then step out under the open sky.
+
+step DarkForce3
+# set by: Cutscene_AeroPrism ($801A, 42:$1) via RunEvent_AeroPrism on the temple grounds (or the Motavia map) once the prism chest is open; battle $12 follows. A lost battle goes back to the title screen, so this only shows mid-battle
+title Dark Force Returns
+done Outside, the Aero-Prism cast a beam of light toward Rykros. Then Seth screamed and changed shape: he had been Dark Force in disguise.
+next Defeat Dark Force.
+hint It is weak to Chaz's Tsu, Githu, Nathu and Rayblade, and to Rune's Efess. Keep Rika ready to heal the party.
+
+step DarkForce3Defeated
+# set by: Event_DarkForce3Defeated ($50, 42:$2) right after the battle; the same flag adds Rykros to the Landale's destinations (loc_63EF2)
+title Race to Rykros
+done Dark Force fell. Rune feared the Darkness had learned the way to Rykros through it, so the party must get there first. Wren stored the light's direction.
+next Return to the Motavia spaceport and fly the Landale to Rykros.
+hint Rykros is now on the Landale's destination list. Ryuka or a Telepipe to Kadary is quickest: the spaceport is a short walk south of town.
+
+arc Rykros
+
+step LeRoof
+# set by: Event_MeetingLeRoof ($48, 40:$0) the moment the Landale lands in Le Roof's room; Rykros (Cutscene_Rykros, 39:$16) is set seconds before, on the approach
+title Le Roof's Test
+done Following the light, the Landale found Rykros, a hidden fourth planet. In the Silence Temple where it landed, Le Roof promised answers once the party met the guardians of two towers.
+next Climb the Strength Tower and the Courage Tower and pass each guardian's test.
+hint Strength Tower: northwest of the Silence Temple. Courage Tower: southeast. At each top, talk to the guardian, win, then open every chest. Only energy weapons, Tsu, Githu, Nathu, Wat, Giwat, Nawat, Tandle or Rayblade hurt them.
+
+step StrengthTowerChests|CourageTowerChests
+# set by: MapUpdate_StrengthTwChests (Palma, Mota and Dezo-Ring chests all open) / MapUpdate_CourageTwChests (Rykr and Algo-Ring); towers in either order; each comes after that tower's Top, guardian fight and Defeated flags
+title One Guardian Passed
+done At the top of a tower, its guardian swept away the monsters there, then tested the party in battle. They passed and took the rings left as proof.
+next Climb the other tower and pass its guardian's test too.
+hint Strength Tower: northwest of the Silence Temple, three rings. Courage Tower: southeast, two rings. Open every chest at the top. Hinas or an Escapipe gets you out of a tower; Le Roof's room has a healing spot.
+
+step StrengthTowerChests CourageTowerChests
+# set by: as above, once both towers' ring chests are open (RunEvent_LeRoofAgain waits for both)
+title Back to Le Roof
+done Both guardians were satisfied. The party now held all five rings, the Palma, Mota, Dezo, Rykr and Algo Rings, as proof.
+next Return to Le Roof with the proof of both guardians.
+hint Le Roof's room is inside the Silence Temple in the middle of Rykros, where the Landale is docked. Hinas or an Escapipe gets you out of the tower quickly; then just walk back in.
+
+arc Dezolis
+
+step LeRoofStory2
+# set by: Cutscene_LeRoofAgain ($801C, 40:$B and 40:$C) via RunEvent_LeRoofAgain once both towers' chests are open; LeRoofStory1 is set in the same instant; ends in the Landale's destination menu
+title To the Esper Mansion
+done Le Roof revealed that Algo itself is the seal holding back The Profound Darkness, and Dark Force its hatred breaking through. Chaz refused a handed-down mission. Rune said the answer waits at the Esper Mansion.
+next Fly to Dezolis and follow Rune to the Esper Mansion.
+hint The Landale's menu opens at once: choose Dezolis. From the spaceport, Ryuka or a Telepipe takes you to the Esper Mansion. Go through it to the Inner Sanctuary, then downstairs to Lutz's room.
+
+step ElsydeonCave
+# set by: Cutscene_BeforeElsydeonCave ($801D, 20:$30) via RunEvent_BeforeElsydeonCave on entering Lutz's room (Map_InnerSanctuary_B1); talking to the old priest first (InnerSanctGuard2, 20:$27/$36) is optional
+title Meet Elsydeon
+done In Lutz's room, Rune opened a hidden way. Beyond it waits the sacred sword Elsydeon, perhaps the only weapon that can destroy The Profound Darkness. Chaz must go alone.
+next Go into the cave alone and meet Elsydeon.
+hint Chaz fights on his own here. If he is hurt, talk to Rune in Lutz's room to be healed. The sword lies on the cave's lower level: stand before it and examine it.
+
+step Elsydeon
+# set by: Cutscene_Elsydeon (Interaction_EventIndexes $A: examining the sword in Map_ElsydeonCave_B1; 20:$31, 20:$32)
+title Trouble on Motavia
+done The spirits of those who once fought for Algo entrusted Elsydeon to Chaz, and he chose to fight for Algo's future of his own will. Then Demi called: disaster on Motavia.
+next Hurry back to the Dezolis spaceport and head for Motavia.
+hint Leave the mansion and return to the Dezolis spaceport: Ryuka or a Telepipe to Tyler, right beside it, is quickest. The flight to Motavia starts as soon as you walk in.
+
+arc Motavia
+
+step Reunion
+# set by: Cutscene_Reunion ($801F; 39:$0 at the Dezolis spaceport, 39:$1 at the Motavia spaceport) via RunEvent_Reunion on entering the Dezolis spaceport with Elsydeon; the same flag opens the hole (RefreshMapLayout)
+title The Hole North of Piata
+done Raja and Kyra met them at the Dezolis spaceport, and Hahn, Gryz and Demi waited on Motavia. A great hole had opened north of Piata: The Profound Darkness had opened its door.
+next There are only five Rings of Stars: choose a fifth companion, then enter the great hole north of Piata.
+hint Talk to Hahn, Gryz, Demi, Raja or Kyra here to pick one; you can swap later. The hole is south of the spaceport, near Mile, and has no chests: stock up. Optional: Elsydeon now opens the Anger Tower on Rykros.
+
+step ProfoundDarkness
+# set by: Cutscene_ProfoundDarkness ($8020, 42:$3) via RunEvent_ProfoundDarkness in the hole's last room (Map_TheEdge_Part9); battle $1A, then the ending (RunEvent_Ending); only shows mid-battle
+title The Profound Darkness
+done At the bottom of the hole, before a portal not yet fully open, the party came face to face with The Profound Darkness.
+next Defeat The Profound Darkness and decide Algo's future.
+hint It changes form twice. Every form is weak to anti-evil attacks: Elsydeon itself, Chaz's Tsu, Githu, Nathu and Rayblade, Megid if he learned it, and Rune's Efess.
+
+
+# ---------------------------------------------------------------- the Hunters' Guild
+
+# Hunters' Guild jobs for the journal (journal.txt format, see tools/make_journal.py).
+#
+# Source: HuntersGuildData (ps4.asm ~150334), 8 bytes a job: Taken, Completed, Fee, three guild
+# dialogue IDs (offer, reminder, payout: tree 26, IDs >= $1F from tree 27), From, Until.
+# Fees: loc_71DB4 x 1000 meseta = 5000, 2000, 3000, 5000, 50000, 10000, 0, 80000.
+# Event_HuntersGuild (~149976), scanning jobs in table order:
+#   Taken and not Completed -> only that job's reminder (one job at a time: no list).
+#   Completed and not Fee   -> payout dialogue, Fee set, meseta added (paid even after Until).
+#   all 8 paid              -> T26 $12 "no jobs yet".  Otherwise the list: From clear ->
+#   "Listing Pending"; Until set -> another colour, and choosing it says withdrawn (T27 $3A; T26 $19
+#   for job 0); a paid job -> "already resolved" (T26 $11); an open job -> offer text, Yes sets Taken.
+#   Job 0 only (loc_7197E): Taken, not Completed and Elsydeon set -> T26 $19 and Taken+Completed cleared.
+# Names: the game's own GuildText_* strings (English build), capitalization as in the game.
+# Stages: only flags every player sets, in this order, never cleared. EventFlags_Clear by name only
+# touches the three Rocky escapes, Bail, Penguin*, *Picked, ZemaPetrified, plus the job-0 cancel above.
+# Fan saves (fan_save_order.txt): 09-10 ranch, 17 Rocky, 19 student, 20 fissure, 36 stain, 37 boy,
+# 38 twist, 39 soldier; every stage flag below is set there, in this order.
+# Tn $xx = entry $xx of script/dialogue n.asm (the map's DialogueTree). Places come from the maps'
+# door and object tables (16 px tiles) and the guild's own directions.
+
+job The Ranch Owner
+flags TheRanchOwner MileSandWorm RanchOwnerFee AlysFound Elsydeon
+# set by: TheRanchOwner = Yes to the guild offer (T26 $14). MileRanchOwner = Event_RanchOwner: the rancher
+# (Mile slot 0, T3 $11 -> $13 once TheRanchOwner; dialogue $20) steps aside and the two invisible blocks at
+# the ranch gate go (MapDataMan_RanchOwner). MileSandWorm = Event_MileSandWormBattle, set as the fight
+# starts; it comes from RunEvent_MileSandWorm (Mile map event $70): each step inside the ranch (x <= $170,
+# y $150-$2B0, west side of Mile) has a 1-in-32 chance. RanchOwnerAfterBattle (talk to him after: T3 $15,
+# dialogue $21) is optional, the guild only needs MileSandWorm. Until Elsydeon: see the header (cancelled
+# if taken and the worm not yet beaten). Mile itself becomes MileDead at Reunion (AdjustMileMap).
+about A ranch owner in Mile says the sand worms he raises have grown so big he can't cope, and asks a hunter for help. Fee: 5,000 meseta.
+stage TheRanchOwner | Go to Mile and talk to the ranch owner. | Mile is southeast of Aiedo and north of Piata. The rancher stands at the gate of his sand worm ranch, on the west side of the village. Don't put this off: near the story's end the guild drops it.
+stage MileRanchOwner | Get rid of the overgrown sand worm on the ranch. | The rancher has stepped aside from the gate. Walk around inside the ranch until the giant sand worm surfaces and attacks, then beat it.
+reward The sand worm is beaten. Collect 5,000 meseta at the Hunters' Guild in Aiedo. The rancher would like a word, too.
+
+job Tinkerbell's Dog
+flags TinkerbellsDog RockyHome RockyFee LandRover GuildPlaceholder
+# set by: RockyOwner = Event_RockyOwner (RockyHouse slot 1, T11 $42 -> $44 once TinkerbellsDog; dialogue
+# $5E). Before that Rocky sits eating in east Krup (MapDataMan_KrupRocky shows him while RockyOwner is
+# clear; T5 $33 is just chat). After it he is in south Monsen (MapDataMan_MonsenRocky); the first talk is
+# Event_RockyFound (T12 $28, dialogue $2C) = RockyFound, and from then on he shows in Termi (MapDataMan_Termi).
+# Event_CatchingRocky (T12 $29, T13 $4B, T5 $34): carrying a Shortcake -> every Shortcake taken, RockyHome,
+# warp home (T11 $46). Without one he runs: all three escape flags cleared, then that town's set (loc_72866):
+# Monsen -> Termi, Termi -> Krup, Krup -> Monsen. So the escape flags are optional, cyclic and cleared: no
+# stages. If wanted, exactly one is set at a time, so these extra stages after RockyFound would be exact:
+#   RockyFound RockyTermiEscape = he is in Krup; RockyFound RockyKrupEscape = Monsen; RockyFound RockyMonsenEscape = Termi.
+# Clue: T11 $3F -> $40 (he loves sweet things) and Krup T5 $30 (he left, went north). Shortcake: shop $1D =
+# AiedoBakery_B1, the basement bakery through the door at Aiedo tile (20,22), northwest. Monsen and Termi
+# lie beyond quicksand (T12 $04, T13 $3A): Land Rover, hence From LandRover.
+about Rocky, the pet dog of the family at Tinkerbell's house in Aiedo, has gone missing, and they want a hunter to find him. Fee: 2,000 meseta.
+stage TinkerbellsDog | Talk to Rocky's family at Tinkerbell's house in Aiedo. | The house is in the east part of Aiedo. Talk to everyone there: once you've heard the details, the family has a clue for you.
+stage RockyOwner | Find Rocky. His family says he is fat, stubborn and loves sweet things. | Rocky has wandered all the way to Monsen (Land Rover over the quicksand), on the south side of town. Bring a Shortcake: the bakery in a basement in northwest Aiedo sells them.
+stage RockyFound | Catch Rocky. Something sweet should do it. | Talk to Rocky while carrying a Shortcake from the basement bakery in northwest Aiedo. Without one he bolts: from Monsen to Termi, Termi to Krup, then Krup back to Monsen.
+reward Rocky is home. Collect 2,000 meseta at the Hunters' Guild in Aiedo.
+
+job Missing Student
+flags MissingStudent StudentRecovered StudentFee ZioNurvus GuildPlaceholder
+# set by: DormOwner = Event_PiataDormOwner (caretaker, T2 $57 -> $59 once MissingStudent; dialogue $6C).
+# StudentSick = Event_MissingStudentFound (the girl in Kadary church slot 4, T9 $4A -> $4B; needs DormOwner,
+# else only $52): she faints from hunger and the party is moved to the Kadary inn (dialogue $53: she needs
+# something nutritious). After ZioNurvus the church is emptied but for the priest and her
+# (MapDataMan_KadaryChurchPeople). Perolymate = Event_OldManNearMissingStudent (old man by her bed, T9 $4E):
+# takes a carried Perolymate ($4F), else repeats $53. StudentRecovered = Event_MissingStudentInBed (T9 $51,
+# needs Perolymate), then a warp to the Piata dorm (T2 $5B). Perolymate: only shop $1E = TermiItemShop
+# (door at Termi tile (18,12), northwest), which also sells the Alis Sword.
+about The caretaker of the student dorms in Piata says a girl in their care has disappeared, and asks a hunter to find her. Fee: 3,000 meseta.
+stage MissingStudent | Talk to the caretaker of the student dorms in Piata. | The dorms are in the northwest part of Piata.
+stage DormOwner | Find the missing student. She ran off to follow a strange religion. | Zio's followers gathered in Kadary. Look in the church in the northwest of Kadary: with Zio gone it's nearly empty, but one girl is still there.
+stage StudentSick | Find something nutritious for the weak student. | She is in bed at the Kadary inn. Buy a Perolymate at the item shop in Termi (northwest corner of town), then talk to the old man by her bed while you carry it.
+stage Perolymate | See how the student is doing. | Talk to her in her bed at the Kadary inn.
+reward The student is back at the dorm. Collect 3,000 meseta at the Hunters' Guild in Aiedo.
+
+job Fissure of Fear
+flags FissureOfFear FractOoze FissureOfFearFee ZioNurvus GuildPlaceholder
+# set by: TallasMother = Event_TallasMom (Eddie, the mother, MonsenHouse4 slot 0, T12 $1A -> $1C once
+# FissureOfFear; dialogue $2D). It also lifts the warning sign between her house and the crack
+# (MapDataMan_MonsenSign: gone while TallasMother is set and FractOoze clear), opening the drop into the
+# MonsenCave (Monsen transitions at tiles (43,39)/(42,40); her door is at (44,32)). InsideCave =
+# Event_InsideMonsenHole, cave map event $71 on arrival (dialogue $24). FractOoze = Event_FractOozeFound
+# (T12 $26; the slime is east then north of the landing, past the shoes T12 $25), set as the fight starts.
+# TallasSaved (cave map event $72, Event_TallasRescued) follows the win by itself; AfterCrevice (talk to
+# Eddie after, T12 $1E) is optional. Fract Ooze's skills are Fission3 / CellSplit: it splits.
+about Eddie of Monsen writes that their son has fallen into a crack in the earth, and begs a hunter to save him. Fee: 5,000 meseta.
+stage FissureOfFear | Go to Monsen and talk to Eddie. | Monsen is out in the quicksand: take the Land Rover. Eddie's house is in the east of town, among the cracks the earthquakes left.
+stage TallasMother | Go down the crack to look for Eddie's son, Tallas. | The warning sign by the crack just south of Eddie's house is gone now. Walk into the crack to drop into the cave below.
+stage InsideCave | Search the cave under Monsen for Tallas. | Head east past the child's shoes; the groaning comes from further in, to the northeast. The creature there can split into copies, so bring attacks that hit every enemy.
+reward Tallas is safe. Collect 5,000 meseta at the Hunters' Guild in Aiedo. Eddie would like to thank you, too.
+
+job Stain in Life
+flags StainInLife GirlsBailedOut StainInLifeFee Hydrofoil2 GuildPlaceholder
+# set by: MissingGirlsMom = Event_LostGirlsMother (the chief's wife, UzoHouse3 slot 1, T25 $0C -> $0D once
+# StainInLife; dialogue $13); the chief himself denies asking (T25 $08 -> $09). GirlPrison = Event_GirlPrison
+# (a sister in the Aiedo prison, T11 $58 -> $59 once MissingGirlsMom; dialogue $5F). PrisonGuard =
+# Event_GirlsBail (guard, T11 $4D -> $4F once GirlPrison; $50: bail 50,000). BailPaid = Event_PayingGirlsBail
+# (guard again, $60): Yes with >= 50,000 meseta on hand pays it. GirlsBailedOut = Event_GirlsBailedOut (that
+# sister again, $5B), then a warp to Uzo (T25 $0A). Bail ($7F) is not a step: cleared, then set if you hold
+# 50,000, on every bail talk. The sisters sit in the prison from GirlsCaught or Zio (MapDataMan_AiedoPrison),
+# so always by Hydrofoil2. Prison door at Aiedo tile (56,26), northeast; Uzo house door at (20,44), southwest.
+about The village chief of Uzo writes that his two daughters left their island village and never came back. Find them and bring them home. Fee: 50,000 meseta.
+stage StainInLife | Go to Uzo and ask at the village chief's house. | Uzo is on an island south of Aiedo: take the Hydrofoil. The chief's house is in the southwest of the village. He won't admit he asked, so talk to his wife.
+stage MissingGirlsMom | Find the two sisters. They rafted to the mainland to shop at its big market town. | That's Aiedo. They ran up bills they couldn't pay and are locked up in the Aiedo prison, in the northeast of town. Talk to them there.
+stage GirlPrison | Find a way to get the sisters out of prison. | Talk to the guard at the Aiedo prison about the two girls.
+stage PrisonGuard | Pay the sisters' bail of 50,000 meseta. | Carry at least 50,000 meseta, talk to the prison guard again and answer yes. The job's fee is also 50,000, so you get it back.
+stage BailPaid | Take the sisters home to Uzo. | Their cell is unlocked now. Talk to the sister you spoke with before, and the party sees them both home.
+reward The sisters are home. Collect 50,000 meseta at the Hunters' Guild in Aiedo.
+
+job Dying Boy
+flags DyingBoy CulversAfterRecovery DyingBoyFee Hydrofoil2 GuildPlaceholder
+# set by: Culvers = Event_DyingBoyFather (Culvers, CulversHouse slot 0, T24 $28 -> $29 once DyingBoy;
+# dialogue $39: buy something from Termi's gift shop). AlisSword = Event_DyingBoy (the boy in bed, T24 $32):
+# needs Culvers and the Alis Sword item, which it takes (else $3B). CulversAfterRecovery =
+# Event_FatherAfterBoyRecovery (T24 $28 -> $2B once AlisSword; dialogue $3A). Alis Sword: only shop $1E =
+# TermiItemShop; its Pennant and Wood Carving don't count. Culvers' door is at Torinco tile (24,12), the
+# north end ("farthest in the back", T27 $2E). Torinco is an island village (T24 $18), south of Monsen.
+about Mr. Culvers of Torinco writes that his son has fallen ill. He has a plan to help and will explain it in person. Fee: 10,000 meseta.
+stage DyingBoy | Go to Torinco and talk to Mr. Culvers. | Torinco is a village on an island south of Monsen: cross the sea in the Hydrofoil. The Culvers house is the one farthest back, at the north end of the village.
+stage Culvers | Buy a souvenir from Termi to lift the Culvers boy's spirits. | The doctor says he's cured, but he's sure he's dying. He loved Termi's statue of the heroine Alis: buy the Alis Sword at Termi's item shop and give it to him.
+stage AlisSword | Tell Mr. Culvers that his son is better. | Talk to Mr. Culvers in his house at the north end of Torinco.
+reward The boy is well again. Collect 10,000 meseta at the Hunters' Guild in Aiedo.
+
+job Man with Twist
+flags ManWithTwist KingRappy ManWithTwistFee Hydrofoil2 GuildPlaceholder
+# set by: Sekreas = Event_MeetingSekreas (TorincoHouse2, T24 $24 -> $25 once ManWithTwist; dialogue $3C:
+# the leader bird is in a cave northeast of Torinco = RappyCave). KingRappy = Event_KingRappy (talk to the big
+# bird at the cave's north end, T25 $3D), set as the fight starts; without Sekreas it's only $35.
+# SekreasReason (cave map event $73, Event_KingRappyDefeated) follows the win by itself. The guild pays 0
+# here (loc_71DB4; payout T27 $34), so the reward line names no sum.
+about Mr. Sekreas of Torinco asks a hunter to wipe out a flock of birds that is eating the village's terraced fields. Fee offered: 20,000 meseta.
+stage ManWithTwist | Go to Torinco and talk to Mr. Sekreas. | Torinco is a village on an island south of Monsen: take the Hydrofoil. Sekreas lives in the middle of the village.
+stage Sekreas | Defeat the leader of the birds in its cave northeast of Torinco. | The huge bird waits at the far north end of the cave. Talk to it to start the fight.
+reward Report back to the Hunters' Guild in Aiedo to close the job.
+
+job Silver Soldier
+flags SilverSoldier Dominators SilverSoldierFee Hydrofoil2 Elsydeon
+# set by: Servants = Event_ZemaServantBattle, Zema map event $74 as soon as you enter with the job taken (a
+# fight). ZemaOldMan = Event_ZemaOldMan (ZemaHouse1 slot 2, door at Zema tile (44,22); T4 $4A -> $4C, needs
+# Servants; dialogue $6C); it also drops the force field at Vahal Fort's door (MapDataMan_VahFortBarrier).
+# Clue: T4 $5E (the machines flew in from the northeast). VahalFort = Event_VahalFortEntrance (fort map
+# event $75 on arrival, needs ZemaOldMan). VahalFortMidway = Event_VahalFortMidway (map event $76 on
+# reaching F2, the platform and conveyor floor; its terminals, event $1B, reverse the belts). Dominators =
+# Event_DaughterTerminal (top floor F3, T43 $0A), set as the fight starts; DaughterShutDown follows by
+# itself. Optional: VahFortBarrier (the force field talk, only if you come before the old man),
+# OldManZemaAfterDaughter (T4 $4E), MuskCats (= Wren's Positron Bolt, Event_PosiBolt on F3).
+# Until Elsydeon: withdrawn if not taken. If taken with ZemaOldMan still clear at Elsydeon, the job is stuck:
+# T4 $4A checks Elsydeon first ($51), the force field stays, and the guild has no cancel for it.
+# How to reach Vahal Fort (vehicle) not confirmed; only "northeast" (T4 $5E, overworld $A2,$28 vs Zema $63,$52).
+about An old man in Zema reports strange machines roaming the village outskirts. No one has been hurt, but the villagers are scared. Fee: 80,000 meseta.
+stage SilverSoldier | Go to Zema and see the old man who sent the request. | Be ready for a fight as you walk into Zema. The old man lives in the house farthest back. Don't put this off: late in the story he no longer asks for help.
+stage Servants | Talk to the old man in Zema. | His house is the one farthest back in the village, at its northeast end.
+stage ZemaOldMan | Find out where the machines come from. | A villager saw them fly in from the northeast. Vahal Fort stands northeast of Zema, and its way in is open now.
+stage VahalFort | Search Vahal Fort for whoever is sending the machines. | Ride the lifts up through the fort.
+stage VahalFortMidway | Reach the top floor of Vahal Fort. | Ride the moving platforms and conveyor belts; the terminals on this floor reverse the belts. A lift leads up to the top floor, where Wren can also find a new weapon unit.
+reward The machines are stopped. Collect 80,000 meseta at the Hunters' Guild in Aiedo. The old man in Zema will want to hear, too.

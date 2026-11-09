@@ -21,7 +21,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def version(build):
-    """the version the build was made with: its CMakeCache, else git"""
+    """the version the build was made with: its CMakeCache, else CMakeLists.txt's
+    PSIV_VERSION_BASE and the git commit"""
     try:
         cache = open(os.path.join(build, 'CMakeCache.txt'), encoding='utf-8').read()
         m = re.search(r'^PSIV_VERSION:STRING=(.+)$', cache, re.M)
@@ -29,9 +30,16 @@ def version(build):
             return m.group(1).strip()
     except OSError:
         pass
+    base = '0.0.0'
+    try:
+        m = re.search(r'set\(PSIV_VERSION_BASE "([^"]+)"\)',
+                      open(os.path.join(ROOT, 'CMakeLists.txt'), encoding='utf-8').read())
+        base = m.group(1) if m else base
+    except OSError:
+        pass
     commit = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], cwd=ROOT, capture_output=True,
                             text=True).stdout.strip()
-    return '0.1.0-alpha+' + commit if commit else '0.1.0-alpha'
+    return base + '+' + commit if commit else base
 
 
 def stb_license():
@@ -87,6 +95,7 @@ def mac_app(build, app, ver):
     os.chmod(os.path.join(macos, 'psiv'), 0o755)
     for f in ('NotoSans-Regular.ttf', 'OFL.txt'):
         shutil.copyfile(os.path.join(ROOT, 'res', 'fonts', f), os.path.join(resources, 'fonts', f))
+    shutil.copytree(os.path.join(ROOT, 'res', 'voices'), os.path.join(resources, 'voices'))   # before signing
     short = re.match(r'[0-9.]+', ver).group(0)          # 0.1.1-alpha+abc -> 0.1.1
     with open(os.path.join(app, 'Contents', 'Info.plist'), 'w', encoding='utf-8', newline='\n') as f:
         f.write(INFO_PLIST.format(short=short, full=escape(ver)))
@@ -127,6 +136,9 @@ def stage(kind, build, folder, sdl_license, ver=''):
     readme = open(os.path.join(ROOT, 'docs', 'TESTERS.md'), encoding='utf-8').read()
     with open(os.path.join(folder, 'README.txt'), 'w', encoding='utf-8', newline=nl) as f:
         f.write(readme)
+    # the party's battle voices (the port's own: runtime/battlevox.h)
+    if kind != 'macos':                                  # (the app has them inside: mac_app)
+        shutil.copytree(os.path.join(ROOT, 'res', 'voices'), os.path.join(folder, 'voices'))
     licenses(os.path.join(folder, 'LICENSES'), sdl_license)
     # the port's own licence (GPL-3.0): it travels with every copy
     text = open(os.path.join(ROOT, 'LICENSE'), encoding='utf-8').read()

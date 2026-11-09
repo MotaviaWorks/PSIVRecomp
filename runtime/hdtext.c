@@ -150,6 +150,23 @@ static void find_cells(const VdpLine *lines, int w, int h) {
     }
 }
 
+/* the dialogue on screen, as letters and digits only, lower case, in
+ * reading order (for scenevox.c: which page of the script this is) */
+int hdtext_dialogue_key(const VdpLine *lines, int w, int h, char *out, int n) {
+    if (!dlg_char[1]) build_tables();                       /* the modern text may be off (no font) */
+    find_cells(lines, w, h);
+    int k = 0;
+    for (int i = 0; i < ncells && k < n - 1; i++) {             /* cells come out row by row, left to right */
+            const Cell *c = &cells[i];
+            if (c->h != 16) continue;
+            uint32_t ch = c->ch;
+            if (ch >= 'A' && ch <= 'Z') ch += 32;
+            if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) out[k++] = (char)ch;
+        }
+    out[k] = 0;
+    return k;
+}
+
 int hdtext_has_text(const VdpLine *lines, int w, int h) {
     if (!enabled) return 0;
     find_cells(lines, w, h);

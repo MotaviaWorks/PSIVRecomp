@@ -22,6 +22,16 @@
  *     --weather L[:KIND] battle weather (with --depth): 0 off, 1 light, 2 heavy; KIND
  *                        (rain, storm, snow, clouds, debris, clear) in every battle
  *     --weather-sound 0  the weather's rain and thunder silent
+ *     --water S          the field's living water and swaying trees (fieldfx.h);
+ *                        shots of the field show them, composed at S x
+ *     --no-trees / --no-water   leave one of them out
+ *     --no-pan           battles: no camera pan to the one attacked (battleui.h)
+ *     --cheat NAME[=V]   a cheat (cheats.h): hp, tp, nobattles, money, exp=2|4, weak
+ *     --voices DIR       the party's battle voices from DIR/<name>_<moment>_<n>.wav (battlevox.h)
+ *     --scene-voices DIR a voiced-scenes pack: DIR/scenes.txt and its clips (scenevox.h)
+ *     --auto-text        auto-advance voiced scenes (scenevox.h)
+ *     --journal N        print the journal (journal.h) at logical frame N: the
+ *                        story's step, the steps before it not reached, the jobs
  *     --layers F:PREFIX  frame F's layers as PNGs, plane A's tiles and the sprite
  *                        table as text (for working out what the game draws where)
  *     --sram FILE        battery save to load before power-on (8 KB, the odd
@@ -41,13 +51,18 @@
  *     --algol            the music on Algol, the port's modern sound chip (algol.h)
  *     --algol-bank ROM   with the instruments of a SNES game you own (snesbank.h)
  *     --custom-music DIR your own music files in place of the game's songs (music.h)
- *     --fpview S         first-person dungeons (fpview.h); shots at S x
+ *     --levels M:E:V     Settings > Sound's levels, percent: the music, the sound
+ *                        effects, the voices (mixbus.h); default 100:100:100
+ *     --fpview S        first-person dungeons (fpview.h); shots at S x
  *     --click F:X,Y[,R]  with --movie: a mouse click at logical frame F on frame
  *                        pixel (X, Y) -- click to walk (walkto.h), battle menus
  *                        (battleui.h); R: the right button; repeatable
  *     --poke F[-G]:ADDR=VAL  testing: set RAM byte $FFADDR to VAL (both hex) before
  *                        the work after frame F (each frame to G); logical with
  *                        --movie; repeatable
+ *     --teleport F:MAP:X:Y[:FACE[:ALIGN]]  testing (footage): at frame F go to field
+ *                        map MAP, starting at X,Y (Map_Start_X/Y_Pos), as a map
+ *                        transition does (hex after F); repeatable
  *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
  *                        (next to the trace, or build/bizhawk/port.*)
  *     --dump-to PREFIX   ... to PREFIX.ram.bin etc. instead
@@ -74,6 +89,11 @@
 #include "walkto.h"
 #include "rewind.h"
 #include "weather.h"
+#include "fieldfx.h"
+#include "battlevox.h"
+#include "scenevox.h"
+#include "journal.h"
+#include "cheats.h"
 #include "widemap.h"
 #include "rumble.h"
 #include "sfx.h"
@@ -96,9 +116,14 @@ typedef struct { uint64_t frame; const char *path; } Shot;
 static Press presses[256];
 static Shot shots[64];
 static int npress, nshot;
-static struct { uint64_t frame; int x, y, right; } clicks[16];   /* --click */
+static struct { uint64_t frame; int x, y, right; } clicks[64];   /* --click */
 static int nclick;
-static struct { uint64_t from, to; uint32_t addr; uint8_t val; } pokes[16];   /* --poke */
+static struct { uint64_t from, to; uint32_t addr; uint8_t val; } pokes[64];   /* --poke */
+/* --teleport: a map change as a map transition makes one (DoMapTransitionData):
+ * the map, where the party starts (Map_Start_X/Y_Pos, as the RAM holds them),
+ * facing and alignment, then Game_Mode_Index 8 (load the field map) */
+static struct { uint64_t frame; unsigned map, x, y, face, align; } teleports[16];
+static int nteleport;
 static int npoke;
 static Press *movie;                 /* --movie: events by logical frame */
 static int nmovie;
@@ -180,7 +205,7 @@ static void save_png(const char *path, const uint32_t *px, int w, int h) {
 
 /* --depth L[:S]: battle depth at level L; screenshots of battle frames show
  * it, composed at S times the game's resolution (default 2) */
-static int depth_scale, depth_active, text_scale = 3, panels_on, out_w, fp_scale;
+static int depth_scale, depth_active, text_scale = 3, panels_on, out_w, fp_scale, water_scale;
 static uint64_t shot_from, shot_to;              /* --shot-range F1-F2 */
 static uint32_t depth_buf[VDP_MAX_W * 4 * VDP_MAX_H * 4];
 
@@ -328,6 +353,26 @@ static void report_hot(void) {
 static FILE *replay;
 static const char *replay_path;
 static uint64_t logical, dump_at, mismatched_frames;
+static uint64_t journal_at;              /* --journal N */
+
+/* the journal as it stands (journal.h), for checking its steps against saves */
+static void print_journal(void) {
+    int s = journal_story();
+    const JournalStep *st = journal_step(s);
+    printf("journal: step %d of %d: %s / %s\n", s, journal_steps(), st ? st->arc : "-", st ? st->title : "(no story yet)");
+    if (st) printf("journal: next: %s\n", st->next);
+    for (int i = 0; i < s; i++)
+        if (!journal_reached(i)) printf("journal: not reached: %d %s\n", i, journal_step(i)->title);
+    printf("journal: guild %s\n", journal_guild_known() ? "known" : "not known yet");
+    for (int j = 0; j < journal_jobs(); j++) {
+        JournalJob jb;
+        journal_job(j, &jb);
+        static const char *const STATE[] = {"unseen", "offered", "taken", "report back", "done"};
+        printf("journal: job %d %s: %s%s%s\n", j, jb.name, STATE[jb.state], jb.state == JOB_TAKEN ? ": " : "",
+               jb.state == JOB_TAKEN && jb.next ? jb.next : "");
+    }
+}
+
 static uint64_t rewind_keep_at, rewind_back_at;   /* --rewind-test S:R */
 static int rewind_back_done;
 
@@ -684,6 +729,7 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         for (int i = 0; i < nwhere; i++)
             if (where_at[i] == logical) print_where(logical);
         if (ramlog_n) ramlog_frame(logical);
+        if (journal_at && logical == journal_at) print_journal();
         if (dump_at && logical == dump_at) {
             char prefix[512];
             dump_prefix(prefix, sizeof prefix, "port");
@@ -716,7 +762,7 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
     uint64_t when = bylogical ? logical : f;
     int fresh = (!movie && !testbot_on()) || frame_vint_will_fire();   /* a logical frame only counts once */
     /* battle depth and modern text: shots show what the player sees */
-    int hs = depth_scale ? depth_scale : fp_scale ? fp_scale : text_scale;
+    int hs = depth_scale ? depth_scale : fp_scale ? fp_scale : water_scale ? water_scale : text_scale;
     if (fresh) {
         int pm = panels_on && frame_wide_margin > 0 && width == 320 && panels_field() ? frame_wide_margin : 0;
         int hires = 0;
@@ -724,6 +770,8 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         if (pm) {                                          /* side panels around the 320 view */
             uint32_t *mid = depth_buf + (size_t)pm * (size_t)hs;
             hdtext_upscale(pixels, VDP_MAX_W, width, height, mid, out_w * hs, hs);
+            if (water_scale && fieldfx_prepare(frame_lines, width, height))
+                fieldfx_draw(pixels, VDP_MAX_W, width, height, mid, out_w * hs, hs);
             if (hdtext_enabled() && hdtext_has_text(frame_lines, width, height))
                 hdtext_draw(frame_lines, width, height, mid, out_w * hs, hs);
             panels_draw(depth_buf, out_w * hs, hs, pm, width, height);
@@ -731,6 +779,11 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         } else {
             hires = fpview_compose(frame_lines, pixels, width, height, depth_buf, width * hs, hs)
                     || (depth_scale ? depth_compose(frame_lines, width, height, depth_buf, width * hs, hs) : 0);
+            if (!hires && water_scale && fieldfx_prepare(frame_lines, width, height)) {   /* living water */
+                hdtext_upscale(pixels, VDP_MAX_W, width, height, depth_buf, width * hs, hs);
+                fieldfx_draw(pixels, VDP_MAX_W, width, height, depth_buf, width * hs, hs);
+                hires = 1;
+            }
             if (hdtext_enabled() && hdtext_has_text(frame_lines, width, height)) {
                 if (!hires) hdtext_upscale(pixels, VDP_MAX_W, width, height, depth_buf, width * hs, hs);
                 hdtext_draw(frame_lines, width, height, depth_buf, width * hs, hs);
@@ -762,6 +815,7 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         snprintf(p, sizeof p, "%s/%06llu.png", shot_dir, (unsigned long long)logical);
         if (depth_active) save_png_stride(p, depth_buf, sw, sh, sw);
         else save_png(p, pixels, width, height);
+        if (water_scale && getenv("PSIV_SHOT_LOG")) printf("water: logical %llu, %d px, %d trees\n", (unsigned long long)logical, fieldfx_pixels(), fieldfx_tree_count());
         if (getenv("PSIV_SHOT_LOG"))                       /* where each shot falls in the frames and the sound */
             printf("shot: logical %llu frame %llu sample %u\n", (unsigned long long)logical, (unsigned long long)f,
                    (unsigned)wav_samples);
@@ -793,7 +847,7 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
                        clicks[i].x, clicks[i].y, cx, cy, slot,
                        ok == 3 ? "a battle menu pick" : ok == 2 ? "C (text up)" : ok ? "walking" : "nowhere to go");
             }
-        bus_pad[0] = battleui_pad(keys, walkto_pad(keys, keys));
+        bus_pad[0] = scenevox_pad(keys, battleui_pad(keys, walkto_pad(keys, keys)));
     }
     for (int i = 0; i < npoke && fresh; i++)               /* --poke: a RAM byte set before the next frame's work */
         if (when >= pokes[i].from && when <= pokes[i].to) {
@@ -801,6 +855,21 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
                 printf("%s %llu: poke %04X = %02X (was %02X)\n", bylogical ? "logical" : "frame", (unsigned long long)when,
                        pokes[i].addr, pokes[i].val, m68k_ram[pokes[i].addr]);
             m68k_ram[pokes[i].addr] = pokes[i].val;
+        }
+    for (int i = 0; i < nteleport && fresh; i++)           /* --teleport */
+        if (when == teleports[i].frame) {
+            unsigned w[6][2] = {{0xEC2A, (unsigned)(m68k_ram[0xEC28] << 8 | m68k_ram[0xEC29])},   /* Field_Map_Index_2 */
+                                {0xEC28, teleports[i].map}, {0xEC48, teleports[i].x}, {0xEC4A, teleports[i].y},
+                                {0xEC44, teleports[i].face}, {0xEC46, teleports[i].align}};
+            for (int k = 0; k < 6; k++) {
+                m68k_ram[w[k][0]] = (uint8_t)(w[k][1] >> 8);
+                m68k_ram[w[k][0] + 1] = (uint8_t)w[k][1];
+            }
+            m68k_ram[0xEF00] = 0;                              /* Game_Mode_Index: load the field map */
+            m68k_ram[0xEF01] = 8;
+            printf("%s %llu: teleport to map %02X at %X,%X facing %X align %X\n", bylogical ? "logical" : "frame",
+                   (unsigned long long)when, teleports[i].map, teleports[i].x, teleports[i].y, teleports[i].face,
+                   teleports[i].align);
         }
     /* Sound_Index: a request only beats what is playing if its priority is at
      * least as high, so stop everything ($FE) first, then ask for the song */
@@ -891,6 +960,26 @@ static void rewound(uint64_t game_frame) {
     logical = game_frame;
 }
 
+/* --scene-voices: a file's contents (malloc'd) */
+static const char *scene_dir;
+static void *read_file(const char *path, size_t *len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    void *d = malloc((size_t)n + 1);
+    if (d && fread(d, 1, (size_t)n, f) != (size_t)n) { free(d); d = NULL; }
+    fclose(f);
+    *len = (size_t)n;
+    return d;
+}
+static void *scene_clip(const char *name, size_t *len) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s/%s", scene_dir, name);
+    return read_file(path, len);
+}
+
 int main(int argc, char **argv) {
     const char *rom_path = "rom/psiv.bin";
     const char *sram_in = NULL;
@@ -962,7 +1051,14 @@ int main(int argc, char **argv) {
             if (depth_scale > 4) depth_scale = 4;
         } else if (!strcmp(argv[i], "--algol")) {
             algol_set_enabled(1);                          /* the music on the modern chip */
-        } else if (!strcmp(argv[i], "--poke") && i + 1 < argc && npoke < 16) {
+        } else if (!strcmp(argv[i], "--teleport") && i + 1 < argc && nteleport < 16) {
+            char *e;                                       /* F:MAP:X:Y[:FACE[:ALIGN]], hex after F */
+            teleports[nteleport].frame = strtoull(argv[++i], &e, 10);
+            unsigned *v[5] = {&teleports[nteleport].map, &teleports[nteleport].x, &teleports[nteleport].y,
+                              &teleports[nteleport].face, &teleports[nteleport].align};
+            for (int k = 0; k < 5 && *e == ':'; k++) *v[k] = (unsigned)strtoul(e + 1, &e, 16);
+            nteleport++;
+        } else if (!strcmp(argv[i], "--poke") && i + 1 < argc && npoke < 64) {
             char *e;
             pokes[npoke].from = pokes[npoke].to = strtoull(argv[++i], &e, 10);
             if (*e == '-') pokes[npoke].to = strtoull(e + 1, &e, 10);
@@ -970,7 +1066,7 @@ int main(int argc, char **argv) {
             if (*e != '=') { fprintf(stderr, "--poke F[-G]:ADDR=VAL (hex)\n"); return 1; }
             pokes[npoke].val = (uint8_t)strtoul(e + 1, NULL, 16);
             npoke++;
-        } else if (!strcmp(argv[i], "--click") && i + 1 < argc && nclick < 16) {
+        } else if (!strcmp(argv[i], "--click") && i + 1 < argc && nclick < 64) {
             char *e;
             clicks[nclick].frame = strtoull(argv[++i], &e, 10);
             if (*e == ':') clicks[nclick].x = (int)strtol(e + 1, &e, 10);
@@ -982,8 +1078,65 @@ int main(int argc, char **argv) {
             fp_scale = atoi(argv[++i]);
             if (fp_scale < 1) fp_scale = 1;
             if (fp_scale > 4) fp_scale = 4;
+        } else if (!strcmp(argv[i], "--voices") && i + 1 < argc) {
+            const char *dir = argv[++i];                   /* the party's battle voices (battlevox.h) */
+            for (int c = 0; c < VOX_CHARS; c++)
+                for (int m = 0; m < VOX_MOMENTS; m++)
+                    for (int k = 0; k < VOX_TAKES; k++) {
+                        char path[1024];
+                        snprintf(path, sizeof path, "%s/%s_%s_%d.wav", dir, battlevox_char_name(c), battlevox_moment_name(m), k + 1);
+                        FILE *f = fopen(path, "rb");
+                        if (!f) continue;
+                        fseek(f, 0, SEEK_END);
+                        long n = ftell(f);
+                        fseek(f, 0, SEEK_SET);
+                        uint8_t *buf = malloc((size_t)n);
+                        if (buf && fread(buf, 1, (size_t)n, f) == (size_t)n) battlevox_add(c, m, k, buf, (size_t)n);
+                        free(buf);
+                        fclose(f);
+                    }
+            printf("voices: %d takes\n", battlevox_count());
+        } else if (!strcmp(argv[i], "--auto-text")) {
+            scenevox_set_auto(1);
+        } else if (!strcmp(argv[i], "--journal") && i + 1 < argc) {
+            journal_at = strtoull(argv[++i], NULL, 10);
+        } else if (!strcmp(argv[i], "--scene-voices") && i + 1 < argc) {
+            scene_dir = argv[++i];                         /* a voiced-scenes pack (scenevox.h) */
+            char path[1024];
+            snprintf(path, sizeof path, "%s/scenes.txt", scene_dir);
+            size_t n = 0;
+            void *d = read_file(path, &n);
+            if (!d) { fprintf(stderr, "no %s\n", path); return 1; }
+            printf("voiced scenes: %d pages\n", scenevox_load(d, n, scene_clip));
+            free(d);
+        } else if (!strcmp(argv[i], "--cheat") && i + 1 < argc) {
+            const char *c = argv[++i], *eq = strchr(c, '=');      /* cheats.h */
+            int v = eq ? atoi(eq + 1) : 1;
+            size_t n = eq ? (size_t)(eq - c) : strlen(c);
+            static const char *const NAMES[CHEATS] = {"hp", "tp", "nobattles", "money", "exp", "weak"};
+            int k = -1;
+            for (int j = 0; j < CHEATS; j++) if (strlen(NAMES[j]) == n && !strncmp(c, NAMES[j], n)) k = j;
+            if (k < 0) { fprintf(stderr, "no cheat %s\n", c); return 2; }
+            cheats_set(k, v);
+        } else if (!strcmp(argv[i], "--no-pan")) {
+            battleui_set_pan(0);
+        } else if (!strcmp(argv[i], "--no-trees")) {
+            fieldfx_set_trees(0);
+        } else if (!strcmp(argv[i], "--no-water")) {
+            fieldfx_set_water(0);
+        } else if (!strcmp(argv[i], "--water") && i + 1 < argc) {
+            water_scale = atoi(argv[++i]);                 /* the field's living water (fieldfx.h) */
+            if (water_scale < 0) water_scale = 0;
+            if (water_scale > 4) water_scale = 4;
         } else if (!strcmp(argv[i], "--custom-music") && i + 1 < argc) {
             music_set_folder(argv[++i]);                   /* your own music files (music.h) */
+        } else if (!strcmp(argv[i], "--levels") && i + 1 < argc) {
+            int m = 100, e = 100, v = 100;                 /* Settings > Sound's levels (mixbus.h) */
+            if (sscanf(argv[++i], "%d:%d:%d", &m, &e, &v) != 3) {
+                fprintf(stderr, "--levels MUSIC:EFFECTS:VOICES (percent, 0-100)\n");
+                return 1;
+            }
+            mixbus_set_levels((float)m / 100.0f, (float)e / 100.0f, (float)v / 100.0f);
         } else if (!strcmp(argv[i], "--algol-bank") && i + 1 < argc) {
             const char *rom = argv[++i];                   /* a SNES game's instruments (snesbank.h) */
             if (!algol_set_bank(rom)) { fprintf(stderr, "no instrument bank in %s\n", rom); return 1; }

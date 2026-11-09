@@ -48,6 +48,12 @@
 #include "walkto.h"
 #include "rewind.h"
 #include "weather.h"
+#include "fieldfx.h"
+#include "battlevox.h"
+#include "scenevox.h"
+#include "cheats.h"
+#include "journal.h"
+#include "mixbus.h"
 #include "rumble.h"
 #ifndef _WIN32
 #include "icon.h"
@@ -128,6 +134,55 @@ static int dir_writable(const char *dir) {
 }
 #endif
 
+/* a voiced scene's clip, by name, from the home folder's voices/scenes */
+static void *scene_clip(const char *name, size_t *len) {
+    char path[1200], rel[400];
+    snprintf(rel, sizeof rel, "voices/scenes/%s", name);
+    path_in_home(path, sizeof path, rel);
+    size_t n = 0;
+    void *d = SDL_LoadFile(path, &n);
+    if (!d) return NULL;
+    void *copy = malloc(n);                              /* the caller frees it with free() */
+    if (copy) memcpy(copy, d, n);
+    SDL_free(d);
+    *len = n;
+    return copy;
+}
+
+/* the party's battle voices (battlevox.h): yours in the home folder's
+ * voices folder first, else the port's beside the program (or the APK's
+ * assets), else a development build's res/voices */
+static void load_voices(void) {
+    int yours = 0;
+    for (int c = 0; c < VOX_CHARS; c++)
+        for (int m = 0; m < VOX_MOMENTS; m++)
+            for (int k = 0; k < VOX_TAKES; k++) {
+                char name[64], path[1200];
+                snprintf(name, sizeof name, "voices/%s_%s_%d.wav", battlevox_char_name(c), battlevox_moment_name(m), k + 1);
+                const char *where[3] = {home, base_dir, home};
+                const char *sub_[3] = {"", "", "res/"};
+                for (int w = 0; w < 3; w++) {
+                    snprintf(path, sizeof path, "%s%s%s", where[w], sub_[w], name);
+                    size_t n = 0;
+                    void *d = SDL_LoadFile(path, &n);
+                    if (!d) continue;
+                    int ok = battlevox_add(c, m, k, d, n);
+                    SDL_free(d);
+                    if (ok) { yours += w == 0; break; }
+                }
+            }
+    SDL_Log("voices: %d takes (%d of yours)", battlevox_count(), yours);
+    /* a voiced-scenes pack, if there is one: voices/scenes/scenes.txt */
+    char idx[1200];
+    path_in_home(idx, sizeof idx, "voices/scenes/scenes.txt");
+    size_t n = 0;
+    void *d = SDL_LoadFile(idx, &n);
+    if (d) {
+        SDL_Log("voiced scenes: %d pages", scenevox_load(d, n, scene_clip));
+        SDL_free(d);
+    }
+}
+
 static void find_home(void) {
     const char *base = SDL_GetBasePath();
 #if defined(SDL_PLATFORM_ANDROID)
@@ -193,11 +248,24 @@ static Setting settings[] = {
     {"video.widescreen", "1", "16:9 widescreen (other screens keep their shape): 0 off, 1 more map in exploration, 2 side panels with the party in exploration; battles are wide either way"},
     {"video.aspect", "square", "square = square pixels; 4:3 = the console's TV shape (pixels a bit narrower)"},
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed"},
-    {"audio.volume", "100", "0-200 percent"},
+    {"audio.volume", "100", "0-200 percent: everything"},
+    {"audio.music", "100", "the music, 0-100 percent: the game's songs (either chip) or your own files"},
+    {"audio.effects", "100", "sound effects, 0-100 percent: the game's or the port's or yours, and the battle weather"},
+    {"audio.voices", "100", "voices, 0-100 percent: the party's in battle and the voiced scenes"},
     {"enhance.mode", "enhanced", "enhanced = the port's additions below are on; classic = the original game, unchanged (Esc menu > Settings)"},
     {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
     {"enhance.rewind", "on", "rewind: Backspace or the left shoulder fades to white and back to about ten seconds before (a state kept every ten seconds, the last two minutes): on / off"},
+    {"enhance.trees", "on", "trees on the field sway in the breeze, light flickering through their leaves: on / off"},
+    {"enhance.water", "on", "the field's living water: ripples, light, glints and foam drawn over the sea, rivers and pools: on / off"},
+    {"cheat.hp", "off", "cheat: everyone's HP kept full: on / off"},
+    {"cheat.tp", "off", "cheat: everyone's TP kept full: on / off"},
+    {"cheat.no_battles", "off", "cheat: no random battles (set battles still happen): on / off"},
+    {"cheat.money", "off", "cheat: meseta kept at 999,999: on / off"},
+    {"cheat.exp", "1", "cheat: experience from battles: 1 normal, 2 double, 4 quadruple"},
+    {"cheat.weak", "off", "cheat: enemies have 1 HP: on / off"},
+    {"enhance.voices", "on", "the party's voices in battle: shouts as they attack, grunts when hit, a breath as they cast: on / off"},
+    {"enhance.battle_camera", "on", "when an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping (needs battle depth): on / off"},
     {"enhance.battle_weather", "1", "battle weather by place: rain and storms on Motavia's grass, beaches and sea, snow on Dezolis, mist clouds on Rykros, debris in space: 0 off, 1 light, 2 heavy"},
     {"enhance.battle_weather_sound", "on", "the rain and thunder heard with the battle weather: on / off"},
     {"enhance.text", "modern", "text: modern = redrawn with the font below at full resolution; original = the game's pixel font"},
@@ -218,12 +286,16 @@ static Setting settings[] = {
     {"keys.start", "Return", ""},
     {"keys.fast_forward", "Tab", "hold to run unthrottled"},
     {"keys.rewind", "Backspace", "go back about ten seconds (enhance.rewind)"},
+    {"keys.auto_text", "V", "turn auto-advance on or off: voiced scenes move on by themselves once each line is said"},
     {"pad.a", "x", "gamepad buttons use SDL names: a (south), b (east), x (west), y (north), start, back, leftshoulder, rightshoulder"},
     {"pad.b", "a", ""},
     {"pad.c", "b", ""},
     {"pad.start", "start", ""},
     {"pad.fast_forward", "rightshoulder", ""},
     {"pad.rewind", "leftshoulder", ""},
+    {"pad.auto_text", "y", ""},
+    {"enhance.auto_text", "off", "auto-advance in voiced scenes (the north button or V turns it on and off): on / off"},
+    {"enhance.journal_notes", "on", "a note in the corner when the story moves on (the menu's Journal says what to do next): on / off"},
     {"pad.rumble", "normal", "rumble: off, light, normal, strong -- blows landing, critical hits, enemies destroyed, the field's doors and explosions; on the gamepad, or a phone's vibration motor"},
 };
 #define NSETTINGS (int)(sizeof settings / sizeof settings[0])
@@ -287,9 +359,9 @@ static void load_settings(void) {
 }
 
 /* key bindings resolved from the settings */
-enum { IN_UP, IN_DOWN, IN_LEFT, IN_RIGHT, IN_A, IN_B, IN_C, IN_START, IN_FF, IN_REWIND, IN_COUNT };
+enum { IN_UP, IN_DOWN, IN_LEFT, IN_RIGHT, IN_A, IN_B, IN_C, IN_START, IN_FF, IN_REWIND, IN_AUTO, IN_COUNT };
 static const char *in_names[IN_COUNT] = {"up", "down", "left", "right", "a", "b", "c", "start", "fast_forward",
-                                         "rewind"};
+                                         "rewind", "auto_text"};
 static SDL_Scancode key_of[IN_COUNT];
 static SDL_GamepadButton pad_of[IN_COUNT];
 
@@ -670,7 +742,7 @@ static void screenshot_any(const uint32_t *pixels, int w, int h, int stride) {
 
 /* testing hooks (see main) */
 static uint64_t test_menu_frame, test_capture_frame;
-static int test_menu_settings, test_menu_page, test_menu_row;
+static int test_menu_settings, test_menu_journal, test_menu_page, test_menu_row;
 static const char *test_menu_script;                                  /* --menu-script */
 static const char *test_shot;                                         /* its shot:FILE, taken at the next present */
 static const char *test_capture_path;
@@ -743,11 +815,22 @@ static void test_shots(void) {
 /* ------------------------------------------------------------------ rewind (rewind.h) */
 static char rewind_msg[64];
 static uint64_t rewind_msg_until;
+static int journal_notes;             /* Settings > Game > Journal notes */
 
 static void rewind_now(void) {
     if (rewind_request()) return;
     SDL_snprintf(rewind_msg, sizeof rewind_msg, "%s",
                  rewind_enabled() ? "Nothing to go back to yet" : "Rewind is off (Settings, Game)");
+    rewind_msg_until = SDL_GetTicks() + 1800;
+}
+
+/* auto-advance in voiced scenes (scenevox.h): on or off, remembered, and said */
+static void save_setting_str(const char *key, const char *v);
+static void toggle_auto_text(void) {
+    int on = !scenevox_auto();
+    scenevox_set_auto(on);
+    save_setting_str("enhance.auto_text", on ? "on" : "off");
+    SDL_snprintf(rewind_msg, sizeof rewind_msg, "Auto-advance: %s", on ? "on" : "off");
     rewind_msg_until = SDL_GetTicks() + 1800;
 }
 
@@ -805,12 +888,18 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
         if (pm) {                                        /* the game in the middle, panels around it */
             uint32_t *mid = depth_pixels + (size_t)pm * (size_t)ds;
             hdtext_upscale(pixels, VDP_MAX_W, w, h, mid, stride, ds);
+            if (fieldfx_prepare(frame_lines, w, h)) fieldfx_draw(pixels, VDP_MAX_W, w, h, mid, stride, ds);
             if (hdtext_enabled() && hdtext_has_text(frame_lines, w, h)) hdtext_draw(frame_lines, w, h, mid, stride, ds);
             panels_draw(depth_pixels, stride, ds, pm, w, h);
             depth_shown = 1;
         } else {
             depth_shown = fpview_compose(frame_lines, pixels, w, h, depth_pixels, stride, ds)   /* first-person dungeons */
                        || depth_compose(frame_lines, w, h, depth_pixels, stride, ds);
+            if (!depth_shown && fieldfx_prepare(frame_lines, w, h)) {   /* the field's living water */
+                hdtext_upscale(pixels, VDP_MAX_W, w, h, depth_pixels, stride, ds);
+                fieldfx_draw(pixels, VDP_MAX_W, w, h, depth_pixels, stride, ds);
+                depth_shown = 1;
+            }
             if (hdtext_enabled() && hdtext_has_text(frame_lines, w, h)) {    /* modern text */
                 if (!depth_shown) hdtext_upscale(pixels, VDP_MAX_W, w, h, depth_pixels, stride, ds);
                 hdtext_draw(frame_lines, w, h, depth_pixels, stride, ds);
@@ -860,6 +949,14 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
 }
 
 /* store a changed setting and save psiv.ini */
+static void write_settings(const char *path);
+static void save_setting_str(const char *key, const char *v) {
+    for (int i = 0; i < NSETTINGS; i++)
+        if (!strcmp(settings[i].key, key)) snprintf(settings[i].value, sizeof settings[i].value, "%s", v);
+    char path[1100];
+    path_in_home(path, sizeof path, "psiv.ini");
+    write_settings(path);
+}
 static void save_setting_int(const char *key, int v) {
     for (int i = 0; i < NSETTINGS; i++)
         if (!strcmp(settings[i].key, key)) snprintf(settings[i].value, sizeof settings[i].value, "%d", v);
@@ -922,6 +1019,15 @@ static void fit_window(void) {
 }
 
 /* what the enhancement settings mean right now (Classic turns them all off) */
+static void apply_cheats(void) {
+    cheats_set(CHEAT_HP, !SDL_strcasecmp(setting("cheat.hp"), "on"));
+    cheats_set(CHEAT_TP, !SDL_strcasecmp(setting("cheat.tp"), "on"));
+    cheats_set(CHEAT_NO_BATTLES, !SDL_strcasecmp(setting("cheat.no_battles"), "on"));
+    cheats_set(CHEAT_MONEY, !SDL_strcasecmp(setting("cheat.money"), "on"));
+    cheats_set(CHEAT_EXP, setting_int("cheat.exp"));
+    cheats_set(CHEAT_WEAK, !SDL_strcasecmp(setting("cheat.weak"), "on"));
+}
+
 static void apply_enhancements(void) {
     int m = wide_margin();
     if (m != frame_wide_margin) { frame_wide_margin = m; fit_window(); }
@@ -932,12 +1038,19 @@ static void apply_enhancements(void) {
     depth_set_fx(classic_mode() ? 0 : setting_int("enhance.battle_fx"));
     weather_set_sound(SDL_strcasecmp(setting("enhance.battle_weather_sound"), "off") != 0);
     weather_set_level(classic_mode() ? 0 : setting_int("enhance.battle_weather"));
+    fieldfx_set_water(!classic_mode() && SDL_strcasecmp(setting("enhance.water"), "off") != 0);
+    fieldfx_set_trees(!classic_mode() && SDL_strcasecmp(setting("enhance.trees"), "off") != 0);
     rewind_set_enabled(SDL_strcasecmp(setting("enhance.rewind"), "off") != 0);
     const char *sm = setting("enhance.sfx");
     sfx_set_mode(classic_mode() || !SDL_strcasecmp(sm, "original") ? SFX_ORIGINAL
                  : !SDL_strcasecmp(sm, "custom") ? SFX_CUSTOM : SFX_MODERN);
     hdtext_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.text"), "original") != 0);
     battleui_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_ui"), "original") != 0);
+    battleui_set_pan(SDL_strcasecmp(setting("enhance.battle_camera"), "off") != 0);
+    battlevox_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.voices"), "off") != 0);
+    scenevox_set_auto(!SDL_strcasecmp(setting("enhance.auto_text"), "on"));
+    journal_notes = !classic_mode() && SDL_strcasecmp(setting("enhance.journal_notes"), "off") != 0;
+    scenevox_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.voices"), "off") != 0);
     algol_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.music"), "algol"));
     /* first-person dungeons are paused (PsiLok, 2026-11-05: not yet a good way
      * to play): no setting, no menu entry; PSIV_FIRST_PERSON=1 brings the
@@ -972,6 +1085,8 @@ static void apply_video(void) {
 
 static void apply_audio(void) {
     if (audio) SDL_SetAudioStreamGain(audio, (float)setting_int("audio.volume") / 100.0f);
+    mixbus_set_levels((float)setting_int("audio.music") / 100.0f, (float)setting_int("audio.effects") / 100.0f,
+                      (float)setting_int("audio.voices") / 100.0f);
 }
 
 static int rumble_setting(void) {
@@ -1008,6 +1123,9 @@ static const MenuItem GAME_ITEMS[] = {
     {"Rewind", "enhance.rewind", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 0,
      "Backspace or the left shoulder goes back about ten seconds: a fade to white and back.",
      apply_enhancements},
+    {"Journal notes", "enhance.journal_notes", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "A note in the corner when the story moves on. The Journal, in this menu, says what to do next.",
+     apply_enhancements},
 };
 static const MenuItem DISPLAY_ITEMS[] = {
     {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0,
@@ -1019,14 +1137,30 @@ static const MenuItem DISPLAY_ITEMS[] = {
      "4:3 TV: the slightly narrow pixels the console showed on a television.", apply_enhancements},
     {"Smoothing", "video.filter", {"nearest", "linear"}, {"Off", "On"}, 0, 0, 0, 0,
      "Off keeps every pixel sharp; on blends them where the picture is scaled.", apply_video},
+    {"Water", "enhance.water", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "The sea, rivers and pools come alive as you walk: ripples, moving light, glints and foam on the shore.",
+     apply_enhancements},
+    {"Trees", "enhance.trees", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "Trees sway in the breeze, more at their tops, with light flickering through the leaves.",
+     apply_enhancements},
     {"Integer scaling", "video.integer_scaling", {"1", "0"}, {"On", "Off"}, 0, 0, 0, 0,
      "Scale by whole numbers only: the sharpest pixels, with a border round the picture.", NULL},
 };
 static const MenuItem SOUND_ITEMS[] = {
     {"Volume", "audio.volume", {0}, {0}, 0, 200, 10, 0,
-     "The music and the sound effects together.", apply_audio},
+     "Everything together: the music, the sound effects and the voices.", apply_audio},
+    {"Music volume", "audio.music", {0}, {0}, 0, 100, 5, 0,
+     "The music on its own: the game's songs, on either chip, or your own files.", apply_audio},
+    {"Effects volume", "audio.effects", {0}, {0}, 0, 100, 5, 0,
+     "The sound effects on their own: the game's, the port's or yours, and the rain and thunder in battles.",
+     apply_audio},
+    {"Voice volume", "audio.voices", {0}, {0}, 0, 100, 5, 1,
+     "The voices on their own: the party in battle, and the voiced scenes.", apply_audio},
     {"Music", "enhance.music", {"original", "algol"}, {"Original chip", "Algol"}, 0, 0, 0, 1,
      "Algol: the port's own modern sound chip plays the game's music on new instruments, with rock drums.",
+     apply_enhancements},
+    {"Voices", "enhance.voices", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "The party shout as they attack, grunt when hit, draw breath as they cast. Your own in the voices folder.",
      apply_enhancements},
     {"Your music", "enhance.custom_music", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "Audio files you put in the music folder play in place of the game's songs.", apply_enhancements},
@@ -1042,6 +1176,9 @@ static const MenuItem BATTLE_ITEMS[] = {
      apply_enhancements},
     {"Fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1,
      "Drifting mist between the enemies and the party. F8 switches it too.", apply_enhancements},
+    {"Camera", "enhance.battle_camera", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "When an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping.",
+     apply_enhancements},
     {"Weather", "enhance.battle_weather", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1,
      "Rain and storms on Motavia, snow on Dezolis, mist clouds on Rykros, debris in space. Heavy: more of it.",
      apply_enhancements},
@@ -1057,6 +1194,22 @@ static const MenuItem CONTROL_ITEMS[] = {
      "phone's motor.", apply_rumble},
 };
 
+static void apply_cheats(void);
+static const MenuItem CHEAT_ITEMS[] = {
+    {"Infinite HP", "cheat.hp", {"off", "on"}, {"Off", "On"}, 0, 0, 0, 0,
+     "Everyone's HP stays full. (One blow bigger than all of someone's HP still fells them.)", apply_cheats},
+    {"Infinite TP", "cheat.tp", {"off", "on"}, {"Off", "On"}, 0, 0, 0, 0,
+     "Everyone's TP stays full: techniques as often as you like.", apply_cheats},
+    {"No random battles", "cheat.no_battles", {"off", "on"}, {"Off", "On"}, 0, 0, 0, 0,
+     "Walk anywhere without random battles. The story's own battles and bosses still happen.", apply_cheats},
+    {"Max meseta", "cheat.money", {"off", "on"}, {"Off", "On"}, 0, 0, 0, 0,
+     "Your meseta stays at 999,999: buy anything.", apply_cheats},
+    {"Experience", "cheat.exp", {"1", "2", "4"}, {"Normal", "Double", "Quadruple"}, 0, 0, 0, 0,
+     "More experience from every battle won.", apply_cheats},
+    {"Enemies at 1 HP", "cheat.weak", {"off", "on"}, {"Off", "On"}, 0, 0, 0, 0,
+     "Every enemy falls to a single blow, bosses too.", apply_cheats},
+};
+
 /* a page has settings, or (items NULL) shows something else: draw fills it */
 typedef struct { const char *name, *about; const MenuItem *items; int n; void (*draw)(float W, float H); } MenuPage;
 #define PAGE(name, about, items) {name, about, items, (int)(sizeof items / sizeof items[0]), NULL}
@@ -1064,18 +1217,19 @@ static void draw_buttons_page(float W, float H);
 static const MenuPage PAGES[] = {
     PAGE("Game", "Classic or Enhanced, and the text.", GAME_ITEMS),
     PAGE("Display", "Fullscreen, widescreen, and how the pixels are drawn.", DISPLAY_ITEMS),
-    PAGE("Sound", "The volume, the music and the sound effects.", SOUND_ITEMS),
+    PAGE("Sound", "How loud the music, the sound effects and the voices are, and what plays them.", SOUND_ITEMS),
     PAGE("Battles", "The battle menus, and what's drawn over battles.", BATTLE_ITEMS),
     PAGE("Controls", "Clicks and taps, and rumble.", CONTROL_ITEMS),
+    PAGE("Cheats", "Make the game easier. All off unless you turn them on.", CHEAT_ITEMS),
     {"Buttons", "What each button and key does.", NULL, 0, draw_buttons_page},
 };
 #define N_PAGES (int)(sizeof PAGES / sizeof PAGES[0])
 #define MAX_ROWS 5                    /* the longest page: the panel keeps its size */
-static const char *const MAIN_LABELS[] = {"Resume", "Go back 10 seconds", "Settings", "Quit game"};
-#define N_MAIN 4
+static const char *const MAIN_LABELS[] = {"Resume", "Go back 10 seconds", "Journal", "Settings", "Quit game"};
+enum { M_RESUME, M_REWIND, M_JOURNAL, M_SETTINGS, M_QUIT, N_MAIN };
 static const char *const CLASSIC_NOTE = "Off in Classic mode. Set Mode to Enhanced, on the Game page, to use it.";
 
-enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT, MENU_LAUNCHER };
+enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT, MENU_LAUNCHER, MENU_JOURNAL };
 static int menu_screen, menu_sel;     /* in Settings, -1 = the page bar */
 static int in_launcher;               /* the launcher is up: the game hasn't started */
 static int launcher_go;               /* its Start game was chosen */
@@ -1104,22 +1258,35 @@ static void item_value(const MenuItem *it, char *buf, size_t n) {
     snprintf(buf, n, "%s", v);
 }
 
+/* a number setting to v, kept in its range: saved and applied (when it changed) */
+static void item_set(const MenuItem *it, int v) {
+    if (!it->key || item_disabled(it)) return;
+    v = v < it->lo ? it->lo : v > it->hi ? it->hi : v;
+    for (int i = 0; i < NSETTINGS; i++) {
+        if (strcmp(settings[i].key, it->key)) continue;
+        if (atoi(settings[i].value) == v && settings[i].value[0]) return;
+        snprintf(settings[i].value, sizeof settings[i].value, "%d", v);
+    }
+    char path[1100];
+    path_in_home(path, sizeof path, "psiv.ini");
+    write_settings(path);
+    if (it->apply) it->apply();
+}
+
 static void item_change(const MenuItem *it, int dir) {
     if (!it->key || item_disabled(it)) return;
+    if (it->step) {                                   /* a number: a step up or down */
+        item_set(it, setting_int(it->key) + dir * it->step);
+        return;
+    }
     char path[1100];
     for (int i = 0; i < NSETTINGS; i++) {
         if (strcmp(settings[i].key, it->key)) continue;
-        if (it->step) {
-            int v = atoi(settings[i].value) + dir * it->step;
-            v = v < it->lo ? it->lo : v > it->hi ? it->hi : v;
-            snprintf(settings[i].value, sizeof settings[i].value, "%d", v);
-        } else {
-            int n = item_values(it), cur = 0;
-            for (int j = 0; j < n; j++)
-                if (!SDL_strcasecmp(settings[i].value, it->values[j])) cur = j;
-            cur = (cur + dir + n) % n;
-            snprintf(settings[i].value, sizeof settings[i].value, "%s", it->values[cur]);
-        }
+        int n = item_values(it), cur = 0;
+        for (int j = 0; j < n; j++)
+            if (!SDL_strcasecmp(settings[i].value, it->values[j])) cur = j;
+        cur = (cur + dir + n) % n;
+        snprintf(settings[i].value, sizeof settings[i].value, "%s", it->values[cur]);
     }
     path_in_home(path, sizeof path, "psiv.ini");
     write_settings(path);
@@ -1145,8 +1312,76 @@ static void settings_enter(void) {
     menu_sel = page_now()->n ? 0 : -1;
 }
 
-/* the next or previous settings page (shoulder buttons, Tab, the page bar) */
+/* ------------------------------------------------------------------ the Journal */
+/* journal.h: where the story is and what to do next (Now), what has happened
+ * (Story so far), and the Hunters' Guild's jobs, once the guild is known.
+ * A hint shows only when asked for, and stays shown for that step. */
+enum { JT_NOW, JT_STORY, JT_GUILD };
+static int j_tab;                     /* the page */
+static int j_scroll;                  /* Story so far: the first entry shown (the newest is 0) */
+static int j_more_below;              /* ... and there are more under the last one shown */
+static int j_hint_step = -2;          /* the step whose hint is showing */
+static int j_hint_job = -1;           /* the job whose hint is showing */
+
+static int j_tabs(void) { return journal_guild_known() ? 3 : 2; }
+
+/* the guild's jobs worth showing: offered, taken or done */
+static int j_jobs(int *v) {
+    int m = 0;
+    JournalJob jb;
+    for (int j = 0; j < journal_jobs() && m < 16; j++) {
+        journal_job(j, &jb);
+        if (jb.state != JOB_UNSEEN) v[m++] = j;
+    }
+    return m;
+}
+
+/* Story so far: the steps reached that say what happened, the newest first */
+static int j_entries(int *v, int cap) {
+    int m = 0;
+    for (int i = journal_story(); i >= 0 && m < cap; i--) {
+        const JournalStep *s = journal_step(i);
+        if (s->done[0] && journal_reached(i)) v[m++] = i;
+    }
+    return m;
+}
+
+static void journal_enter(void) {
+    menu_screen = MENU_JOURNAL;
+    j_tab = JT_NOW;
+    j_scroll = 0;
+    menu_sel = 0;
+}
+
+static void journal_turn(int dir) {
+    int n = j_tabs();
+    j_tab = (j_tab + dir + n) % n;
+    j_scroll = 0;
+    menu_sel = 0;
+}
+
+static void journal_input(int up, int down, int left, int right, int ok) {
+    if (j_tab >= j_tabs()) j_tab = JT_NOW;
+    if (left || right) { journal_turn(right ? 1 : -1); return; }
+    if (j_tab == JT_NOW) {
+        int s = journal_story();
+        if (ok && s >= 0) j_hint_step = j_hint_step == s ? -2 : s;
+    } else if (j_tab == JT_STORY) {
+        if (up && j_scroll > 0) j_scroll--;
+        if (down && j_more_below) j_scroll++;
+    } else {
+        int v[16], m = j_jobs(v);
+        if (!m) return;
+        if (menu_sel >= m) menu_sel = m - 1;
+        if (up) menu_sel = (menu_sel + m - 1) % m;
+        if (down) menu_sel = (menu_sel + 1) % m;
+        if (ok) j_hint_job = j_hint_job == v[menu_sel] ? -1 : v[menu_sel];
+    }
+}
+
+/* the next or previous settings page or journal page (shoulder buttons, Tab, the page bar) */
 static void menu_turn_page(int dir) {
+    if (menu_screen == MENU_JOURNAL) { journal_turn(dir); return; }
     if (menu_screen != MENU_SETTINGS) return;
     menu_page = (menu_page + dir + N_PAGES) % N_PAGES;
     if (menu_sel >= page_now()->n) menu_sel = page_now()->n - 1;
@@ -1158,7 +1393,14 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
         if (menu_screen == MENU_LAUNCHER) menu_sel = L_QUIT;
         else if (menu_screen == MENU_MAIN) menu_close();
         else if (menu_screen == MENU_SETTINGS && in_launcher) { menu_screen = MENU_LAUNCHER; menu_sel = L_SETTINGS; }
-        else { menu_sel = menu_screen == MENU_SETTINGS ? 1 : 2; menu_screen = MENU_MAIN; }
+        else {                                       /* back to the main menu, on the line it came from */
+            menu_sel = menu_screen == MENU_SETTINGS ? M_SETTINGS : menu_screen == MENU_JOURNAL ? M_JOURNAL : M_QUIT;
+            menu_screen = MENU_MAIN;
+        }
+        return;
+    }
+    if (menu_screen == MENU_JOURNAL) {
+        journal_input(up, down, left, right, ok);
         return;
     }
     if (menu_screen == MENU_LAUNCHER) {
@@ -1193,14 +1435,15 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
     if (menu_screen == MENU_QUIT && (left || right)) menu_sel ^= 1;
     if (!ok) return;
     if (menu_screen == MENU_MAIN) {
-        if (menu_sel == 0) menu_close();
-        else if (menu_sel == 1) { menu_close(); rewind_now(); }
-        else if (menu_sel == 2) settings_enter();
+        if (menu_sel == M_RESUME) menu_close();
+        else if (menu_sel == M_REWIND) { menu_close(); rewind_now(); }
+        else if (menu_sel == M_JOURNAL) journal_enter();
+        else if (menu_sel == M_SETTINGS) settings_enter();
         else { menu_screen = MENU_QUIT; menu_sel = 1; }               /* default: No */
     } else {
         if (menu_sel == 0) quit(0);
         menu_screen = MENU_MAIN;
-        menu_sel = 3;
+        menu_sel = M_QUIT;
     }
 }
 
@@ -1223,7 +1466,7 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
 #define C_HINT      0x8C9CC8
 
 typedef struct { float x0, y0, x1, y1; int kind, index; } MenuHit;   /* render pixels */
-enum { HIT_ROW, HIT_STEP_BACK, HIT_PAGE, HIT_BACK, HIT_MODE };
+enum { HIT_ROW, HIT_STEP_BACK, HIT_PAGE, HIT_BACK, HIT_MODE, HIT_JTAB, HIT_JHINT, HIT_JUP, HIT_JDOWN, HIT_SLIDER };
 /* the launcher fills the window: units of 1/224 of its height (narrow windows:
  * 1/300 of the width), its content in a 224-tall column in the middle; the
  * emblem (drawn under it, launcher_backdrop) is centred this far down */
@@ -1282,10 +1525,12 @@ static void m_text(float x, float base, float cap, const char *s, uint32_t c, in
     SDL_RenderDebugText(renderer, (m_ox + x * m_S) / k, (m_oy + base * m_S) / k - 7.0f, s);
     SDL_SetRenderScale(renderer, 1, 1);
 }
-/* word-wrapped to `width` from x, at most `lines` lines; centre: each line centred in the width */
-static void m_wrap(float x, float base, float width, float line_h, int lines, float cap, const char *s, uint32_t c,
-                   int centre) {
+/* word-wrapped to `width` from x, at most `lines` lines; centre: each line
+ * centred in the width. The lines it took; c 0: only counted, not drawn */
+static int m_wrap(float x, float base, float width, float line_h, int lines, float cap, const char *s, uint32_t c,
+                  int centre) {
     char line[256];
+    int drawn = 0;
     while (*s && lines-- > 0) {
         while (*s == ' ') s++;
         int fit = 0, i = 0;
@@ -1302,12 +1547,14 @@ static void m_wrap(float x, float base, float width, float line_h, int lines, fl
         if (!fit) break;
         memcpy(line, s, (size_t)fit);
         line[fit] = 0;
-        m_text(centre ? x + width / 2 : x, base, cap, line, c, centre ? 2 : 0);
+        if (c) m_text(centre ? x + width / 2 : x, base, cap, line, c, centre ? 2 : 0);
         s += fit;
         base += line_h;
+        drawn++;
     }
+    return drawn;
 }
-static void m_arrow(float cx, float cy, float size, int dir, uint32_t c) {   /* dir 2 right, 3 left */
+static void m_arrow(float cx, float cy, float size, int dir, uint32_t c) {   /* dir 0 down, 1 up, 2 right, 3 left */
     if (m_ttf) ui_triangle(&m_cv, cx * m_S, cy * m_S, size * m_S, dir, c, 255);
     else m_text(cx, cy + size * 0.8f, size * 1.2f, dir == 3 ? "<" : ">", c, 2);
 }
@@ -1350,6 +1597,20 @@ static const char *pad_shoulder_names(void) {
 static void menu_hint(char *out, size_t n) {
     const char *sep = m_ttf ? "   \xC2\xB7   " : "   ";
     int settings_screen = menu_screen == MENU_SETTINGS;
+    if (menu_screen == MENU_JOURNAL) {                   /* the pages; scroll, choose, a hint */
+        int pad_in = menu_last_pad && pad;
+        char what[64];
+        const char *ok_name = pad_in ? pad_button_name(pad_of[IN_C]) : "Enter";
+        if (touch_visible()) snprintf(what, sizeof what, "%s", j_tab == JT_STORY ? "Tap the arrows to scroll" : "Tap the box for a hint");
+        else if (j_tab == JT_STORY) snprintf(what, sizeof what, "Up / Down scroll");
+        else if (j_tab == JT_GUILD) snprintf(what, sizeof what, "Up / Down choose, %s hint", ok_name);
+        else snprintf(what, sizeof what, "%s hint", ok_name);
+        if (touch_visible()) snprintf(out, n, "Tap a page's name%s%s%sTap outside to go back", sep, what, sep);
+        else if (pad_in)
+            snprintf(out, n, "%s page%s%s%s%s back", pad_shoulder_names(), sep, what, sep, pad_button_name(pad_of[IN_B]));
+        else snprintf(out, n, "Left / Right page%s%s%sEsc back", sep, what, sep);
+        return;
+    }
     if (settings_screen && !page_now()->n) {             /* a page to read: only the pages to turn */
         if (touch_visible()) snprintf(out, n, "Tap a page's name%sTap outside to go back", sep);
         else if (menu_last_pad && pad)
@@ -1385,17 +1646,80 @@ static void draw_rows(float W, const char *const *labels, int n, float y0) {
     }
 }
 
-static void draw_settings(float W, float H, const char *hint) {
-    const float pad = 10.0f;
-    const MenuPage *pg = page_now();
-    m_text(pad + 2.0f, 17.0f, 6.4f, "Settings", C_GOLD, 0);
-    /* Back, for the mouse and for touch */
+/* Back, top right, for the mouse and for touch */
+static void draw_back_button(float W, float pad) {
     float bx1 = W - pad, bx0 = bx1 - m_width("Back", 4.2f) - 17.0f, by0 = 7.0f, by1 = 20.0f;
     m_box(bx0, by0, bx1, by1, 6.5f, 0x26346A, 0x18214A, 240);
     m_frame(bx0, by0, bx1, by1, 6.5f, C_RULE, 120);
     m_arrow(bx0 + 7.5f, (by0 + by1) / 2, 4.0f, 3, C_SOFT);
     m_text(bx0 + 12.0f, by0 + 9.1f, 4.2f, "Back", C_VALUE, 0);
     m_hit(bx0, by0, bx1, by1, HIT_BACK, 0);
+}
+
+/* A number setting (the volumes) is a slider: a bar filled to its value with a
+ * knob there, then the value. Left / Right step it (held, they go on), a click
+ * or a tap on the bar puts it there, and the mouse can drag it. */
+#define SLIDER_W    110.0f
+#define SLIDER_GRIP 4.0f                         /* its hit area reaches this far past the ends */
+static int slider_drag = -1;                     /* the row whose knob the mouse is dragging */
+
+static void draw_slider(const MenuItem *it, float x0, float x1, float mid, int sel, int off) {
+    float f = (float)(setting_int(it->key) - it->lo) / (float)(it->hi - it->lo);
+    f = f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f;
+    float x = x0 + (x1 - x0) * f, h = 1.3f, k = 2.9f;
+    uint32_t track = off ? 0x3E4766 : sel ? 0xC9933A : 0x2C3A78;
+    uint32_t fill_top = off ? C_DIM : sel ? C_INK_SOFT : 0xC4D3FF, fill_low = off ? C_DIM : sel ? C_INK : C_SOFT;
+    uint32_t knob = off ? C_DIM : sel ? C_INK : C_TEXT;
+    m_box(x0, mid - h, x1, mid + h, h, track, track, 255);
+    if (x > x0 + 0.5f) m_box(x0, mid - h, x, mid + h, h, fill_top, fill_low, 255);
+    if (it->lo < 100 && it->hi > 100) {          /* the overall volume: a mark at 100%, the game's own */
+        float t = x0 + (x1 - x0) * (float)(100 - it->lo) / (float)(it->hi - it->lo);
+        m_box(t - 0.35f, mid - 2.5f, t + 0.35f, mid + 2.5f, 0.0f, knob, knob, 150);
+    }
+    m_box(x - k, mid - k, x + k, mid + k, k, knob, knob, 255);
+}
+
+/* the slider under hit h, set from where the pointer is along it (render pixels) */
+static void slider_to(const MenuHit *h, float rx) {
+    const MenuItem *it = &page_now()->items[h->index];
+    float grip = SLIDER_GRIP * m_S, x0 = h->x0 + grip, x1 = h->x1 - grip;
+    float f = x1 > x0 ? (rx - x0) / (x1 - x0) : 0.0f;
+    f = f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f;
+    item_set(it, it->lo + (int)lrintf(f * (float)(it->hi - it->lo) / (float)it->step) * it->step);
+}
+
+/* the mouse moved with its button held: the knob being dragged follows */
+static void slider_drag_to(float rx) {
+    if (menu_screen != MENU_SETTINGS) { slider_drag = -1; return; }
+    for (int i = 0; i < n_menu_hits; i++)
+        if (menu_hits[i].kind == HIT_SLIDER && menu_hits[i].index == slider_drag) {
+            slider_to(&menu_hits[i], rx);
+            return;
+        }
+}
+
+/* a gamepad's Left / Right held on a slider goes on stepping, as a held key
+ * does (the gamepad sends one press) */
+static void menu_pad_repeat(void) {
+    static uint64_t since, last;
+    static int held;
+    int dir = 0;
+    if (pad && menu_screen == MENU_SETTINGS && menu_sel >= 0 && page_now()->n && page_now()->items[menu_sel].step) {
+        if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_LEFT)) dir = -1;
+        else if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) dir = 1;
+    }
+    uint64_t now = SDL_GetTicks();
+    if (dir != held) { held = dir; since = last = now; return; }
+    if (!dir || now - since < 400 || now - last < 60) return;
+    last = now;
+    item_change(&page_now()->items[menu_sel], dir);
+}
+
+static void draw_settings(float W, float H, const char *hint) {
+    const float pad = 10.0f;
+    const MenuPage *pg = page_now();
+    m_text(pad + 2.0f, 17.0f, 6.4f, "Settings", C_GOLD, 0);
+    draw_back_button(W, pad);
     /* the pages: their names smaller if they wouldn't fit across (SDL's 8x8 font) */
     float x = pad, t0 = 26.0f, t1 = 40.0f, cap = 4.6f, room = 14.0f;
     for (;;) {
@@ -1420,10 +1744,20 @@ static void draw_settings(float W, float H, const char *hint) {
         m_text(pad + 2.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
         return;
     }
-    /* its settings: the label, the value; the highlighted one with arrows */
-    for (int i = 0; i < pg->n; i++) {
+    /* its settings: the label, the value; the highlighted one with arrows.
+     * Five rows fit: a longer page scrolls to keep the highlighted one in
+     * view, with a mark where there are more above or below */
+    int first = 0;
+    if (pg->n > MAX_ROWS) {
+        first = menu_sel - MAX_ROWS / 2;
+        if (first > pg->n - MAX_ROWS) first = pg->n - MAX_ROWS;
+        if (first < 0) first = 0;
+        if (first > 0) m_arrow(W / 2, 46.8f, 3.0f, 1, C_SOFT);                  /* more above (pointing up) */
+        if (first + MAX_ROWS < pg->n) m_arrow(W / 2, 125.6f, 3.0f, 0, C_SOFT);  /* more below */
+    }
+    for (int i = first; i < pg->n && i < first + MAX_ROWS; i++) {
         const MenuItem *it = &pg->items[i];
-        float a = 48.5f + 15.0f * (float)i, b = a + 13.5f, base = a + 9.5f, mid = (a + b) / 2;
+        float a = 48.5f + 15.0f * (float)(i - first), b = a + 13.5f, base = a + 9.5f, mid = (a + b) / 2;
         int sel = i == menu_sel, off = item_disabled(it);
         char v[64];
         item_value(it, v, sizeof v);
@@ -1433,11 +1767,21 @@ static void draw_settings(float W, float H, const char *hint) {
         m_text(pad + 8.0f, base, 4.6f, it->label, lc, 0);
         float vr = W - pad - 13.0f, vw = m_width(v, 4.6f);
         m_text(vr, base, 4.6f, v, vc, 1);
-        if (sel && !off) {
-            m_arrow(vr - vw - 6.5f, mid, 4.0f, 3, C_INK_SOFT);
-            m_arrow(vr + 6.5f, mid, 4.0f, 2, C_INK_SOFT);
+        if (it->step) {                              /* a number: its slider, the arrows round both */
+            float sx1 = vr - m_width("200%", 4.6f) - 12.0f, sx0 = sx1 - SLIDER_W;
+            draw_slider(it, sx0, sx1, mid, sel, off);
+            if (sel && !off) {
+                m_arrow(sx0 - 8.0f, mid, 4.0f, 3, C_INK_SOFT);
+                m_arrow(vr + 6.5f, mid, 4.0f, 2, C_INK_SOFT);
+            }
+            m_hit(sx0 - SLIDER_GRIP, a, sx1 + SLIDER_GRIP, b, HIT_SLIDER, i);
+        } else {
+            if (sel && !off) {
+                m_arrow(vr - vw - 6.5f, mid, 4.0f, 3, C_INK_SOFT);
+                m_arrow(vr + 6.5f, mid, 4.0f, 2, C_INK_SOFT);
+            }
+            m_hit(vr - vw - 14.0f, a, vr - vw * 0.5f, b, HIT_STEP_BACK, i);   /* the value's left: a step back */
         }
-        m_hit(vr - vw - 14.0f, a, vr - vw * 0.5f, b, HIT_STEP_BACK, i);   /* the value's left: a step back */
         m_hit(pad, a, W - pad, b, HIT_ROW, i);
     }
     /* what the highlighted one does */
@@ -1507,7 +1851,7 @@ static void draw_buttons_page(float W, float H) {
     const char *dash = m_ttf ? "\xE2\x80\x94" : "-";
     (void)H;
     typedef struct { const char *what, *md, *gp; char other[48]; } Row;
-    Row r[10];
+    Row r[12];
     int n = 0;
     memset(r, 0, sizeof r);
     r[n] = (Row){"Move", NULL, "D-pad, left stick", ""};
@@ -1540,6 +1884,10 @@ static void draw_buttons_page(float W, float H) {
     if (MOBILE) snprintf(r[n].other, sizeof r[n].other, "In the menu");
     else key_label(IN_REWIND, r[n].other, sizeof r[n].other);
     n++;
+    r[n] = (Row){"Auto-advance voiced scenes", NULL, pad_label(pad_of[IN_AUTO]), ""};
+    if (MOBILE) snprintf(r[n].other, sizeof r[n].other, "%s", dash);
+    else key_label(IN_AUTO, r[n].other, sizeof r[n].other);
+    n++;
     if (!MOBILE) {
         r[n] = (Row){"Pause, fullscreen, screenshot", NULL, dash, ""};
         snprintf(r[n++].other, sizeof r[0].other, "F10, F11, F12");
@@ -1547,7 +1895,7 @@ static void draw_buttons_page(float W, float H) {
 
     m_text(x_pad, 54.0f, 3.6f, "Gamepad", C_SOFT, 0);
     m_text(x_other, 54.0f, 3.6f, MOBILE ? "Touch" : "Keyboard", C_SOFT, 0);
-    float step = n > 8 ? 7.6f : 8.6f;                     /* nine rows on a desktop: closer */
+    float step = n > 9 ? 6.85f : n > 8 ? 7.6f : 8.6f;     /* nine or ten rows on a desktop: closer */
     for (int i = 0; i < n; i++) {
         float a = 57.5f + step * (float)i, base = a + step * 0.73f;
         if (i & 1) m_box(pad_x, a, W - pad_x, a + step, 3.0f, 0x26346A, 0x22305F, 110);
@@ -1567,6 +1915,147 @@ static void draw_buttons_page(float W, float H) {
                   : "Mouse: click the field to walk there, or a person to talk; a right click is Cancel. "
                     "Change the keys and buttons in psiv.ini, under [keys] and [pad].",
            C_VALUE, 0);
+}
+
+/* ------------------------------------------------------------------ the Journal's look */
+static const char *const J_TAB_NAMES[3] = {"Now", "Story so far", "Hunters' Guild"};
+
+static void draw_journal_tabs(float W, float pad) {
+    float x = pad, t0 = 26.0f, t1 = 40.0f, cap = 4.6f, room = 16.0f;
+    for (int i = 0; i < j_tabs(); i++) {
+        float w = m_width(J_TAB_NAMES[i], cap) + room;
+        int on = i == j_tab;
+        if (on) m_box(x, t0, x + w, t1, 7.0f, 0x3A4C8E, 0x2A3870, 255);
+        m_text(x + w / 2, t0 + 9.8f, cap, J_TAB_NAMES[i], on ? C_TEXT : C_SOFT, 2);
+        m_hit(x, t0, x + w, t1, HIT_JTAB, i);
+        x += w + 3.0f;
+    }
+    m_box(pad, 44.5f, W - pad, 45.0f, 0, C_RULE, C_RULE, 80);
+}
+
+/* Now: the part of the game, the step, what to do; the hint in a box below,
+ * hidden until asked for */
+static void draw_journal_now(float W, float pad) {
+    int cur = journal_story();
+    const JournalStep *s = journal_step(cur);
+    float x = pad + 4.0f, width = W - 2 * pad - 8.0f;
+    if (!s) {
+        m_wrap(x, 62.0f, width, 8.6f, 3, 4.4f,
+               "The journal fills in as the story goes on: start a new game, or continue one.", C_VALUE, 0);
+        return;
+    }
+    float y = 55.5f;
+    if (s->arc[0]) {
+        char arc[40];
+        size_t i = 0;
+        for (; s->arc[i] && i < sizeof arc - 1; i++) arc[i] = (char)SDL_toupper((unsigned char)s->arc[i]);
+        arc[i] = 0;
+        m_text(x, y, 3.5f, arc, C_SOFT, 0);
+        y += 11.0f;
+    }
+    m_text(x, y, 6.2f, s->title, C_GOLD, 0);
+    y += 11.5f;
+    y += 8.4f * (float)m_wrap(x, y, width, 8.4f, 3, 4.6f, s->next, C_TEXT, 0);
+    float b0 = 110.0f, b1 = 152.0f;
+    int room = (int)((b0 - 4.0f - y) / 7.2f) + 1;          /* what just happened, under it, as it fits */
+    if (s->done[0] && room > 0) m_wrap(x, y + 2.0f, width, 7.2f, room > 2 ? 2 : room, 3.9f, s->done, C_SOFT, 0);
+    if (!s->hint[0]) return;
+    int shown = j_hint_step == cur;
+    m_box(pad, b0, W - pad, b1, 6.0f, shown ? 0x22305F : 0x26346A, shown ? 0x1A2550 : 0x1E2A58, 235);
+    m_frame(pad, b0, W - pad, b1, 6.0f, C_RULE, shown ? 90 : 140);
+    if (shown) {
+        m_text(x + 2.0f, b0 + 8.5f, 3.4f, "HINT", C_SOFT, 0);
+        m_wrap(x + 2.0f, b0 + 17.0f, width - 4.0f, 7.4f, 4, 4.0f, s->hint, C_VALUE, 0);
+    } else {
+        m_text(W / 2, (b0 + b1) / 2 + 0.5f, 4.6f, "Show a hint", C_VALUE, 2);
+        m_text(W / 2, (b0 + b1) / 2 + 8.5f, 3.4f, "Where to go and what to do, if you're stuck", C_DIM, 2);
+    }
+    m_hit(pad, b0, W - pad, b1, HIT_JHINT, 0);
+}
+
+/* Story so far: what happened, the newest first, scrolled an entry at a time */
+static void draw_journal_story(float W, float pad) {
+    int v[256], m = j_entries(v, 256);
+    float x = pad + 4.0f, width = W - 2 * pad - 8.0f, y = 48.5f, bottom = 153.0f;
+    j_more_below = 0;
+    if (!m) {
+        m_wrap(x, 62.0f, width, 8.6f, 3, 4.4f, "Nothing yet: the story is just beginning.", C_VALUE, 0);
+        return;
+    }
+    if (j_scroll > m - 1) j_scroll = m - 1;
+    int e = j_scroll;
+    for (; e < m; e++) {
+        const JournalStep *s = journal_step(v[e]);
+        int lines = m_wrap(x, 0, width, 7.2f, 4, 3.9f, s->done, 0, 0);       /* counted, not drawn */
+        float h = 9.0f + 7.2f * (float)lines + 3.4f;
+        if (y + h > bottom && e > j_scroll) break;
+        m_text(x, y + 6.2f, 4.3f, s->title, C_GOLD, 0);
+        if (s->arc[0] && (e == j_scroll || strcmp(s->arc, journal_step(v[e - 1])->arc)))
+            m_text(W - pad - 10.0f, y + 6.2f, 3.3f, s->arc, C_DIM, 1);      /* where the part of the game changes */
+        m_wrap(x, y + 6.2f + 8.0f, width, 7.2f, 4, 3.9f, s->done, C_TEXT, 0);
+        y += h;
+    }
+    j_more_below = e < m;
+    float mid = (48.5f + bottom) / 2;
+    if (j_scroll > 0) {
+        m_arrow(W - pad - 4.0f, 49.5f, 2.8f, 1, C_SOFT);                    /* more above */
+        m_hit(pad, 45.0f, W - pad, mid, HIT_JUP, 0);
+    }
+    if (j_more_below) {
+        m_arrow(W - pad - 4.0f, 152.0f, 2.8f, 0, C_SOFT);                   /* more below */
+        m_hit(pad, mid, W - pad, bottom + 2.0f, HIT_JDOWN, 0);
+    }
+}
+
+static const char *job_state_name(int state) {
+    return state == JOB_OFFERED ? "Offered" : state == JOB_TAKEN ? "Under way" : state == JOB_REPORT ? "Report back" : "Done";
+}
+
+/* the Hunters' Guild: its jobs, then the highlighted one -- what the client
+ * wants, what to do now (or the hint), how to collect the fee */
+static void draw_journal_guild(float W, float pad) {
+    int v[16], m = j_jobs(v);
+    float x = pad + 4.0f, width = W - 2 * pad - 8.0f;
+    if (!m) {
+        m_wrap(x, 62.0f, width, 8.6f, 3, 4.4f,
+               "No jobs on the board yet. The Hunters' Guild in Aiedo posts new work as the story goes on.", C_VALUE, 0);
+        return;
+    }
+    if (menu_sel >= m) menu_sel = m - 1;
+    if (menu_sel < 0) menu_sel = 0;
+    const float r0 = 48.0f, row = 8.6f;
+    JournalJob jb;
+    for (int i = 0; i < m; i++) {
+        journal_job(v[i], &jb);
+        float a = r0 + row * (float)i, b = a + row - 0.8f;
+        int sel = i == menu_sel;
+        if (sel) m_box(pad, a, W - pad, b, 3.9f, C_GOLD, C_GOLD_LOW, 255);
+        m_text(x + 2.0f, a + 6.0f, 4.2f, jb.name, sel ? C_INK : C_TEXT, 0);
+        uint32_t c = jb.state == JOB_DONE ? C_DIM : jb.state == JOB_OFFERED ? C_SOFT : C_GOLD;
+        m_text(W - pad - 6.0f, a + 6.0f, 3.8f, job_state_name(jb.state), sel ? C_INK_SOFT : c, 1);
+        m_hit(pad, a, W - pad, b, HIT_ROW, i);
+    }
+    float rule = r0 + row * 8.0f + 2.0f;                                  /* below room for all eight */
+    m_box(pad, rule, W - pad, rule + 0.5f, 0, C_RULE, C_RULE, 80);
+    journal_job(v[menu_sel], &jb);
+    char text[400];
+    int shown = j_hint_job == v[menu_sel] && jb.state == JOB_TAKEN && jb.hint && jb.hint[0];
+    if (shown) snprintf(text, sizeof text, "Hint: %s", jb.hint);
+    else snprintf(text, sizeof text, "%s", jb.state == JOB_REPORT ? jb.reward : jb.state == JOB_TAKEN && jb.next ? jb.next : jb.about);
+    m_wrap(x, rule + 9.0f, width, 7.4f, 4, 3.9f, text, shown ? C_VALUE : C_TEXT, 0);
+    m_hit(pad, rule, W - pad, 156.0f, HIT_JHINT, 0);
+}
+
+static void draw_journal(float W, float H, const char *hint) {
+    const float pad = 10.0f;
+    if (j_tab >= j_tabs()) j_tab = JT_NOW;
+    m_text(pad + 2.0f, 17.0f, 6.4f, "Journal", C_GOLD, 0);
+    draw_back_button(W, pad);
+    draw_journal_tabs(W, pad);
+    if (j_tab == JT_NOW) draw_journal_now(W, pad);
+    else if (j_tab == JT_STORY) draw_journal_story(W, pad);
+    else draw_journal_guild(W, pad);
+    m_text(pad + 2.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
 }
 
 /* the launcher: its title under the emblem, the choices, what the highlighted
@@ -1629,6 +2118,8 @@ static void menu_layout(float W, float H) {
     m_frame(0, 0, W, H, 7.0f, C_RULE, 150);
     if (menu_screen == MENU_SETTINGS) {
         draw_settings(W, H, hint);
+    } else if (menu_screen == MENU_JOURNAL) {
+        draw_journal(W, H, hint);
     } else if (menu_screen == MENU_MAIN) {
         m_text(12.0f, 17.0f, 6.4f, "Paused", C_GOLD, 0);
         draw_rows(W, MAIN_LABELS, N_MAIN, 26.0f);
@@ -1647,7 +2138,9 @@ static void menu_layout(float W, float H) {
 static uint64_t menu_signature(int ow, int oh) {
     uint64_t parts[] = {(uint64_t)menu_screen, (uint64_t)(menu_sel + 1), (uint64_t)menu_page, (uint64_t)ow,
                         (uint64_t)oh, (uint64_t)touch_visible(), (uint64_t)(menu_last_pad && pad),
-                        pad ? (uint64_t)SDL_GetGamepadID(pad) : 0, (uint64_t)rom_ready, (uint64_t)(rom_problem[0] != 0)};
+                        pad ? (uint64_t)SDL_GetGamepadID(pad) : 0, (uint64_t)rom_ready, (uint64_t)(rom_problem[0] != 0),
+                        (uint64_t)j_tab, (uint64_t)j_scroll, (uint64_t)(j_hint_step + 2), (uint64_t)(j_hint_job + 1),
+                        journal_signature()};
     uint64_t h = 1469598103934665603ull;
     for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) h = (h ^ parts[i]) * 1099511628211ull;
     for (int i = 0; i < NSETTINGS; i++)
@@ -1677,8 +2170,9 @@ static void menu_draw(void) {
         th = oh;
         m_ox = m_oy = 0;
     } else {
-        W = menu_screen == MENU_SETTINGS ? 288.0f : menu_screen == MENU_QUIT ? 176.0f : 168.0f;
-        H = menu_screen == MENU_SETTINGS ? 168.0f : menu_screen == MENU_QUIT ? 86.0f : 116.0f;
+        int big = menu_screen == MENU_SETTINGS || menu_screen == MENU_JOURNAL;
+        W = big ? 288.0f : menu_screen == MENU_QUIT ? 176.0f : 168.0f;
+        H = big ? 168.0f : menu_screen == MENU_QUIT ? 86.0f : 26.0f + 16.0f * N_MAIN + 26.0f;
         /* about the game's own scale, small enough that Settings always fits */
         m_S = fminf(fminf((float)ow / 320.0f, (float)oh / 224.0f),
                     fminf((float)ow * 0.95f / 288.0f, (float)oh * 0.92f / 168.0f));
@@ -1745,12 +2239,22 @@ static void menu_tap(float rx, float ry) {
         if (rx < h->x0 || ry < h->y0 || rx >= h->x1 || ry >= h->y1) continue;
         if (h->kind == HIT_BACK) {
             menu_input(0, 0, 0, 0, 0, 1);
+        } else if (menu_screen == MENU_JOURNAL) {   /* a page, the hint, the arrows, a job */
+            if (h->kind == HIT_JTAB) { j_tab = h->index; j_scroll = 0; menu_sel = 0; }
+            else if (h->kind == HIT_JHINT) journal_input(0, 0, 0, 0, 1);
+            else if (h->kind == HIT_JUP) journal_input(1, 0, 0, 0, 0);
+            else if (h->kind == HIT_JDOWN) journal_input(0, 1, 0, 0, 0);
+            else if (h->kind == HIT_ROW) menu_sel = h->index;
         } else if (h->kind == HIT_MODE) {           /* the launcher's switch: that mode */
             menu_sel = L_MODE;
             if ((h->index == 1) != classic_mode()) item_change(MODE_ITEM, 1);
         } else if (h->kind == HIT_PAGE) {
             menu_page = h->index;
             menu_sel = page_now()->n ? 0 : -1;
+        } else if (h->kind == HIT_SLIDER) {          /* a slider: its value where it was clicked; the mouse can drag on */
+            menu_sel = h->index;
+            slider_drag = h->index;
+            slider_to(h, rx);
         } else if (menu_screen == MENU_SETTINGS) {   /* a setting: a step on (or back, left of its value) */
             menu_sel = h->index;
             item_change(&page_now()->items[h->index], h->kind == HIT_STEP_BACK ? -1 : 1);
@@ -2043,6 +2547,7 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             }
             if (e.key.key == SDLK_F10) paused = !paused;
             if (sc == key_of[IN_REWIND]) rewind_now();
+            if (sc == key_of[IN_AUTO] && !in_launcher) toggle_auto_text();
             if (e.key.key == SDLK_F9) cycle_battle_depth();
             if (e.key.key == SDLK_F8) cycle_battle_fog();
             break;
@@ -2059,6 +2564,7 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             }
             if (!menu_is_open()) {
                 if (b == pad_of[IN_REWIND] && !in_launcher) rewind_now();
+                if (b == pad_of[IN_AUTO] && !in_launcher) toggle_auto_text();
                 break;
             }
             if (b == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER || b == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) {   /* settings pages */
@@ -2074,6 +2580,7 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             if (e.button.button != SDL_BUTTON_LEFT && e.button.button != SDL_BUTTON_RIGHT) break;
             float rx, ry;
             menu_last_pad = 0;
+            slider_drag = -1;                              /* a press on a slider starts a drag again */
             SDL_RenderCoordinatesFromWindow(renderer, e.button.x, e.button.y, &rx, &ry);
             click_at(rx, ry, e.button.button == SDL_BUTTON_RIGHT);
             break;
@@ -2091,12 +2598,16 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             else menu_input(now < 0, now > 0, 0, 0, 0, 0);
             break;
         }
-        case SDL_EVENT_MOUSE_MOTION:                       /* the menu: the line under the mouse */
+        case SDL_EVENT_MOUSE_MOTION:                       /* the menu: the line under the mouse; a knob dragged */
             if (menu_is_open() && e.motion.which != SDL_TOUCH_MOUSEID) {
                 float rx, ry;
                 SDL_RenderCoordinatesFromWindow(renderer, e.motion.x, e.motion.y, &rx, &ry);
-                menu_hover(rx, ry);
+                if (slider_drag >= 0 && (e.motion.state & SDL_BUTTON_LMASK)) slider_drag_to(rx);
+                else menu_hover(rx, ry);
             }
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+            if (e.button.button == SDL_BUTTON_LEFT) slider_drag = -1;
             break;
         case SDL_EVENT_RENDER_DEVICE_RESET:                /* every texture lost (phones): made again */
             if (menu_tex) SDL_DestroyTexture(menu_tex);
@@ -2137,6 +2648,7 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
     if (menu_is_open() && pressed)
         menu_input(pressed & PAD_UP, pressed & PAD_DOWN, pressed & PAD_LEFT, pressed & PAD_RIGHT,
                    pressed & (PAD_C | PAD_START), pressed & PAD_B);
+    if (menu_is_open()) menu_pad_repeat();
 }
 
 /* testing: --menu-script STEPS, one step per pass of the menu's loop: a key
@@ -2195,7 +2707,10 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
     if (test_menu_frame && frame_count == test_menu_frame) {
         menu_open();
         menu_opened = 0;                                 /* no fade: a capture shows it at once */
-        if (test_menu_settings) {
+        if (test_menu_journal) {
+            journal_enter();
+            j_tab = test_menu_page > 0 ? test_menu_page : 0;
+        } else if (test_menu_settings) {
             menu_screen = MENU_SETTINGS;
             menu_page = test_menu_page >= 0 && test_menu_page < N_PAGES ? test_menu_page : 0;
             menu_sel = test_menu_row >= -1 && test_menu_row < page_now()->n ? test_menu_row : page_now()->n ? 0 : -1;
@@ -2212,6 +2727,10 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         next_deadline = SDL_GetTicksNS();
     }
     holding = 0;
+    if (journal_notes && journal_moved_on()) {           /* the story moved on: the journal has more */
+        SDL_snprintf(rewind_msg, sizeof rewind_msg, "Journal updated");
+        rewind_msg_until = SDL_GetTicks() + 2600;
+    }
     if (test_rumble_frame && frame_count == test_rumble_frame) rumble_test();
     if (test_rewind_frame && frame_count == test_rewind_frame) rewind_now();   /* testing: Backspace then */
     rumble_output();
@@ -2231,7 +2750,7 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
     }
     /* first person: the d-pad turns with the view; a click's walk, or its
      * presses in a battle menu, hold it while they run */
-    bus_pad[0] = battleui_pad(user, walkto_pad(user, fpview_remap_pad(user)));
+    bus_pad[0] = scenevox_pad(user, battleui_pad(user, walkto_pad(user, fpview_remap_pad(user))));
     if (input_hold) {
         if (bus_pad[0]) bus_pad[0] = 0;
         else input_hold = 0;
@@ -2544,13 +3063,14 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--play")) play_now = 1;              /* no launcher: straight into the game */
         /* testing: --menu F[:settings[:PAGE[:ROW]]] opens the system menu at
          * frame F (Settings on that page, that row highlighted; -1 the page
-         * bar); --capture F:FILE.bmp saves the rendered window at frame F and
+         * bar; F:journal:PAGE the Journal on that page); --capture F:FILE.bmp saves the rendered window at frame F and
          * exits (run with SDL_VIDEO_DRIVER=offscreen to keep it off the screen);
          * --test-keys F:KEYS:N,... holds keys by frame; --test-click F:X,Y
          * clicks the frame's pixel (X, Y) through the window, as a mouse would */
         else if (!strcmp(argv[i], "--menu") && i + 1 < argc) {
             char *e;
             test_menu_frame = strtoull(argv[++i], &e, 10);
+            test_menu_journal = *e == ':' && e[1] == 'j';            /* F:journal[:PAGE]: the Journal */
             test_menu_settings = *e == ':';
             const char *p = test_menu_settings ? strchr(e + 1, ':') : NULL;
             if (p) {
@@ -2619,8 +3139,11 @@ int main(int argc, char **argv) {
         path_in_home(dir, sizeof dir, "sfx");
         SDL_Log("sound effects: %d synthesized; %d of yours (%s/sfx.ini)", sfx_synth_load(), sfx_load(dir), dir);
     }
+    load_voices();
     load_font();
     apply_enhancements();
+    apply_audio();                                       /* the levels (the volume once the sound is open) */
+    apply_cheats();
     resolve_bindings();
     rumble_set_level(rumble_setting());
 #if MOBILE

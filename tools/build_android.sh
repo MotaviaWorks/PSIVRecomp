@@ -65,6 +65,7 @@ rm -rf "$J" "$OUT/assets"
 mkdir -p "$J/gen" "$J/classes" "$OUT/assets/fonts"
 cp "$ROOT/res/fonts/"* "$OUT/assets/fonts/"
 cp "$ROOT/LICENSE" "$OUT/assets/LICENSE.txt"      # the port's licence (GPL-3.0) travels with every copy
+cp -r "$ROOT/res/voices" "$OUT/assets/voices"     # the party's battle voices (runtime/battlevox.h)
 "$BT/aapt2" compile --dir "$ROOT/android/res" -o "$J/res.zip"
 "$BT/aapt2" link -o "$OUT/base.apk" -I "$JAR" --manifest "$ROOT/android/AndroidManifest.xml" \
   --min-sdk-version $MIN_API --target-sdk-version $TARGET_API \

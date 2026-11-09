@@ -257,6 +257,17 @@ static float mote_due;
 
 static int party_tile(uint16_t e) { int t = e & 0x7FF; return (e & 0x8000) && t >= 0x180 && t < 0x280; }
 
+/* The camera pan (battleui_pan, drawn by depth.c): while the battle plays
+ * out, the one the game stands away from their place (attacked, or a caster
+ * or archer, under an enemy) and how far; whose each party tile is; and
+ * everyone else's picture as kept, at their places, to slide along. */
+static int pan_on = 1, pan_member = -1, pan_dx;
+static uint8_t tile_owner[0x800];                 /* member + 1, by tile */
+static uint16_t pan_cells[32 * 64];               /* the others' kept cells, at their places */
+static uint8_t pan_owner[32 * 64];                /* member + 1 */
+void battleui_set_pan(int on) { pan_on = on; }
+int  battleui_pan_enabled(void) { return pan_on; }
+
 /* rewind: the party as kept (the members' cells and their tiles' copy go
  * with the game's state) */
 #define PARTY_FIELDS(F) F(members) F(home_x) F(standing) F(restore) F(shown) F(aura_level) F(aura_mix) F(shadow)
@@ -334,7 +345,8 @@ static void party_frame(void) {
         if (id >= 0 && r16(CHAR_STATS + (unsigned)id * 0x80 + 0x0E) && !(r8(CHAR_STATS + (unsigned)id * 0x80 + 0x16) & 0x44))
             alive |= 1 << k;                         /* HP left, not dead (bit 2; bit 6 for androids) */
     }
-    int present = 0, moved = 0;
+    int present = 0, moved = 0, now_col[5] = {0};
+    memset(tile_owner, 0, sizeof tile_owner);
     for (int k = 0; k < 5; k++) {
         Member *m = &members[k];
         if (bases[k] < 0) { m->valid = 0; continue; }
@@ -342,6 +354,7 @@ static void party_frame(void) {
         int x = (int)r16(FIGHTERS + (unsigned)k * 0x40 + 0x0C) - 128, col0 = (x - 24) >> 3;
         int lo = bases[k], hi = lo + 0x30;          /* their tiles: up to the next member's */
         for (int j = 0; j < 5; j++) if (bases[j] > lo && bases[j] < hi) hi = bases[j];
+        for (int t = lo; t < hi && t < 0x800; t++) tile_owner[t] = (uint8_t)(k + 1);
         if (m->valid && (m->base != lo || (keep && m->col0 != col0))) m->valid = 0;
         uint16_t now[PARTY_ROWS][6];
         int any = 0;
@@ -359,6 +372,7 @@ static void party_frame(void) {
         }
         if (!any) continue;
         present |= 1 << k;
+        now_col[k] = col0;
         if (m->valid && col0 != m->col0) moved |= 1 << k;   /* stood in front of the action */
         if (!keep) continue;                          /* mid-action they may be in another pose */
         for (int r = 0; r < PARTY_ROWS; r++)          /* cells under a window keep what they had */
@@ -385,6 +399,24 @@ static void party_frame(void) {
     restore = standing & alive & ~out;
     if (!keep) restore &= ~present;                   /* the ones the game draws are its own */
     shown = restore | present;
+    /* the pan: the first one the game stood away from their place */
+    pan_member = -1;
+    pan_dx = 0;
+    if (pan_on && !keep && !results)
+        for (int k = 0; k < 5; k++)
+            if ((moved >> k & 1) && members[k].valid) { pan_member = k; pan_dx = (now_col[k] - members[k].col0) * 8; break; }
+    memset(pan_owner, 0, sizeof pan_owner);
+    for (int k = 0; k < 5; k++) {
+        const Member *m = &members[k];
+        if (k == pan_member || !(shown >> k & 1) || !m->valid) continue;
+        for (int r = 0; r < PARTY_ROWS; r++)
+            for (int c = 0; c < 6; c++) {
+                int row = PARTY_ROW0 + r, col = m->col0 + c;
+                if (!m->cell[r][c] || col < 0 || col >= 64) continue;
+                pan_cells[row * 64 + col] = m->cell[r][c];
+                pan_owner[row * 64 + col] = (uint8_t)(k + 1);
+            }
+    }
     {   /* PSIV_BUI_LOG=1: the party on screen as the battle state changes */
         static int log_on = -1, last = -1;
         if (log_on < 0) { const char *v = getenv("PSIV_BUI_LOG"); log_on = v && *v == '1'; }
@@ -1381,4 +1413,28 @@ uint8_t battleui_pad(uint8_t user, uint8_t pad) {
     drive.hold = 1;
     drive.rest = 2;
     return p;
+}
+
+/* ------------------------------------------------------------------ the camera pan */
+int battleui_pan(int *member, int *dx) {
+    if (!active || pan_member < 0) { *member = -1; *dx = 0; return 0; }
+    *member = pan_member;
+    *dx = pan_dx;
+    return 1;
+}
+
+int battleui_tile_member(int tile) { return active ? (int)tile_owner[tile & 0x7FF] - 1 : -1; }
+
+uint8_t battleui_pan_pixel(int px, int py, int *member) {
+    int r = (py >> 3) & 31, c = (px >> 3) & 63, i = r * 64 + c;
+    if (!active || !pan_owner[i]) return 0;
+    uint16_t e = pan_cells[i];
+    int tx = px & 7, ty = py & 7;
+    if (e & 0x0800) tx = 7 - tx;
+    if (e & 0x1000) ty = 7 - ty;
+    uint8_t b = shadow[((unsigned)(e & 0x7FF) * 32 + (unsigned)ty * 4 + (unsigned)(tx >> 1)) & 0xFFFF];
+    uint8_t v = (tx & 1) ? (b & 0x0F) : (b >> 4);
+    if (!v) return 0;
+    *member = pan_owner[i] - 1;
+    return (uint8_t)((e >> 13 & 3) << 4 | v | 0x80);
 }

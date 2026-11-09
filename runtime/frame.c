@@ -26,6 +26,9 @@
 #include "rewind.h"
 #include "sound.h"
 #include "weather.h"
+#include "battlevox.h"
+#include "scenevox.h"
+#include "cheats.h"
 #include "widemap.h"
 
 #include <string.h>
@@ -68,6 +71,7 @@ uint32_t psiv_sprite_xlimit(uint32_t d6) {
 }
 
 void frame_run(void) {
+    cheats_frame();                    /* Settings > Cheats (all off unless chosen) */
     int h = vdp_height(), mw = vdp_width();
     int m = frame_wide_margin > VDP_WIDE_MAX ? VDP_WIDE_MAX : frame_wide_margin;
     int wide = m > 0 && mw == 320 && wide_allowed();
@@ -93,6 +97,7 @@ void frame_run(void) {
         vdp_compose_line(&frame_lines[y], &frame_pixels[y * VDP_MAX_W], w);
     }
 
+    scenevox_frame(frame_lines, w, h);                 /* a voiced page of dialogue (reads only) */
     frame_logical += (uint64_t)frame_vint_will_fire();
     game_show_frame(frame_pixels, w, h);           /* platform_frame, from the program's own stack (rewind.h) */
     frame_count++;
@@ -100,6 +105,7 @@ void frame_run(void) {
     vdp.in_vblank = 1;
     vdp.line = h;
     rumble_frame();                    /* hits and sound requests, for the rumble (reads only) */
+    battlevox_frame();                 /* the party's voices (reads only) */
     /* replaced sound effects: the game's requests wait in the sound queue
      * ($FF500A-$FF500D) for the driver, which runs in VInt; a replaced one
      * starts its sample and is taken out of the queue */
@@ -124,14 +130,31 @@ void frame_run(void) {
      * its limiter on while the port's own sound is in the mix */
     const float *chips;
     int n = sound_end_frame(&chips);
-    static float mix[2 * 8192];
+    static float mix[2 * 8192], part[2 * 8192];
     static int16_t out[2 * 8192];
     if (n > 8192) n = 8192;
     memcpy(mix, chips, (size_t)n * 2 * sizeof(float));
-    if (sfx_enabled()) sfx_mix(mix, n);
+    /* the port's own sounds, each kind at its level (Settings > Sound,
+     * mixbus.h): mixed apart and added in turned down, or at 1 straight into
+     * the mix as always. Turned all the way down they still play on, unheard */
+    float ge = mixbus_effects(), gv = mixbus_voices();
     int weather_heard = weather_sound_on();
-    if (weather_heard) weather_mix(mix, n);                /* battle rain and thunder */
-    mixbus_set_limiter(sfx_enabled() || algol_enabled() || music_enabled() || weather_heard);
+    if (sfx_enabled() || weather_heard) {
+        float *to = ge == 1.0f ? mix : part;
+        if (to == part) memset(part, 0, (size_t)n * 2 * sizeof(float));
+        if (sfx_enabled()) sfx_mix(to, n);
+        if (weather_heard) weather_mix(to, n);             /* battle rain and thunder */
+        if (to == part) for (int i = 0; i < n * 2; i++) mix[i] += part[i] * ge;
+    }
+    int voices = battlevox_sounding() || scenevox_sounding();
+    if (voices) {                                          /* the party's voices, voiced scenes */
+        float *to = gv == 1.0f ? mix : part;
+        if (to == part) memset(part, 0, (size_t)n * 2 * sizeof(float));
+        battlevox_mix(to, n);
+        scenevox_mix(to, n);
+        if (to == part) for (int i = 0; i < n * 2; i++) mix[i] += part[i] * gv;
+    }
+    mixbus_set_limiter(sfx_enabled() || algol_enabled() || music_enabled() || weather_heard || voices);
     mixbus_finish(mix, out, n);
     platform_audio(out, n);
 }

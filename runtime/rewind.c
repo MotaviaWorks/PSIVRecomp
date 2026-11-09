@@ -10,6 +10,8 @@
 #include "m68k.h"
 #include "rumble.h"
 #include "sfx.h"
+#include "battlevox.h"
+#include "scenevox.h"
 #include "sound.h"
 #include "vdp.h"
 #include "walkto.h"
@@ -83,6 +85,8 @@ static void machine_load(const uint8_t *in) {
     /* the port's own sound and gestures start over from here */
     algol_reset();
     sfx_stop_all();
+    battlevox_stop();
+    scenevox_stop();
     rumble_stop();
     walkto_cancel();
     weather_battle_end();

@@ -4,7 +4,9 @@ PSIV Recomp: alpha
 A native port of Phantasy Star IV for Windows, macOS, Linux and Android. The game's
 68000 code is translated into C and runs directly on your machine, with
 optional extras: widescreen, modern text and battle menus, battle depth and
-effects, the port's own sound effects, click/tap to walk.
+effects, a battle camera, living water and swaying trees, the party's voices
+in battle (AI placeholders for now), the port's own sound effects, a Journal,
+cheats, click/tap to walk.
 
 The sound effects most heard in battle -- blades, claws, guns, the
 techniques, the combination attacks, enemies' blows -- are the port's own,
@@ -76,12 +78,18 @@ Controls
 
 The launcher has **Start game**, the switch between **Enhanced** (the port's
 additions) and **Classic** (the original game, unchanged), **Settings** and
-**Quit**. In the game, Settings are in the menu too (Esc, Select, Back or ≡), on six pages: Game,
-Display, Sound, Battles, Controls, and Buttons (what each button and key does, with your
+**Quit**. In the game, Settings are in the menu too (Esc, Select, Back or ≡), on seven pages: Game,
+Display, Sound, Battles, Controls, Cheats, and Buttons (what each button and key does, with your
 gamepad's own names for them). Turn pages with the shoulder buttons,
 Tab, or a tap on a page's name; the line at the bottom says what the
 highlighted setting does. **Mode: Classic** (on the Game page) switches every
-addition off and gives you the original game.
+addition off and gives you the original game. The Sound page has a slider
+each for the volume of everything, the music, the effects and the voices.
+
+The menu's **Journal** says where the story stands and what to do next (with a
+hint if you're stuck), and keeps the story so far. The **Cheats** page (all off
+unless you choose them): full HP or TP, no random battles, maximum meseta,
+double or quadruple experience, enemies at 1 HP.
 
 Gamepads rumble -- and phones vibrate -- when blows land, on critical hits,
 when enemies are destroyed, and at the field's big moments (doors, explosions,
@@ -123,6 +131,7 @@ Not in this alpha
 - Save states: the game's own saves only. (Rewind goes back up to two minutes, ten
   seconds a press: Backspace, the left shoulder, or "Go back 10 seconds" in the menu.)
 - The Algol music chip is an experiment (Settings > Sound > Music).
+- Voiced story scenes and remixed music: optional packs, coming separately.
 
 
 Credits and legal

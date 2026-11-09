@@ -23,6 +23,7 @@
  * background is mirrored past its edges, which the camera can expose.
  */
 #include "depth.h"
+#include "battleui.h"
 #include "frame.h"
 #include "m68k.h"
 #include "weather.h"
@@ -44,6 +45,10 @@
 #define F_BG    0.25f                    /* how far each layer follows the camera */
 #define F_ENEMY 0.6f
 #define F_PARTY 1.0f
+/* the camera pan's turn: how far each layer drifts against the party's slide */
+#define ORBIT_ENEMY 0.12f
+#define ORBIT_BG    0.35f
+#define ORBIT_FOG   0.25f
 
 typedef struct {
     float drift_x, drift_y;              /* idle drift, pixels at the nearest layer */
@@ -153,6 +158,7 @@ static float ramp;                       /* 0..1, eases the effect in at battle 
 static float t;                          /* seconds of battle shown */
 static float pan_x, pan_y, zoom_extra;   /* camera, eased */
 static float shake_amp, shake_t;
+static float pan_a;                      /* the camera pan (battleui_pan): pixels, eased */
 static int last_popups;
 
 void depth_set_level(int l) { level = l < 0 ? 0 : l >= DEPTH_LEVELS ? DEPTH_LEVELS - 1 : l; }
@@ -466,13 +472,13 @@ static void fx_draw(uint32_t *out, int stride, int w, int h, int scale, float ca
 
 /* the camera of the last composed frame, for overlays drawn over it */
 static int cam_valid;
-static float cam_last_x, cam_last_y, cam_last_zoom, cam_last_w, cam_last_h;
+static float cam_last_x, cam_last_y, cam_last_zoom, cam_last_w, cam_last_h, cam_last_en;
 
 void depth_to_screen(int party, float x, float y, float *ox, float *oy) {
     if (!cam_valid) { *ox = x; *oy = y; return; }
     float f = party ? F_PARTY : F_ENEMY, s = 1.0f + f * (cam_last_zoom - 1.0f);
     float cx = cam_last_w / 2.0f, cy = party ? (float)PARTY_FEET_Y : cam_last_h / 2.0f;
-    *ox = cx + (x - f * cam_last_x - cx) * s;
+    *ox = cx + (x - f * (party ? cam_last_x : cam_last_en) - cx) * s;
     *oy = cy + (y - (party ? 0.0f : f * cam_last_y) - cy) * s;
 }
 
@@ -492,7 +498,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     ease(&fog_cur, FOG_ALPHA[fog_level], k);
     ease(&fx_cur, FX_STRENGTH[fx_level], k);
     if (mode != MODE_BATTLE) {
-        ramp = t = pan_x = pan_y = zoom_extra = shake_amp = 0.0f;
+        ramp = t = pan_x = pan_y = zoom_extra = shake_amp = pan_a = 0.0f;
         last_popups = 0;
         fog_tint_valid = 0;
         nparts = nhits = 0;
@@ -574,6 +580,43 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             for (int x = right0; x < w; x++) layer[L_BG][y][x] = layer[L_BG][y][2 * right0 - 1 - x];
         }
     }
+
+    /* The camera pan: while an enemy attacks someone (or someone casts),
+     * the game stands them under the enemy, often over another member. The
+     * view turns to face them instead: the one stood there glides from their
+     * place to it, everyone else slides the same way as one row, drawn whole
+     * from the pictures kept at the menus (battleui.c), so no one overlaps;
+     * and back again after. */
+    int pan_m = -1, pan_to = 0;
+    battleui_pan(&pan_m, &pan_to);
+    ease(&pan_a, (float)pan_to, 1.0f - expf(-dt / 0.14f));
+    if (pan_m < 0 && fabsf(pan_a) < 0.3f) pan_a = 0.0f;
+    int panning = pan_m >= 0 || pan_a != 0.0f;
+    static uint8_t mimg[VDP_MAX_H][VDP_MAX_W];            /* the others, whole, at their places */
+    int tx0 = 1 << 20, tx1 = -1, mx0 = 1 << 20, mx1 = -1;   /* columns: the one stood there; the others */
+    if (panning) {
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                if (layer[L_PARTY][y][x]) {
+                    if (battleui_tile_member(lines[y].plane_a_tile[x] & 0x7FF) != pan_m) {
+                        layer[L_PARTY][y][x] = 0;
+                        party_under[y][x] = 0;
+                    } else {
+                        if (x < tx0) tx0 = x;
+                        if (x > tx1) tx1 = x;
+                    }
+                }
+                int px, py, mm = -1;
+                vdp_plane_xy(0, x + vdp_view_x0, y, &px, &py);
+                mimg[y][x] = battleui_pan_pixel(px, py, &mm);
+                if (mimg[y][x]) {
+                    if (x < mx0) mx0 = x;
+                    if (x > mx1) mx1 = x;
+                }
+            }
+    }
+    int a_out = (int)lroundf(pan_a * (float)scale);                       /* the others' shift */
+    int t_out = pan_m >= 0 ? (int)lroundf((pan_a - (float)pan_to) * (float)scale) : 0;   /* the one stood there */
 
     /* objects: sprites that touch, or all but touch (an enemy's lunge, a
      * claw, a technique's burst), so no picture is ever split between layers */
@@ -669,8 +712,14 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     float cam_x = (dx + pan_x + sh * sinf(shake_t * two_pi * 17.0f)) * e;
     float cam_y = (dy + pan_y + sh * 0.5f * cosf(shake_t * two_pi * 13.0f)) * e;
     float zoom = 1.0f + zoom_extra * e;
+    /* the pan turns the view too: it swings round the one stood under the
+     * enemy, so beyond them the enemies drift a little the other way and the
+     * background further (the party's own camera is cam_x) */
+    float cam_en = cam_x + ORBIT_ENEMY * pan_a / F_ENEMY;
+    float cam_bg = cam_x + ORBIT_BG * pan_a / F_BG;
+    float cam_fog = cam_x + ORBIT_FOG * pan_a / F_FOG;
     cam_valid = 1;
-    cam_last_x = cam_x; cam_last_y = cam_y; cam_last_zoom = zoom;
+    cam_last_x = cam_x; cam_last_y = cam_y; cam_last_zoom = zoom; cam_last_en = cam_en;
     cam_last_w = (float)w; cam_last_h = (float)h;
 
     uint32_t pal[128];
@@ -692,9 +741,9 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     int ow = w * scale, oh = h * scale;
     static int16_t col_bg[VDP_MAX_W * MAX_SCALE], col_en[VDP_MAX_W * MAX_SCALE], col_pa[VDP_MAX_W * MAX_SCALE];
     static int16_t row_bg[VDP_MAX_H * MAX_SCALE], row_en[VDP_MAX_H * MAX_SCALE], row_pa[VDP_MAX_H * MAX_SCALE];
-    build_map(col_bg, ow, scale, w, w / 2.0f, F_BG, zoom, cam_x, 1);
+    build_map(col_bg, ow, scale, w, w / 2.0f, F_BG, zoom, cam_bg, 1);
     build_map(row_bg, oh, scale, h, h * 0.45f, F_BG, zoom, cam_y, 1);
-    build_map(col_en, ow, scale, w, w / 2.0f, F_ENEMY, zoom, cam_x, 0);
+    build_map(col_en, ow, scale, w, w / 2.0f, F_ENEMY, zoom, cam_en, 0);
     build_map(row_en, oh, scale, h, h / 2.0f, F_ENEMY, zoom, cam_y, 0);
     build_map(col_pa, ow, scale, w, w / 2.0f, F_PARTY, zoom, cam_x, 0);
     build_map(row_pa, oh, scale, h, (float)PARTY_FEET_Y, F_PARTY, zoom, 0.0f, 0);   /* no vertical move */
@@ -727,7 +776,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         float s_fog = 1.0f + F_FOG * (zoom - 1.0f);
         for (int X = 0; X < ow; X++) {
             float q = ((float)X + 0.5f) / (float)scale;
-            float fx = w / 2.0f + (q - w / 2.0f) / s_fog + F_FOG * cam_x;
+            float fx = w / 2.0f + (q - w / 2.0f) / s_fog + F_FOG * cam_fog;
             fog_col1[X] = (uint8_t)(int)floorf(fx * 0.8f + t * 5.0f);
             fog_col2[X] = (uint8_t)(int)floorf(fx * 1.6f - t * 9.0f + 97.0f);
         }
@@ -753,12 +802,17 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         for (int r = 0; r < 128; r++) {
             if (obj_w[r] <= 0.0f) continue;
             float ax = (float)(ox0[r] + ox1[r] + 1) / 2.0f, ay = (float)(oy0[r] + oy1[r] + 1) / 2.0f;
-            float ex = w / 2.0f + (ax - F_ENEMY * cam_x - w / 2.0f) * s_en;
+            float ex = w / 2.0f + (ax - F_ENEMY * cam_en - w / 2.0f) * s_en;
             float ey = h / 2.0f + (ay - F_ENEMY * cam_y - h / 2.0f) * s_en;
             float px = w / 2.0f + (ax - F_PARTY * cam_x - w / 2.0f) * s_pa;
             float py = (float)PARTY_FEET_Y + (ay - (float)PARTY_FEET_Y) * s_pa;
             obj_dx[r] = (int)lroundf((px - ex) * obj_w[r] * (float)scale);
             obj_dy[r] = (int)lroundf((py - ey) * obj_w[r] * (float)scale);
+            if (panning) {                                    /* with the one it is on, as the view turns */
+                int on_t = ox0[r] <= tx1 && ox1[r] >= tx0, on_m = ox0[r] <= mx1 && ox1[r] >= mx0;
+                if (on_t) obj_dx[r] += (int)lroundf((float)t_out * obj_w[r]);
+                else if (on_m) obj_dx[r] += (int)lroundf((float)a_out * obj_w[r]);
+            }
         }
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
@@ -798,8 +852,18 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                 continue;
             }
             if ((c = layer[L_UI][vu][X / scale]) != 0) { dst[X] = pal[c & 0x3F]; fr[X] = 3; continue; }
-            if (vp >= 0 && (u = col_pa[X]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0
-                && !(party_under[vp][u] && ve >= 0 && col_en[X] >= 0 && layer[L_ACTION][ve][col_en[X]])) {
+            int pu = 0;                                       /* the party here, and if put back (under action) */
+            c = 0;
+            if (vp >= 0) {
+                if (!panning) {
+                    if ((u = col_pa[X]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0) pu = party_under[vp][u];
+                } else {
+                    int XT = X - t_out, XO = X - a_out;
+                    if (XT >= 0 && XT < ow && (u = col_pa[XT]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0) pu = party_under[vp][u];
+                    if (!c && XO >= 0 && XO < ow && (u = col_pa[XO]) >= 0 && (c = mimg[vp][u]) != 0) pu = 1;
+                }
+            }
+            if (c && !(pu && ve >= 0 && col_en[X] >= 0 && layer[L_ACTION][ve][col_en[X]])) {
                 uint32_t pc = tpal[c & 0x3F];
                 if (lit && ve >= 0 && col_en[X] >= 0) {                /* the party catches some of the light */
                     const uint8_t *lp = light_px[ve][col_en[X]];
@@ -807,7 +871,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                     pc = 0xFF000000u | (uint32_t)(r > 255 ? 255 : r) << 16 | (uint32_t)(g > 255 ? 255 : g) << 8 | (uint32_t)(b > 255 ? 255 : b);
                 }
                 dst[X] = pc;
-                fr[X] = party_under[vp][u] ? 2 : 1;
+                fr[X] = pu ? 2 : 1;
                 continue;
             }
             /* behind it: action, enemies, background */
@@ -844,8 +908,8 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
      * port put back), a high-priority one over the party too */
     for (int r = 0; any_near && r < 128; r++) {
         if (obj_w[r] <= 0.0f) continue;
-        int X0 = (int)floorf((w / 2.0f + ((float)ox0[r] - F_ENEMY * cam_x - w / 2.0f) * s_en) * (float)scale) + obj_dx[r] - scale;
-        int X1 = (int)ceilf((w / 2.0f + ((float)ox1[r] + 1.0f - F_ENEMY * cam_x - w / 2.0f) * s_en) * (float)scale) + obj_dx[r] + scale;
+        int X0 = (int)floorf((w / 2.0f + ((float)ox0[r] - F_ENEMY * cam_en - w / 2.0f) * s_en) * (float)scale) + obj_dx[r] - scale;
+        int X1 = (int)ceilf((w / 2.0f + ((float)ox1[r] + 1.0f - F_ENEMY * cam_en - w / 2.0f) * s_en) * (float)scale) + obj_dx[r] + scale;
         int Y0 = (int)floorf((h / 2.0f + ((float)oy0[r] - F_ENEMY * cam_y - h / 2.0f) * s_en) * (float)scale) + obj_dy[r] - scale;
         int Y1 = (int)ceilf((h / 2.0f + ((float)oy1[r] + 1.0f - F_ENEMY * cam_y - h / 2.0f) * s_en) * (float)scale) + obj_dy[r] + scale;
         if (X0 < 0) X0 = 0;
@@ -868,9 +932,9 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     }
     if (wx) {                                                 /* the weather, at its three depths */
         WeatherFrame wf = {out, out_stride, &front[0][0], VDP_MAX_W * MAX_SCALE, w, h, scale,
-                           cam_x, cam_y, zoom, dt, (int)(sr / n), (int)(sg / n), (int)(sb / n)};
+                           cam_en, cam_y, zoom, dt, (int)(sr / n), (int)(sg / n), (int)(sb / n)};
         weather_draw(&wf);
     }
-    if (fx_on) fx_draw(out, out_stride, w, h, scale, cam_x, cam_y, zoom, fx_cur);
+    if (fx_on) fx_draw(out, out_stride, w, h, scale, cam_en, cam_y, zoom, fx_cur);
     return 1;
 }

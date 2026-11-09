@@ -92,3 +92,17 @@ void mixbus_stats(uint64_t *limited, uint64_t *total, double *deepest_db) {
     *deepest_db = 20.0 * log10((double)lowest);
 }
 
+static float level_music = 1.0f, level_effects = 1.0f, level_voices = 1.0f;
+
+static float level(float v) { return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; }
+
+void mixbus_set_levels(float music, float effects, float voices) {
+    level_music = level(music);
+    level_effects = level(effects);
+    level_voices = level(voices);
+}
+
+float mixbus_music(void) { return level_music; }
+float mixbus_effects(void) { return level_effects; }
+float mixbus_voices(void) { return level_voices; }
+

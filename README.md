@@ -98,8 +98,9 @@ The app opens on the launcher: Start game, Enhanced or Classic, Settings,
 Quit (arrows or the stick, Enter or C; Left / Right flips the mode).
 Hold Tab to fast-forward, F10 pause, F11 fullscreen, F12 screenshot
 (`screenshots/`). **Esc** (or the pad's Back/Select) opens the system menu:
-resume, settings, quit. Settings are on five pages -- Game, Display, Sound,
-Battles, Controls -- turned with Tab / Page Up / Page Down, the shoulder
+resume, go back 10 seconds, the journal, settings, quit. Settings are on
+seven pages -- Game, Display, Sound, Battles, Controls, Cheats, Buttons --
+turned with Tab / Page Up / Page Down, the shoulder
 buttons, or a click or tap on the page's name; the line under the list says
 what the highlighted setting does. Battery saves go to `saves/psiv.srm`;
 `psiv --save FILE` plays another, an emulator's `.srm` too (BizHawk, Gens,
@@ -121,6 +122,20 @@ it back at R: the game then goes on from S byte for byte as it did (RAM,
 VRAM, CRAM, VSRAM, registers, and the chips' sound, sample for sample;
 checked on Windows, Linux and the Odin 2).
 
+**Journal** (the Esc menu's Journal; PsiLok's idea): where the story has got
+to and what to do next, read from the game's own event flags
+(`runtime/journal.h`: reads only, so the game is unchanged, Classic too).
+*Now* shows the current step and, only when asked for, a hint: where to go,
+who to talk to, what to use. *Story so far* recaps every step reached, the
+newest first. *Hunters' Guild*, once Aiedo has been visited, lists the
+guild's jobs: offered, under way (what to do next, and a hint), to report
+back for the fee, or done. The words are the port's own, written to give
+nothing away before it happens: `runtime/journal.txt`, made into
+`runtime/journal_data.h` by `tools/make_journal.py`.
+`tools/journal_check.py SAVE.srm ...` shows the step each save is at (saves
+in story order never go back a step); `psiv_headless --journal N` prints
+the journal at logical frame N.
+
 **Rumble** (Settings > Controls > Rumble: off / light / normal / strong; `pad.rumble`):
 the Mega Drive had none, so the port reads the moments from the game's
 memory (`runtime/rumble.c`, reads only, so the game is unchanged): a blow
@@ -136,6 +151,21 @@ Classic leaves it as set (nothing on screen or in the sound changes).
 `psiv_headless --rumble-log` lists the effects as they come
 (`PSIV_RUMBLE_SOUNDS=1`: every sound request too); `psiv --test-rumble F`
 attaches a virtual gamepad that logs what it's asked to play.
+
+### Volume
+
+The Sound page in the Esc menu sets how loud things are: **Volume**
+(0-200%) for everything, then **Music volume**, **Effects volume** and
+**Voice volume** (0-100% each, in 5% steps). Each is a slider: Left / Right
+step it (held, they keep going, on a gamepad too), a click or a tap on the
+bar puts it there, and the mouse can drag it. The music is the game's songs
+on either chip, or your own files; the effects are the game's own (on the
+chips: the channels its sound-effect tracks hold at that moment,
+`runtime/sound.c`), the port's or your samples, and the battle weather; the
+voices are the party's in battle and the voiced scenes. Music and effects
+work in Classic too. All at 100% the sound is exactly what it was without
+them (`runtime/mixbus.h`); `psiv_headless --levels M:E:V` renders with them
+(percent).
 
 ### Enhancements
 
@@ -161,6 +191,34 @@ original game, unchanged; **Enhanced** turns on the additions:
 - **Battle effects** (off / subtle / full): the game's own attack and
   technique sprites light the scene in their colours, sparks and a flash
   where hits land, embers rising from fire, a lens flare at bright moments.
+- **Battle camera** (Battles page, Camera: on / off; needs battle depth):
+  when an enemy attacks someone, the view turns to face them, and the party
+  slides along instead of overlapping (`runtime/depth.c`).
+- **Voices** (Sound page: on / off): the party speaks in battle -- a shout
+  as they attack, a grunt when hit, a breath as they cast, a cry when they
+  fall, a cheer when they win (`runtime/battlevox.c`). The voices are AI-made
+  placeholders, `res/voices/<name>_<moment>_<n>.wav` for all ten characters;
+  files of your own in the home folder's `voices/` take their place. The
+  same setting plays voiced story scenes from an optional pack in
+  `voices/scenes` (`runtime/scenevox.c`: each line is found by the text on
+  screen, and a flashback turns the scene to sepia); the pack is not part of
+  the port. **Auto-advance** (V / the north button) moves a voiced scene on
+  once each line is said. `psiv_headless --voices DIR` / `--scene-voices DIR`.
+- **Living water** and **trees** (Display page: on / off each): the sea,
+  rivers and pools get ripples, light, glints and foam, and the field's
+  trees sway in the breeze with light flickering through their leaves, both
+  drawn at full resolution over the game's own tiles (`runtime/fieldfx.c`;
+  `psiv_headless --water S`).
+- **Journal** (in the Esc menu): where the story stands and what to do next,
+  with a hint if you're stuck; the story so far; and the Hunters' Guild jobs
+  once the guild is known. **Journal notes** (Game page: on / off) put a note
+  in the corner when the story moves on (`runtime/journal.c`, its text in
+  `runtime/journal.txt`, made into `journal_data.h` by
+  `tools/make_journal.py`; `tools/journal_check.py` checks it).
+- **Cheats** (Cheats page; all off unless chosen): everyone's HP or TP kept
+  full, no random battles, meseta kept at 999,999, double or quadruple
+  experience, enemies at 1 HP. They work on the game's RAM between frames,
+  never on its code (`runtime/cheats.c`; `psiv_headless --cheat NAME`).
 
 - **Music** (original chip / Algol): *Algol* is the port's own modern sound
   chip (`runtime/algol.c`). The game's music driver still runs and still

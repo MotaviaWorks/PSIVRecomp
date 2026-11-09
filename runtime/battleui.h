@@ -46,6 +46,17 @@ size_t battleui_state_load(const uint8_t *in);
 /* the modern menus are up this frame: the front end draws them */
 int  battleui_active(void);
 
+/* The camera pan, drawn by depth.c: while the battle plays out, the member
+ * the game stood away from their place (one attacked, or a caster or archer,
+ * under an enemy) and how far (pixels, + = right); 0 if no one. The member
+ * whose tile it is (-1 none); and the others' pictures as kept at their
+ * places: the pixel at plane A (px, py) as palette index | 0x80, 0 = none. */
+void battleui_set_pan(int on);
+int  battleui_pan_enabled(void);
+int  battleui_pan(int *member, int *dx);
+int  battleui_tile_member(int tile);
+uint8_t battleui_pan_pixel(int px, int py, int *member);
+
 /* draw over a picture of the frame at `scale` times the game's resolution:
  * out holds the view as frame_run drew it, view_w x h game pixels */
 void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h);

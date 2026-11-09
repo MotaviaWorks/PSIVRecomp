@@ -19,6 +19,7 @@
 #include "walkto.h"
 #include "bus.h"
 #include "m68k.h"
+#include "vdp.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +66,29 @@ static int cell_code(int cx, int cy) {
     unsigned a = 0x6000 + c * 32 + (x & 16 ? 4u : 0u) + (y & 16 ? 16u : 0u);
     return (r8(a) & 0x40 ? 1 : 0) | (r8(a + 2) & 0x40 ? 2 : 0) | (r8(a + 8) & 0x40 ? 4 : 0) | (r8(a + 10) & 0x40 ? 8 : 0);
 }
+
+/* for the field's effects (fieldfx.c): the walked layer's map and camera */
+int walkto_field_map(int *w_cells, int *h_cells, int *cam_x, int *cam_y) {
+    if (r16(GAME_MODE) != MODE_FIELD) return 0;
+    map_read();
+    *w_cells = map_w;
+    *h_cells = map_h;
+    int cx = (int)r16(use_bg ? 0xEF9C : 0xEF94), cy = (int)r16(use_bg ? 0xEF98 : 0xEF90);
+    /* as the picture shows it: the camera in RAM is already the next frame's
+     * while the party walks (the VDP takes it at the next VInt), a step
+     * ahead; the walked layer's plane holds the map at its own coordinates,
+     * so the plane's scroll at the view's top left says where it really is */
+    int pwc, phc, px, py;
+    vdp_plane_cells(&pwc, &phc);
+    vdp_plane_xy(use_bg ? 1 : 0, 0, 0, &px, &py);
+    int dx = (px - cx) & (pwc * 8 - 1), dy = (py - cy) & (phc * 8 - 1);
+    if (dx >= pwc * 4) dx -= pwc * 8;
+    if (dy >= phc * 4) dy -= phc * 8;
+    *cam_x = cx + dx;
+    *cam_y = cy + dy;
+    return map_w > 0 && map_h > 0;
+}
+int walkto_cell_code(int cx, int cy) { return cell_code(cx, cy); }
 
 /* an object's feet cell, and the cell its step is taking it to */
 static void obj_cells(unsigned a, int *cx, int *cy, int *nx, int *ny) {

@@ -54,6 +54,7 @@ static struct {
     unsigned st, mode, map0;
     int cmd[5], pick, targets, main, macro;
     int saw_victory, saw_run, saw_defeat;
+    int item_done;                 /* PSIV_BOT_ITEM: that item has been used in this battle */
     int vehicle, tries, slot;      /* board this vehicle first (1-3); attempts; its place in the item list */
     unsigned combo;                /* the last combination logged ($FF4146 while the actions play) */
     unsigned cam;                  /* the camera when it last moved, and when */
@@ -122,7 +123,7 @@ static void begin_battle(uint64_t L) {
     const char *pl = getenv("PSIV_BOT_PLAN");
     for (int i = 0; pl && i < NPLANS; i++)
         if (!strcmp(pl, plan_name[i])) b.plan = i;
-    b.round = b.run_tried = b.saw_victory = b.saw_run = b.saw_defeat = 0;
+    b.round = b.run_tried = b.saw_victory = b.saw_run = b.saw_defeat = b.item_done = 0;
     b.st = 0xFFFF;
     b.pick = -1;
     for (int k = 0; k < 5; k++) b.cmd[k] = -1;
@@ -212,6 +213,13 @@ static uint8_t save(uint64_t L) {
 }
 
 /* ------------------------------------------------------------------ battles */
+/* PSIV_BOT_ITEM=HEX: the first command of each battle uses that item (the
+ * Psyco Wand, $39, on Zio); -1 when unset */
+static int want_item(void) {
+    const char *s = getenv("PSIV_BOT_ITEM");
+    return s && *s ? (int)(strtoul(s, NULL, 16) & 0xFF) : -1;
+}
+
 static int choose(void) {
     switch (b.plan) {
     case P_ATTACK: return 0;
@@ -220,6 +228,8 @@ static int choose(void) {
     case P_ITEM: return rnd(2) ? 3 : 0;
     default: {
         uint32_t x = rnd(100);
+        if (getenv("PSIV_BOT_SHOW"))                /* for footage: no items, no defending */
+            return x < 30 ? 0 : x < 75 ? 1 : 2;
         return x < 30 ? 0 : x < 60 ? 1 : x < 80 ? 2 : x < 90 ? 3 : 4;
     }
     }
@@ -282,7 +292,7 @@ static uint8_t vehicle_menu(uint64_t L) {
 
 static uint8_t command(uint64_t L, int f) {
     if (f < 0 || f > 4) return 0;
-    if (b.cmd[f] < 0) b.cmd[f] = choose();
+    if (b.cmd[f] < 0) b.cmd[f] = want_item() >= 0 && !b.item_done ? 3 : choose();
     if (b.taps > 12) b.cmd[f] = 0;
     int cur = (int)(r16(COMD_INDEX + 2u * (unsigned)f) % 5);
     if (cur < b.cmd[f]) return tap(PAD_RIGHT);
@@ -322,6 +332,11 @@ static uint8_t list(uint64_t L, int f, unsigned st) {
         } else {
             for (int i = equipped(f); i < 44; i++)
                 if (r8(ITEM_LIST + (unsigned)i)) c[n++] = i;
+            for (int i = 0; i < n && want_item() >= 0 && !b.item_done; i++)
+                if ((int)r8(ITEM_LIST + (unsigned)c[i]) == want_item()) {   /* PSIV_BOT_ITEM */
+                    c[0] = c[i];
+                    n = 1;
+                }
         }
         if (!n) {
             printf("bot %llu:   %s: no %s to use; attacks instead\n", (unsigned long long)L, who(f), cmd_name[kind]);
@@ -344,6 +359,7 @@ static uint8_t list(uint64_t L, int f, unsigned st) {
     unsigned id = kind == 1 ? r8(TECH_LIST + (unsigned)t) : kind == 2 ? r8(SKILL_LIST + 2u * (unsigned)t)
                             : r8(ITEM_LIST + (unsigned)t);
     printf("bot %llu:   %s: %s %02X (entry %d)\n", (unsigned long long)L, who(f), cmd_name[kind], id, t);
+    if (kind == 3 && (int)id == want_item()) b.item_done = 1;
     b.targets = (int)rnd(4);
     return tap(PAD_C);
 }

@@ -53,4 +53,8 @@ uint32_t hdtext_over(uint32_t dst, uint32_t rgb, int alpha);   /* rgb at alpha o
 /* nearest-neighbour upscale of a frame (src_stride pixels per row) */
 void hdtext_upscale(const uint32_t *src, int src_stride, int w, int h, uint32_t *out, int out_stride, int scale);
 
+/* the dialogue box's text as it stands, letters and digits only, lower
+ * case (scenevox.c); its length */
+int hdtext_dialogue_key(const VdpLine *lines, int w, int h, char *out, int n);
+
 #endif

@@ -27,4 +27,15 @@ void mixbus_finish(const float *in, int16_t *out, int frames);
  * deepest it went (dB, <= 0) */
 void mixbus_stats(uint64_t *limited, uint64_t *total, double *deepest_db);
 
+/* Settings > Sound: the music, the sound effects and the voices at their own
+ * levels, each 0-1 (1 = as they are; the overall volume is the front end's).
+ * The chips' share is split by sound.c: the channels the game's sound-effect
+ * tracks hold are effects, the rest music. The port's own sounds by frame.c:
+ * its effects and the battle weather are effects, the voices voices. All at 1,
+ * the sound is exactly what it was without them. */
+void mixbus_set_levels(float music, float effects, float voices);
+float mixbus_music(void);
+float mixbus_effects(void);
+float mixbus_voices(void);
+
 #endif

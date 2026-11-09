@@ -32,6 +32,13 @@ int  walkto_click_button(int right);
  * `slot` of Field_Objects_Memory (>= 0: to its side, then face it and press C). */
 int  walkto_go(int cx, int cy, int slot);
 void walkto_cancel(void);
+
+/* The field's map, for its effects (fieldfx.c): the walked layer's size in
+ * 16x16 cells and its camera (the map pixel at the 320 view's top left, as
+ * the picture shows it, not the step ahead in RAM), and a cell's collision
+ * code (8 solid, 9 water, ...). 0: not on the field. */
+int  walkto_field_map(int *w_cells, int *h_cells, int *cam_x, int *cam_y);
+int  walkto_cell_code(int cx, int cy);
 int  walkto_active(void);
 
 /* The pad the game sees this frame: `user` is what the player holds (any of

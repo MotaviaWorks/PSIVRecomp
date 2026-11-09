@@ -13,6 +13,7 @@
  */
 #include "sound.h"
 #include "algol.h"
+#include "mixbus.h"
 #include "music.h"
 #include "m68k.h"
 #include "ym2612.h"
@@ -71,10 +72,29 @@ static void psg_init(void) {
  * Z80's; tick counts runs of the 68000 sound driver (psiv_sound_tick). */
 static uint64_t sound_ticks;
 
+/* the channels the driver's sound-effect tracks hold ($FF5220: nine tracks of
+ * $30 bytes, flags bit 7 = playing, then the channel), read as algol.c and
+ * music.c read them: on the original chips, the effects for Settings > Sound
+ * (mixbus.h); the rest is the music */
+static unsigned fx_fm, fx_psg;
+static void effect_channels(void) {
+    unsigned fm = 0, psg = 0;
+    for (int i = 0; i < 9; i++) {
+        unsigned a = 0x5220u + (unsigned)i * 0x30u;
+        uint8_t flags = m68k_ram[a], chn = m68k_ram[a + 1];
+        if (!(flags & 0x80)) continue;
+        if (chn & 0x80) psg |= 1u << (chn >> 5 & 3);
+        else if ((chn & 3) < 3) fm |= 1u << ((chn & 3) + 3 * (chn >> 2 & 1));
+    }
+    fx_fm = fm;
+    fx_psg = psg;
+}
+
 void psiv_sound_tick(void) {
     sound_ticks++;
     if (algol_enabled()) algol_driver_tick();
     music_tick();
+    effect_channels();
 }
 
 static void psg_write(uint8_t v, int from_z80) {
@@ -190,11 +210,23 @@ static void advance(double n) {
             if (!solo_read) { const char *e = getenv("PSIV_CHANNELS"); if (e && *e) solo = (unsigned)strtoul(e, NULL, 16); solo_read = 1; }
             int custom = music_active();                   /* your own file plays the music (music.h) */
             unsigned psg_mask = custom ? music_fx_psg() : algol_enabled() ? algol_psg_effects() : (solo >> 6 & 0xF);
+            /* Settings > Sound: the music and the effects at their own levels
+             * (mixbus.h). Your file and Algol are music apart from the chips;
+             * on the original chips the channels the effects hold are split
+             * from the song's. All at 1: the sum exactly as it always was */
+            float gm = mixbus_music(), ge = mixbus_effects();
+            int split = !custom && !algol_enabled() && (gm != 1.0f || ge != 1.0f) && (solo & 0x43F) == 0x43F;
+            int32_t pf = 0;
             for (psg_phase += PSG_PER_SAMPLE; psg_phase >= 1; psg_phase -= 1, ticks++) {
                 psg_clock();
-                p += psg_level(psg_mask);
+                if (split) {
+                    p += psg_level(psg_mask & ~fx_psg);
+                    pf += psg_level(psg_mask & fx_psg);
+                } else {
+                    p += psg_level(psg_mask);
+                }
             }
-            if (ticks) p /= ticks;
+            if (ticks) { p /= ticks; pf /= ticks; }
             /* master gain: the loudest song peaks near 11,500 raw; x2.25 puts it
              * around -2 dBFS with headroom for effects over music. Summed in
              * float, unclipped: the mix bus (mixbus.c) makes the 16-bit output */
@@ -204,16 +236,22 @@ static void advance(double n) {
                 float ml, mr;
                 ym_generate_mask(&l, &r, music_fx_fm());
                 music_render(&ml, &mr);
-                fl = (float)((l + p) * 9 / 4) + ml;
-                fr = (float)((r + p) * 9 / 4) + mr;
+                fl = (float)((l + p) * 9 / 4) * ge + ml * gm;
+                fr = (float)((r + p) * 9 / 4) * ge + mr * gm;
             } else if (algol_enabled()) {
                 /* the music on Algol; the original chips only for the
                  * channels a sound effect holds */
                 float ml, mr;
                 ym_generate_mask(&l, &r, algol_fm_effects());
                 algol_render(&ml, &mr);
-                fl = (float)((l + p) * 9 / 4) + ml;
-                fr = (float)((r + p) * 9 / 4) + mr;
+                fl = (float)((l + p) * 9 / 4) * ge + ml * gm;
+                fr = (float)((r + p) * 9 / 4) * ge + mr * gm;
+            } else if (split) {
+                /* the song's channels and the effects', each at its level */
+                int32_t lf, rf;
+                ym_generate_split(&l, &r, &lf, &rf, fx_fm);
+                fl = (float)((l + p) * 9 / 4) * gm + (float)((lf + pf) * 9 / 4) * ge;
+                fr = (float)((r + p) * 9 / 4) * gm + (float)((rf + pf) * 9 / 4) * ge;
             } else {
                 if ((solo & 0x43F) != 0x43F)
                     ym_generate_mask(&l, &r, (solo & 0x1F) | ((solo >> 5 | solo >> 10) & 1) << 5);   /* tuning: some channels */

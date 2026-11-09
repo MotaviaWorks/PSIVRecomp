@@ -58,6 +58,12 @@ static int16_t *load_wav(const char *path, int *frames_out) {
     uint8_t *buf = malloc((size_t)size);
     if (!buf || fread(buf, 1, (size_t)size, f) != (size_t)size) { fclose(f); free(buf); return NULL; }
     fclose(f);
+    int16_t *out = sfx_decode_wav(buf, size, frames_out);
+    free(buf);
+    return out;
+}
+
+int16_t *sfx_decode_wav(const uint8_t *buf, long size, int *frames_out) {
     int16_t *out = NULL;
     if (size < 12 || memcmp(buf, "RIFF", 4) || memcmp(buf + 8, "WAVE", 4)) goto done;
     int tag = 0, channels = 0, bits = 0;
@@ -115,7 +121,6 @@ static int16_t *load_wav(const char *path, int *frames_out) {
     }
     free(lr);
 done:
-    free(buf);
     return out;
 }
 
