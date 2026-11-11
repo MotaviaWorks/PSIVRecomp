@@ -30,6 +30,8 @@
 #include "scenevox.h"
 #include "cheats.h"
 #include "widemap.h"
+#include "titleart.h"
+#include "perf.h"
 
 #include <string.h>
 
@@ -70,6 +72,8 @@ uint32_t psiv_sprite_xlimit(uint32_t d6) {
     return (d6 & 0xFF) < 80 ? 0x1E0 : 0;
 }
 
+static void frame_sound(void);
+
 void frame_run(void) {
     cheats_frame();                    /* Settings > Cheats (all off unless chosen) */
     int h = vdp_height(), mw = vdp_width();
@@ -83,6 +87,7 @@ void frame_run(void) {
     battleui_frame();                  /* modern battle menus: the game's windows left out of the picture */
 
     vdp.in_vblank = 0;
+    perf_begin(PERF_VDP);
     for (int y = 0; y < h; y++) {
         vdp.line = y;
         /* the line counter runs out at the end of the line before, and what
@@ -97,6 +102,8 @@ void frame_run(void) {
         vdp_compose_line(&frame_lines[y], &frame_pixels[y * VDP_MAX_W], w);
     }
 
+    perf_end(PERF_VDP);
+    titleart_frame(frame_pixels, w, h);                /* the port's IV and RECOMP beside the title's logo */
     scenevox_frame(frame_lines, w, h);                 /* a voiced page of dialogue (reads only) */
     frame_logical += (uint64_t)frame_vint_will_fire();
     game_show_frame(frame_pixels, w, h);           /* platform_frame, from the program's own stack (rewind.h) */
@@ -125,9 +132,14 @@ void frame_run(void) {
         frame_lag_vint();
     }
 
-    /* the Z80, YM2612 and PSG play out the rest of the frame; then any
-     * replacement sound effects; the mix bus makes the 16-bit samples, with
-     * its limiter on while the port's own sound is in the mix */
+    frame_sound();
+}
+
+/* The frame's sound: the Z80, YM2612 and PSG play out the rest of the
+ * frame; then any replacement sound effects; the mix bus makes the 16-bit
+ * samples, with its limiter on while the port's own sound is in the mix */
+static void frame_sound(void) {
+    perf_begin(PERF_SOUND);
     const float *chips;
     int n = sound_end_frame(&chips);
     static float mix[2 * 8192], part[2 * 8192];
@@ -156,7 +168,33 @@ void frame_run(void) {
     }
     mixbus_set_limiter(sfx_enabled() || algol_enabled() || music_enabled() || weather_heard || voices);
     mixbus_finish(mix, out, n);
+    perf_end(PERF_SOUND);
     platform_audio(out, n);
+}
+
+/* The sound driver alone (frame.h). InitSoundDriver ($D0004) stops the Z80,
+ * gives it the DAC program and silences the chips; UpdateSound ($D0000) is
+ * the tick the game's VInt runs. Neither waits for anything, so they can
+ * be called with no game running: RAM clear, the stack where the reset
+ * vector puts it, interrupts off -- as at the game's own first call. */
+#define INIT_SOUND_DRIVER 0xD0004u
+#define UPDATE_SOUND      0xD0000u
+
+static void driver_call(uint32_t routine) { CALL_IND(routine, 0u); }
+
+void frame_song_start(int id) {
+    m68k.s = 1;
+    m68k.imask = 7;
+    A(7) = rd32(0);
+    sound_busreq_write(0x100);         /* as MainGameProgram: the Z80 stopped and out of reset, */
+    sound_reset_write(0x100);          /* or the driver waits for ever for it to stop */
+    driver_call(INIT_SOUND_DRIVER);
+    m68k_ram[SOUND_QUEUE] = (uint8_t)id;
+}
+
+void frame_song_tick(void) {
+    driver_call(UPDATE_SOUND);
+    frame_sound();
 }
 
 int frame_vint_will_fire(void) {

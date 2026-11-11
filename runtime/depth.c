@@ -27,6 +27,7 @@
 #include "frame.h"
 #include "m68k.h"
 #include "weather.h"
+#include "par.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -482,6 +483,109 @@ void depth_to_screen(int party, float x, float y, float *ox, float *oy) {
     *oy = cy + (y - (party ? 0.0f : f * cam_last_y) - cy) * s;
 }
 
+/* source coordinate for every output column and row, per layer */
+static int16_t col_bg[VDP_MAX_W * MAX_SCALE], col_en[VDP_MAX_W * MAX_SCALE], col_pa[VDP_MAX_W * MAX_SCALE];
+static int16_t row_bg[VDP_MAX_H * MAX_SCALE], row_en[VDP_MAX_H * MAX_SCALE], row_pa[VDP_MAX_H * MAX_SCALE];
+/* the fog's noise rows and columns, and how thick it is on each row */
+static uint8_t fog_row1[VDP_MAX_H * MAX_SCALE], fog_row2[VDP_MAX_H * MAX_SCALE];
+static uint8_t fog_col1[VDP_MAX_W * MAX_SCALE], fog_col2[VDP_MAX_W * MAX_SCALE];
+static uint16_t fog_profile[VDP_MAX_H * MAX_SCALE];
+static uint8_t mimg[VDP_MAX_H][VDP_MAX_W];                /* the camera pan: the others, whole, at their places */
+
+/* The picture's main pass, a row of the output at a time: for each pixel the
+ * nearest thing there, through each layer's own camera. What a row shows
+ * depends only on the source rows its layers fall on and on its fog, so a
+ * row with the same ones as the row above (most rows, the picture being
+ * several times the game's size) is a copy of it. Rows are drawn in pieces
+ * on several cores (par.h): a piece writes only its own rows. */
+typedef struct {
+    uint32_t *out;
+    int out_stride, scale, ow;
+    const uint32_t *pal, *tpal;
+    int panning, t_out, a_out, lit, fog_on, tint_r, tint_g, tint_b;
+} Rows;
+
+static void compose_rows(void *ctx, int y0, int y1) {
+    const Rows *q = ctx;
+    uint32_t *out = q->out;
+    const uint32_t *pal = q->pal, *tpal = q->tpal;
+    int out_stride = q->out_stride, scale = q->scale, ow = q->ow;
+    int panning = q->panning, t_out = q->t_out, a_out = q->a_out, lit = q->lit, fog_on = q->fog_on;
+    int tint_r = q->tint_r, tint_g = q->tint_g, tint_b = q->tint_b;
+    for (int Y = y0; Y < y1; Y++) {
+        int vu = Y / scale, ve = row_en[Y], vp = row_pa[Y], vb = row_bg[Y];
+        uint8_t *fr = front[Y];
+        uint32_t *dst = out + (size_t)Y * (size_t)out_stride;
+        const uint8_t *nrow1 = noise[fog_row1[Y]], *nrow2 = noise[fog_row2[Y]];
+        int prof = fog_on ? fog_profile[Y] : 0;
+        if (Y > y0 && vu == (Y - 1) / scale && ve == row_en[Y - 1] && vp == row_pa[Y - 1] && vb == row_bg[Y - 1]
+            && prof == (fog_on ? fog_profile[Y - 1] : 0)
+            && (!prof || (fog_row1[Y] == fog_row1[Y - 1] && fog_row2[Y] == fog_row2[Y - 1]))) {
+            memcpy(dst, dst - out_stride, (size_t)ow * sizeof *dst);      /* the row above, again */
+            memcpy(fr, front[Y - 1], (size_t)ow);
+            continue;
+        }
+        for (int X = 0; X < ow; X++) {
+            int u = -1, c;
+            /* in front of the fog: cursor over an enemy, windows, party */
+            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_POINTER][ve][u]) != 0) {
+                dst[X] = pal[c & 0x3F];
+                fr[X] = 3;
+                continue;
+            }
+            if ((c = layer[L_UI][vu][X / scale]) != 0) { dst[X] = pal[c & 0x3F]; fr[X] = 3; continue; }
+            int pu = 0;                                       /* the party here, and if put back (under action) */
+            c = 0;
+            if (vp >= 0) {
+                if (!panning) {
+                    if ((u = col_pa[X]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0) pu = party_under[vp][u];
+                } else {
+                    int XT = X - t_out, XO = X - a_out;
+                    if (XT >= 0 && XT < ow && (u = col_pa[XT]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0) pu = party_under[vp][u];
+                    if (!c && XO >= 0 && XO < ow && (u = col_pa[XO]) >= 0 && (c = mimg[vp][u]) != 0) pu = 1;
+                }
+            }
+            if (c && !(pu && ve >= 0 && col_en[X] >= 0 && layer[L_ACTION][ve][col_en[X]])) {
+                uint32_t pc = tpal[c & 0x3F];
+                if (lit && ve >= 0 && col_en[X] >= 0) {                /* the party catches some of the light */
+                    const uint8_t *lp = light_px[ve][col_en[X]];
+                    int r = (int)(pc >> 16 & 255) + lp[0] / 3, g = (int)(pc >> 8 & 255) + lp[1] / 3, b = (int)(pc & 255) + lp[2] / 3;
+                    pc = 0xFF000000u | (uint32_t)(r > 255 ? 255 : r) << 16 | (uint32_t)(g > 255 ? 255 : g) << 8 | (uint32_t)(b > 255 ? 255 : b);
+                }
+                dst[X] = pc;
+                fr[X] = pu ? 2 : 1;
+                continue;
+            }
+            /* behind it: action, enemies, background */
+            uint32_t far;
+            uint8_t what = WX_FRONT_ENEMY;
+            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_ACTION][ve][u]) != 0) far = tpal[c & 0x3F];
+            else if (ve >= 0 && u >= 0 && (c = layer[L_ENEMY][ve][u]) != 0) far = tpal[c & 0x3F];
+            else { far = tpal[layer[L_BG][vb][col_bg[X]] & 0x3F]; what = WX_FRONT_BG; }
+            if (fog_on && prof) {
+                int d = (nrow1[fog_col1[X]] * 5 + nrow2[fog_col2[X]] * 3) >> 3;   /* 0..255 */
+                d = (d - 80) * 2;                                                 /* contrast: wisps */
+                if (d > 0) {
+                    if (d > 255) d = 255;
+                    int a = (d * prof) >> 8;                                      /* 0..256 */
+                    int r = far >> 16 & 255, g = far >> 8 & 255, b = far & 255;
+                    r += ((tint_r - r) * a) >> 8;
+                    g += ((tint_g - g) * a) >> 8;
+                    b += ((tint_b - b) * a) >> 8;
+                    far = 0xFF000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+                }
+            }
+            if (lit && ve >= 0 && (u = col_en[X]) >= 0) {             /* lit by the effects */
+                const uint8_t *lp = light_px[ve][u];
+                int r = (int)(far >> 16 & 255) + lp[0], g = (int)(far >> 8 & 255) + lp[1], b = (int)(far & 255) + lp[2];
+                far = 0xFF000000u | (uint32_t)(r > 255 ? 255 : r) << 16 | (uint32_t)(g > 255 ? 255 : g) << 8 | (uint32_t)(b > 255 ? 255 : b);
+            }
+            dst[X] = far;
+            fr[X] = what;
+        }
+    }
+}
+
 int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_stride, int scale) {
     const float dt = 1.0f / 59.92f;
     cam_valid = 0;
@@ -592,7 +696,6 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     ease(&pan_a, (float)pan_to, 1.0f - expf(-dt / 0.14f));
     if (pan_m < 0 && fabsf(pan_a) < 0.3f) pan_a = 0.0f;
     int panning = pan_m >= 0 || pan_a != 0.0f;
-    static uint8_t mimg[VDP_MAX_H][VDP_MAX_W];            /* the others, whole, at their places */
     int tx0 = 1 << 20, tx1 = -1, mx0 = 1 << 20, mx1 = -1;   /* columns: the one stood there; the others */
     if (panning) {
         for (int y = 0; y < h; y++)
@@ -739,8 +842,6 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
 
     /* source coordinate for every output column and row, per layer */
     int ow = w * scale, oh = h * scale;
-    static int16_t col_bg[VDP_MAX_W * MAX_SCALE], col_en[VDP_MAX_W * MAX_SCALE], col_pa[VDP_MAX_W * MAX_SCALE];
-    static int16_t row_bg[VDP_MAX_H * MAX_SCALE], row_en[VDP_MAX_H * MAX_SCALE], row_pa[VDP_MAX_H * MAX_SCALE];
     build_map(col_bg, ow, scale, w, w / 2.0f, F_BG, zoom, cam_bg, 1);
     build_map(row_bg, oh, scale, h, h * 0.45f, F_BG, zoom, cam_y, 1);
     build_map(col_en, ow, scale, w, w / 2.0f, F_ENEMY, zoom, cam_en, 0);
@@ -751,9 +852,6 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     /* fog: tinted from the background's average colour (eased, so flashes
      * don't make it flicker), densest along the floor, two drifting octaves */
     int fog_on = fog_cur > 0.005f;
-    static uint8_t fog_row1[VDP_MAX_H * MAX_SCALE], fog_row2[VDP_MAX_H * MAX_SCALE];
-    static uint8_t fog_col1[VDP_MAX_W * MAX_SCALE], fog_col2[VDP_MAX_W * MAX_SCALE];
-    static uint16_t fog_profile[VDP_MAX_H * MAX_SCALE];
     int tint_r = 0, tint_g = 0, tint_b = 0;
     long sr = 0, sg = 0, sb = 0, n = 0;                      /* the background's average colour */
     if (fog_on || wx) {
@@ -837,71 +935,8 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                              tmr, tmg, tmb, tar, tag, tab);
         tint_r = (int)(fc >> 16 & 255); tint_g = (int)(fc >> 8 & 255); tint_b = (int)(fc & 255);
     }
-    for (int Y = 0; Y < oh; Y++) {
-        int vu = Y / scale, ve = row_en[Y], vp = row_pa[Y], vb = row_bg[Y];
-        uint8_t *fr = front[Y];
-        uint32_t *dst = out + (size_t)Y * (size_t)out_stride;
-        const uint8_t *nrow1 = noise[fog_row1[Y]], *nrow2 = noise[fog_row2[Y]];
-        int prof = fog_profile[Y];
-        for (int X = 0; X < ow; X++) {
-            int u = -1, c;
-            /* in front of the fog: cursor over an enemy, windows, party */
-            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_POINTER][ve][u]) != 0) {
-                dst[X] = pal[c & 0x3F];
-                fr[X] = 3;
-                continue;
-            }
-            if ((c = layer[L_UI][vu][X / scale]) != 0) { dst[X] = pal[c & 0x3F]; fr[X] = 3; continue; }
-            int pu = 0;                                       /* the party here, and if put back (under action) */
-            c = 0;
-            if (vp >= 0) {
-                if (!panning) {
-                    if ((u = col_pa[X]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0) pu = party_under[vp][u];
-                } else {
-                    int XT = X - t_out, XO = X - a_out;
-                    if (XT >= 0 && XT < ow && (u = col_pa[XT]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0) pu = party_under[vp][u];
-                    if (!c && XO >= 0 && XO < ow && (u = col_pa[XO]) >= 0 && (c = mimg[vp][u]) != 0) pu = 1;
-                }
-            }
-            if (c && !(pu && ve >= 0 && col_en[X] >= 0 && layer[L_ACTION][ve][col_en[X]])) {
-                uint32_t pc = tpal[c & 0x3F];
-                if (lit && ve >= 0 && col_en[X] >= 0) {                /* the party catches some of the light */
-                    const uint8_t *lp = light_px[ve][col_en[X]];
-                    int r = (int)(pc >> 16 & 255) + lp[0] / 3, g = (int)(pc >> 8 & 255) + lp[1] / 3, b = (int)(pc & 255) + lp[2] / 3;
-                    pc = 0xFF000000u | (uint32_t)(r > 255 ? 255 : r) << 16 | (uint32_t)(g > 255 ? 255 : g) << 8 | (uint32_t)(b > 255 ? 255 : b);
-                }
-                dst[X] = pc;
-                fr[X] = pu ? 2 : 1;
-                continue;
-            }
-            /* behind it: action, enemies, background */
-            uint32_t far;
-            uint8_t what = WX_FRONT_ENEMY;
-            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_ACTION][ve][u]) != 0) far = tpal[c & 0x3F];
-            else if (ve >= 0 && u >= 0 && (c = layer[L_ENEMY][ve][u]) != 0) far = tpal[c & 0x3F];
-            else { far = tpal[layer[L_BG][vb][col_bg[X]] & 0x3F]; what = WX_FRONT_BG; }
-            if (fog_on && prof) {
-                int d = (nrow1[fog_col1[X]] * 5 + nrow2[fog_col2[X]] * 3) >> 3;   /* 0..255 */
-                d = (d - 80) * 2;                                                 /* contrast: wisps */
-                if (d > 0) {
-                    if (d > 255) d = 255;
-                    int a = (d * prof) >> 8;                                      /* 0..256 */
-                    int r = far >> 16 & 255, g = far >> 8 & 255, b = far & 255;
-                    r += ((tint_r - r) * a) >> 8;
-                    g += ((tint_g - g) * a) >> 8;
-                    b += ((tint_b - b) * a) >> 8;
-                    far = 0xFF000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
-                }
-            }
-            if (lit && ve >= 0 && (u = col_en[X]) >= 0) {             /* lit by the effects */
-                const uint8_t *lp = light_px[ve][u];
-                int r = (int)(far >> 16 & 255) + lp[0], g = (int)(far >> 8 & 255) + lp[1], b = (int)(far & 255) + lp[2];
-                far = 0xFF000000u | (uint32_t)(r > 255 ? 255 : r) << 16 | (uint32_t)(g > 255 ? 255 : g) << 8 | (uint32_t)(b > 255 ? 255 : b);
-            }
-            dst[X] = far;
-            fr[X] = what;
-        }
-    }
+    Rows rows = {out, out_stride, scale, ow, pal, tpal, panning, t_out, a_out, lit, fog_on, tint_r, tint_g, tint_b};
+    par_rows(compose_rows, &rows, oh);
     /* the sprites on the party, each object through the enemies' camera and
      * moved to where the party's puts it: in front of the fog and what is
      * behind; a low-priority one behind the party (but over a picture the

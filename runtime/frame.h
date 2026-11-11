@@ -41,6 +41,15 @@ int frame_vint_will_fire(void);
  * clear, so only the sound driver runs. Used to replay recorded lag. */
 void frame_lag_vint(void);
 
+/* The game's sound driver on its own, with the game not running (the
+ * launcher's music): after bus_init, frame_song_start sets the driver up as
+ * the game's first instructions do and asks it for a song (its ID, as the
+ * game's Sound_Index takes it); frame_song_tick then runs one of its ticks
+ * and hands the frame's sound to platform_audio -- 59.92 of them a second.
+ * bus_init again before the game itself is started. */
+void frame_song_start(int id);
+void frame_song_tick(void);
+
 /* Lag VInts to run right after this frame's VInt (reference replay only). */
 extern int frame_pending_lag;
 

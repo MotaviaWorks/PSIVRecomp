@@ -4,6 +4,8 @@
 #include "hdtext.h"
 #include "m68k.h"
 
+#include "par.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -345,15 +347,30 @@ void hdtext_draw(const VdpLine *lines, int w, int h, uint32_t *out, int stride, 
     }
 }
 
-void hdtext_upscale(const uint32_t *src, int src_stride, int w, int h, uint32_t *out, int out_stride, int scale) {
-    for (int y = 0; y < h; y++) {
-        const uint32_t *s = src + (size_t)y * (size_t)src_stride;
-        uint32_t *d = out + (size_t)y * (size_t)scale * (size_t)out_stride;
+/* (the game's rows in pieces on several cores, par.h: each fills its own
+ * rows of the output) */
+typedef struct {
+    const uint32_t *src;
+    uint32_t *out;
+    int src_stride, w, out_stride, scale;
+} UpRows;
+
+static void upscale_rows(void *ctx, int y0, int y1) {
+    const UpRows *q = ctx;
+    int w = q->w, scale = q->scale;
+    for (int y = y0; y < y1; y++) {
+        const uint32_t *s = q->src + (size_t)y * (size_t)q->src_stride;
+        uint32_t *d = q->out + (size_t)y * (size_t)scale * (size_t)q->out_stride;
         for (int x = 0; x < w; x++)
             for (int k = 0; k < scale; k++) d[x * scale + k] = s[x];
         for (int k = 1; k < scale; k++)
-            memcpy(d + (size_t)k * (size_t)out_stride, d, (size_t)(w * scale) * sizeof(uint32_t));
+            memcpy(d + (size_t)k * (size_t)q->out_stride, d, (size_t)(w * scale) * sizeof(uint32_t));
     }
+}
+
+void hdtext_upscale(const uint32_t *src, int src_stride, int w, int h, uint32_t *out, int out_stride, int scale) {
+    UpRows q = {src, out, src_stride, w, out_stride, scale};
+    par_rows(upscale_rows, &q, h);
 }
 
 /* ------------------------------------------------------------------ strings (panels) */

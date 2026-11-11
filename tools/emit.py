@@ -38,6 +38,22 @@ HOOKS = [
     # Each run of the 68000 sound driver: numbers sound ticks so the chip-write
     # log can be compared with BizHawk tick by tick, independent of lag.
     ("UpdateSound", 0, "lea\t($FF5000).l, a6", "psiv_sound_tick"),
+    # Diagonal steps on the field (an option; runtime/walkto.c). FieldObj_Move
+    # begins a party member's step of one cell. The first hook comes before
+    # the leader's collision check, with the pad's directions in d0: it may
+    # choose another direction. The second comes as any step begins: it may
+    # add the other axis. With the option off both return at once.
+    ("FieldObj_Move", 0x26, "bsr.w\t$45B5A", "psiv_field_step_dir"),
+    ("loc_4785C", 0, "move.b\t#$3, ($FFFFECE5).w", "psiv_field_step_begin"),
+    # More save slots: pages of three (an option; runtime/savepages.c). The
+    # title's menu as it is about to look for saves; each frame its Continue
+    # window, its Erase window and the game's Save window wait for the pad;
+    # and a save as it begins. With the option off each returns at once.
+    ("loc_4335C", 0, "move.w\t#$11, ($FFFFEC28).w", "psiv_savepage_title"),
+    ("loc_435B4", 0, "move.b\t($FFFFEF03).w, d0", "psiv_savepage_pick"),
+    ("loc_43848", 0, "move.b\t($FFFFEF03).w, d0", "psiv_savepage_pick"),
+    ("loc_593D4", 0, "move.w\t#$2, d0", "psiv_savepage_list"),
+    ("TransferToSRAM", 0, "lea\t($FFFFF002).w, a0", "psiv_savepage_store"),
 ]
 
 # Immediates the runtime supplies instead: (label, byte offset, instruction it

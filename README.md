@@ -52,11 +52,25 @@ is committed in `res/fonts/` with its licence.
 | Android | `tools/build_android.sh <SDL3 source>` on Linux (SDK, NDK r30, build-tools 36, JDK 17; no Gradle) | the `.apk` it makes |
 | macOS | SDL3 built static from source with `-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0`, then the same for the port with `-DPSIV_PORTABLE=ON -DPSIV_TOOLS=OFF -DCMAKE_PREFIX_PATH=<its prefix>` | `python3 tools/package.py macos <build> dist` (on the Mac: sips, iconutil, codesign, ditto) |
 
-- **The launcher:** the app opens on it -- Start game, the mode (Enhanced /
-  Classic, a switch), Settings (the same five pages as in the game), Quit --
-  over a drifting field of stars under the port's emblem, the icon's
-  four-point star drawn at full size from the same shape (`launcher()` in
-  `runtime/main_sdl.c`). The game boots only when Start game is chosen.
+- **The launcher:** the app opens on it -- Continue (when there is a save:
+  the last one made, wherever it is in the twelve slots; the game is
+  started and taken through its own title to that save unseen, about a
+  quarter of a second, by `savepages_continue` in `runtime/savepages.c`:
+  the game's own loading, nothing skipped), Start game, the mode (Enhanced /
+  Classic, a switch), Settings (the same seven pages as in the game), Quit --
+  over a drifting field of stars: the logo on the left (PsiLok's own
+  artwork, `res/launcher/logo.png`, built into the program by
+  `tools/make_launcher_logo.py`; a warm backlight behind it, its letters
+  being black) with the port's name under it, the choices on the right;
+  in a window taller than it is wide the logo stands over the choices
+  (`launcher()` in `runtime/main_sdl.c`). The game boots only when Start
+  game is chosen. The launcher's music is Her Last Breath (the game's song
+  $A4), played from your ROM by the game's own sound driver running on its
+  own (`frame_song_start` / `frame_song_tick` in `runtime/frame.c`): the
+  machine is reset before the game starts, so it boots as it always did. A
+  first run with no ROM installed is silent; `audio.launcher_music = off`
+  in `psiv.ini` turns it off. `psiv_headless --song A4 --frames N --wav
+  FILE` records any song the same way.
   `psiv --play` skips it (for frontends and shortcuts); the game-frame
   testing hooks (`--menu`, `--test-keys`, `--test-click`, `--test-rumble`,
   `--capture`) skip it too, unless a `--menu-script` drives the launcher.
@@ -299,6 +313,37 @@ original game, unchanged; **Enhanced** turns on the additions:
   `psiv_headless --click F:X,Y[,R]` clicks frame pixel (X, Y) at logical
   frame F (R: the right button).
 
+- **Diagonal walking** (Controls page: on / off): with two directions held
+  the party walks diagonally, a cell across and a cell up or down in one
+  step, and the others follow the leader's path. The game takes a diagonal
+  as left or right; its steps keep a distance and a speed for each axis
+  though, so the port sets both (two hooks in `FieldObj_Move`, see
+  `tools/emit.py`; `runtime/walkto.c`). A diagonal step needs the cell
+  across, the cell up or down and the cell between them to be plain floor
+  with nobody there: no wall's corner is cut, and doors, exits, shop
+  counters and people are still met straight on. Against a wall the party
+  slides along it. The walk shown is the left or right one (the game has
+  four). On foot only. `psiv_headless --diagonal` turns it on.
+
+- **The title screen**: a Roman numeral IV beside the game's logo and RECOMP
+  under it, so the port's title screen is not mistaken for the original's.
+  They are the port's own pixel art (`res/title/`, `tools/make_title_art.py`),
+  drawn over the picture in the title's own colours, and they come and go
+  with the logo. Classic mode shows the title as it was.
+
+- **Twelve save slots**: the cartridge's 8 KB hold three, and the game's
+  windows list three, so the port keeps four pages of three, each a save
+  file in the cartridge's own layout (`saves/psiv.srm`, then `psiv-2.srm`
+  to `psiv-4.srm`: any of them still loads in an emulator). In the game's
+  Save window Left and Right turn the page; in its Continue and Erase
+  windows, where the slots stand side by side, Right past the third or
+  Left past the first does. A line at the top says which slots are
+  showing. The game's own code lists, loads and saves what is in the
+  cartridge; the port only changes which page that is (five hooks, see
+  `tools/emit.py`; `runtime/savepages.c`). The page last used is kept in
+  `psiv.ini` (`saves.page`); at the title, a page with no save gives way
+  to one that has. Classic mode keeps to the first page.
+
 - **Your music** (on / off): audio files of your own -- a remix, say -- play
   in place of the game's songs. Put WAVs (16/24-bit or float, any rate) in
   `music/` (git-ignored), named by the song's ID: `music/8F.wav` for Meet
@@ -388,6 +433,34 @@ original game, unchanged; **Enhanced** turns on the additions:
 
 Planned (see `docs/IDEAS.md`): the rest of the sound set synthesized (rarer
 techniques and enemy attacks, the field: doors, chests, stairs).
+
+### Performance
+
+The game itself needs very little. What costs time is the port's own picture
+(battle depth, weather, the modern menus and text, the field's water): it is
+drawn a pixel at a time at about the display's scale, up to four times the
+game's size.
+
+- **Several cores**: those passes run on up to eight threads (`runtime/par.h`,
+  `par_sdl.c`); the game stays on one. `PSIV_THREADS=N` in the environment
+  sets the number (1: none).
+- **Picture detail** (`video.detail` in `psiv.ini`: `auto` / `full`): with
+  `auto`, a machine that cannot draw that picture in a frame's 16.7 ms gets
+  it at three or two times the game's size instead (the graphics card scales
+  it up), so the game never slows down for it; it goes back up after ten
+  seconds with room to spare. The log says when it changes.
+- **Where the time goes**: start the app with `PSIV_PERF=1` in the
+  environment and `psiv.log` gets a line about once a second: the average
+  and the longest frame, how many ran over, and each part's share (the game,
+  its lines, the sound, the port's picture, the upload, the window). Worth
+  attaching to a report of slowness.
+- **Your music's files** are read on a thread of their own the first time
+  each song plays (four stay in memory): the game keeps running, and the
+  song comes in when its file is ready, a few hundredths of a second later
+  for a 16-bit WAV. Read on the game's thread, a four-minute file stopped
+  the game for most of a second, well past the 50 ms of sound kept queued.
+- Linux: controllers are found through hidraw, not libusb (whose device scan
+  could stop the game for half a second when a USB device came or went).
 
 ### Headless runs
 

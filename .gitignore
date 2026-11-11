@@ -28,6 +28,9 @@ screenshots/
 # Sound effect samples (your own; licensed, never committed)
 sfx/**/*.wav
 
+# The game's logo (SEGA's art, never committed)
+/logo.png
+
 # Character art for the side panels (game art, never committed)
 characters/
 # converted portraits (game art, never committed)

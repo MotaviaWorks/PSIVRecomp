@@ -25,6 +25,8 @@
  *     --water S          the field's living water and swaying trees (fieldfx.h);
  *                        shots of the field show them, composed at S x
  *     --no-trees / --no-water   leave one of them out
+ *     --diagonal         diagonal steps on the field with two directions held (walkto.h)
+ *     --title-art        the port's IV and RECOMP on the title screen (titleart.h)
  *     --no-pan           battles: no camera pan to the one attacked (battleui.h)
  *     --cheat NAME[=V]   a cheat (cheats.h): hp, tp, nobattles, money, exp=2|4, weak
  *     --voices DIR       the party's battle voices from DIR/<name>_<moment>_<n>.wav (battlevox.h)
@@ -46,6 +48,8 @@
  *     --keep-going       with --replay: count differing frames instead of stopping
  *     --wav PATH         write the audio (stereo 16-bit, 53,267 Hz) to a WAV file
  *     --ymlog PATH       log every YM2612/PSG write ("sample chip reg value")
+ *     --song ID          only the sound driver, no game (as the launcher's music,
+ *                        frame.h): sound ID (hex) for --frames ticks, to --wav
  *     --music ID:F       jukebox: at frame F stop all sound, then request sound ID
  *                        (hex, e.g. 84) the way the game does, via Sound_Index ($FF500A)
  *     --algol            the music on Algol, the port's modern sound chip (algol.h)
@@ -63,8 +67,9 @@
  *     --teleport F:MAP:X:Y[:FACE[:ALIGN]]  testing (footage): at frame F go to field
  *                        map MAP, starting at X,Y (Map_Start_X/Y_Pos), as a map
  *                        transition does (hex after F); repeatable
- *     --dump-at N        dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
- *                        (next to the trace, or build/bizhawk/port.*)
+ *     --dump-at N[-M]    dump raw RAM/VRAM/CRAM/VSRAM at logical frame N
+ *                        (next to the trace, or build/bizhawk/port.*); with -M, at
+ *                        every frame N..M, each to PREFIX.NNNNNN.*
  *     --dump-to PREFIX   ... to PREFIX.ram.bin etc. instead
  *     --rumble-log       print each rumble effect as it's detected (rumble.h)
  *     --bot SEED[:WALK[:N[:V]]]  play by itself (testbot.h): Continue from the
@@ -87,6 +92,7 @@
 #include "music.h"
 #include "fpview.h"
 #include "walkto.h"
+#include "titleart.h"
 #include "rewind.h"
 #include "weather.h"
 #include "fieldfx.h"
@@ -133,6 +139,7 @@ static const char *shot_dir;
 static int trace_pad;                /* --trace-pad: print movie input and the game's joypad bytes */
 static uint64_t frame_limit = 600;
 static int music_id = -1;
+static int song_only = -1;                 /* --song: the sound driver alone, this song */
 static uint64_t music_frame;
 static uint64_t test_fatal_frame;          /* --test-fatal: exercise the crash report */
 static uint16_t last_mode = 0xFFFF;
@@ -352,7 +359,7 @@ static void report_hot(void) {
 /* ------------------------------------------------------------------ reference replay */
 static FILE *replay;
 static const char *replay_path;
-static uint64_t logical, dump_at, mismatched_frames;
+static uint64_t logical, dump_at, dump_until, mismatched_frames;
 static uint64_t journal_at;              /* --journal N */
 
 /* the journal as it stands (journal.h), for checking its steps against saves */
@@ -730,9 +737,13 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
             if (where_at[i] == logical) print_where(logical);
         if (ramlog_n) ramlog_frame(logical);
         if (journal_at && logical == journal_at) print_journal();
-        if (dump_at && logical == dump_at) {
+        if (dump_at && logical >= dump_at && logical <= (dump_until ? dump_until : dump_at)) {
             char prefix[512];
             dump_prefix(prefix, sizeof prefix, "port");
+            if (dump_until) {                       /* a range: one set per frame */
+                size_t n = strlen(prefix);
+                snprintf(prefix + n, sizeof prefix - n, ".%06llu", (unsigned long long)logical);
+            }
             dump_state(prefix);
         }
         if (replay && !replay_step()) {
@@ -1005,7 +1016,9 @@ int main(int argc, char **argv) {
             if (!replay) { fprintf(stderr, "cannot open %s\n", replay_path); return 1; }
             frame_limit = UINT64_MAX;
         } else if (!strcmp(argv[i], "--dump-at") && i + 1 < argc) {
-            dump_at = strtoull(argv[++i], NULL, 10);
+            char *e;
+            dump_at = strtoull(argv[++i], &e, 10);
+            if (*e == '-') dump_until = strtoull(e + 1, NULL, 10);
         } else if (!strcmp(argv[i], "--dump-to") && i + 1 < argc) {
             dump_to = argv[++i];
         } else if (!strcmp(argv[i], "--keep-going")) {
@@ -1172,6 +1185,12 @@ int main(int argc, char **argv) {
             frame_wide_field = 0;
         } else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
             frame_wide_margin = atoi(argv[++i]);           /* widescreen: pixels beyond each side */
+        } else if (!strcmp(argv[i], "--song") && i + 1 < argc) {
+            song_only = (int)strtol(argv[++i], NULL, 16);
+        } else if (!strcmp(argv[i], "--title-art")) {
+            titleart_set(1);                               /* the port's own art beside the logo */
+        } else if (!strcmp(argv[i], "--diagonal")) {
+            walkto_set_diagonal(1);                        /* two directions held: a diagonal step */
         } else if (!strcmp(argv[i], "--wide-plain")) {
             widemap_set_enabled(0);                        /* field margins straight from the planes */
         } else if (!strcmp(argv[i], "--wide-edge") && i + 1 < argc) {
@@ -1256,6 +1275,12 @@ int main(int argc, char **argv) {
         printf("loaded save %s (%u bytes, %s layout)\n", sram_in, (unsigned)got, bus_sram_format_name(format));
     }
 
+    if (song_only >= 0) {                              /* the driver alone: no game, no picture */
+        frame_song_start(song_only);
+        for (uint64_t i = 0; i < frame_limit; i++) frame_song_tick();
+        report();
+        return 0;
+    }
     m68k.s = 1;
     m68k.imask = 7;
     A(7) = rd32(0);

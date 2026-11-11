@@ -10,6 +10,7 @@
 #include "music.h"
 #include "m68k.h"
 #include "sound.h"
+#include "par.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -28,9 +29,19 @@ typedef struct {
     float gain;
     unsigned used;
 } Track;
-#define CACHE 3                       /* the battle theme, the field's, and one more */
+#define CACHE 4                       /* the battle theme, the field's, a town's, and one more */
 static Track cache[CACHE];
 static unsigned use_count;
+/* A file is read off the game's thread (par_async): tens of megabytes take
+ * the best part of a second, and the sound queue holds 50 ms. Until it is
+ * in, the song that asked for it waits in silence (the chips keep to the
+ * effects, as while a file plays), then starts from its beginning. */
+static struct {
+    Track t;                          /* the file being read: the reader's until done */
+    int busy, done, ok;
+} loading;
+static int pending;                   /* the song going waits for its file */
+static char unreadable[600];          /* the last file that could not be read: not tried again */
 
 static char folder[600];
 static int enabled, fresh = 1;
@@ -57,6 +68,21 @@ static const char *const SONGS[0x34] = {
 /* ------------------------------------------------------------------ WAV */
 static uint32_t le32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
+
+/* 16-bit PCM, what most files are: each sample's value looked up. (The
+ * sum below, a sample at a time, took a second for a four-minute song with
+ * the Windows C library's lrintf; the table holds the same results.) */
+static int16_t pcm16[65536];
+static void pcm16_table(void) {
+    static int made;
+    if (made) return;
+    for (int x = -32768; x < 32768; x++) {
+        float v = (float)x / 32768.0f;
+        v = v > 1.0f ? 1.0f : v < -1.0f ? -1.0f : v;
+        pcm16[(uint16_t)x] = (int16_t)lrintf(v * 32767.0f);
+    }
+    made = 1;
+}
 
 static int wav_load(const char *path, Track *t) {
     FILE *f = fopen(path, "rb");
@@ -96,7 +122,15 @@ static int wav_load(const char *path, Track *t) {
         && (fmt == 1 || (fmt == 3 && bits == 32))) {
         int frames = (int)(dlen / (uint32_t)(bps * ch));
         t->pcm = malloc(sizeof(int16_t) * 2 * (size_t)(frames > 0 ? frames : 1));
-        if (t->pcm) {
+        if (t->pcm && fmt == 1 && bps == 2) {
+            pcm16_table();
+            size_t step = (size_t)ch * 2, right = ch > 1 ? 2 : 0;
+            const uint8_t *s = data;
+            for (int i = 0; i < frames; i++, s += step) {
+                t->pcm[(size_t)i * 2] = pcm16[le16(s)];
+                t->pcm[(size_t)i * 2 + 1] = pcm16[le16(s + right)];
+            }
+        } else if (t->pcm) {
             for (int i = 0; i < frames; i++)
                 for (int k = 0; k < 2; k++) {
                     const uint8_t *s = data + ((size_t)i * (size_t)ch + (size_t)(k < ch ? k : 0)) * (size_t)bps;
@@ -109,6 +143,8 @@ static int wav_load(const char *path, Track *t) {
                     v = v > 1.0f ? 1.0f : v < -1.0f ? -1.0f : v;
                     t->pcm[(size_t)i * 2 + (size_t)k] = (int16_t)lrintf(v * 32767.0f);
                 }
+        }
+        if (t->pcm) {
             t->frames = frames;
             t->rate = rate;
             t->loop_start = ls >= 0 && ls < le && le <= frames ? ls : 0;
@@ -159,7 +195,34 @@ static int ini_lookup(int id, char *file, size_t n, double *loop_a, double *loop
     return named;
 }
 
-static Track *track_for(int id) {
+static void load_job(void *ctx) {
+    (void)ctx;
+    loading.ok = wav_load(loading.t.path, &loading.t);
+}
+
+/* the file read: into the cache, in place of the one unused the longest
+ * (never the one playing) */
+static void load_finish(void) {
+    loading.busy = 0;
+    if (!loading.ok) {
+        if (log_on > 0) printf("music: %s is not a WAV the port reads (PCM or float)\n", loading.t.path);
+        snprintf(unreadable, sizeof unreadable, "%s", loading.t.path);
+        free(loading.t.pcm);
+        memset(&loading.t, 0, sizeof loading.t);
+        return;
+    }
+    Track *t = NULL;
+    for (int i = 0; i < CACHE; i++)
+        if (&cache[i] != cur && (!t || cache[i].used < t->used)) t = &cache[i];
+    free(t->pcm);
+    *t = loading.t;
+    memset(&loading.t, 0, sizeof loading.t);
+}
+
+/* The song's track, ready to play; or NULL: with *wait set, its file is
+ * being read (ask again when no read is going), otherwise it has none. */
+static Track *track_for(int id, int *wait) {
+    *wait = 0;
     char file[600] = {0}, path[1300];
     double la = -1.0, lb = -1.0, st = -1.0;
     float gdb = 0.0f;
@@ -172,17 +235,21 @@ static Track *track_for(int id) {
         FILE *f = fopen(path, "rb");
         if (!f) return NULL;
         fclose(f);
-        t = &cache[0];                                          /* the least recently used */
-        for (int i = 1; i < CACHE; i++) if (cache[i].used < t->used) t = &cache[i];
-        free(t->pcm);
-        memset(t, 0, sizeof *t);
-        if (!wav_load(path, t)) {
-            if (log_on > 0) printf("music: %s is not a WAV the port reads (PCM or float)\n", path);
-            free(t->pcm);
-            memset(t, 0, sizeof *t);
-            return NULL;
-        }
-        snprintf(t->path, sizeof t->path, "%s", path);
+        char key[600];                                          /* as a track keeps its path */
+        snprintf(key, sizeof key, "%s", path);
+        if (!strcmp(key, unreadable)) return NULL;
+        *wait = 1;
+        if (loading.busy) return NULL;                          /* one read at a time: this one after it */
+        memset(&loading.t, 0, sizeof loading.t);
+        snprintf(loading.t.path, sizeof loading.t.path, "%s", path);
+        loading.busy = 1;
+        loading.ok = 0;
+        par_async(load_job, NULL, &loading.done);
+        if (!par_async_done(&loading.done)) return NULL;
+        load_finish();                                          /* read at once (no worker: the tools) */
+        *wait = 0;
+        for (int i = 0; i < CACHE; i++) if (cache[i].pcm && !strcmp(cache[i].path, path)) t = &cache[i];
+        if (!t) return NULL;
     }
     /* music.ini's loop and gain win over the file's own */
     if (la >= 0.0) {
@@ -219,16 +286,18 @@ static void song_tables(void) {
 void music_set_folder(const char *dir) {
     int on = dir && *dir;
     if (on && strcmp(dir, folder)) {                         /* another folder: its files */
+        cur = NULL;
         for (int i = 0; i < CACHE; i++) { free(cache[i].pcm); memset(&cache[i], 0, sizeof cache[i]); }
     }
     snprintf(folder, sizeof folder, "%s", on ? dir : "");
     if (on && !enabled) fresh = 1;                           /* a song already going keeps the game's */
     enabled = on;
-    if (!on) cur = NULL;
+    if (!on) { cur = NULL; pending = 0; }
 }
 
 void music_reset(void) {
     cur = NULL;
+    pending = 0;
     song = music_on = 0;
     fresh = 1;
     fx_fm = fx_psg = 0;
@@ -243,20 +312,37 @@ void music_tick(void) {
     for (int i = 0; i < 0x34; i++) if (song_vt[i] && song_vt[i] == vt) { now_song = 0x81 + i; break; }
     int playing = 0;
     for (int i = 0; i < 10; i++) if (m68k_ram[0x5040u + (unsigned)i * 0x30u] & 0x80) playing = 1;
+    if (loading.busy && par_async_done(&loading.done)) load_finish();   /* a file has been read */
     if (fresh) {
         fresh = 0;
         song = now_song;
+        pending = 0;
     } else if (now_song != song || (playing && !music_on)) {   /* a song (re)starts */
         song = now_song;
-        Track *t = song && playing ? track_for(song) : NULL;
+        Track *t = song && playing ? track_for(song, &pending) : NULL;
+        if (!(song && playing)) pending = 0;
         if (log_on > 0 && song)
-            printf("music: song %02X %s%s%s\n", song, SONGS[song - 0x81], t ? " -> " : "", t ? t->path : "");
+            printf("music: song %02X %s%s%s%s\n", song, SONGS[song - 0x81], t ? " -> " : "", t ? t->path : "",
+                   pending ? " (reading its file)" : "");
         cur = t;
         pos = t ? (double)t->start : 0.0;
         fade = 1.0f;
         ramp = 0.0f;
         ramp_to = 1.0f;
     }
+    if (pending && !loading.busy) {                          /* the waiting song's file: in, or its turn to be read */
+        Track *t = song && playing ? track_for(song, &pending) : NULL;
+        if (!(song && playing)) pending = 0;
+        if (t) {
+            if (log_on > 0) printf("music: song %02X -> %s\n", song, t->path);
+            cur = t;
+            pos = (double)t->start;
+            fade = 1.0f;
+            ramp = 0.0f;
+            ramp_to = 1.0f;
+        }
+    }
+    if (!playing) pending = 0;
     if (cur && !playing) ramp_to = 0.0f;                     /* the game stopped its music */
     music_on = playing;
     /* the game's fade-out: 15 steps, about 1.5 dB each */
@@ -276,7 +362,7 @@ void music_tick(void) {
     fx_psg = psg;
 }
 
-int music_active(void) { return enabled && cur != NULL; }
+int music_active(void) { return enabled && (cur != NULL || pending); }
 int music_enabled(void) { return enabled; }
 unsigned music_fx_fm(void) { return fx_fm; }
 unsigned music_fx_psg(void) { return fx_psg; }

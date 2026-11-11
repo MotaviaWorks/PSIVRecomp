@@ -351,3 +351,131 @@ uint8_t walkto_pad(uint8_t user, uint8_t pad) {
     active = 0;
     return 0;
 }
+
+/* ------------------------------------------------------------------ diagonal steps */
+/* FieldObj_Move begins a step when a party member stands still: the leader's
+ * from the pad (up 1, down 2, left 4, right 8; with two held it goes left or
+ * right), the others' towards the place the one ahead of them has just left.
+ * A step is a distance left to go and a speed, for each axis, and
+ * FieldObj_UpdateStepDuration, the camera and FieldObj_UpdatePosition take
+ * each axis on its own every frame: a step across AND up or down only needs
+ * both set. The hooks:
+ *
+ *  psiv_field_step_dir, before the leader's collision check (d0 = the pad's
+ *  directions). With a diagonal held, the step will be diagonal if the cell
+ *  across, the cell up or down and the cell between them are all plain floor
+ *  with nobody on them -- so no wall's corner is cut, and doors, exits, shop
+ *  counters and people are still met straight on. With the way across walled
+ *  off and the other way not, d0 becomes up or down: along the wall. Else d0
+ *  is left alone and the game does what it always did.
+ *
+ *  psiv_field_step_begin, as a step begins (a4 = whose). The leader's, when
+ *  the first hook chose a diagonal: the game has begun the step across, and
+ *  the same distance and speed are set up or down, and the leader's
+ *  destination moved a cell. A follower's, when the place it is going to is
+ *  a cell away both ways (the one ahead stepped diagonally): the other axis
+ *  is added in the same way, so the line follows the leader's path.
+ *
+ * Every speed the game has (1, 2 and 4 pixels a frame) divides the cell, so
+ * both axes end on the same frame, on the grid. Events move the party by
+ * the same routine: left alone ($FFEC20 = $C). Vehicles have their own. */
+#define ROUTINE_EVENT    0x0C
+#define TILE_FLAG        0xECE1         /* Tile_Coll_Run_Event_Flag: bit 0 = the debug window's "no collision" */
+#define NO_OBJ_COLLISION 0xECF6         /* set: FieldObj_Move skips FieldObj_DoObjCollision */
+#define TILE_HANDLERS    0x45D72u       /* TileCollNormalPtrs: what walking into a cell does, by its code */
+#define TILE_HANDLERS_NC 0x45DB2u       /* TileCollDisabledPtrs */
+#define TILE_EMPTY       0x45ED8u       /* TileColl_Empty: floor, nothing happens */
+#define TILE_SOLID       0x45F16u       /* TileColl_Solid */
+#define PARTY_END        0xC180         /* FieldObj_Move tells the next object where to follow, below this */
+#define STEP_CELL        0x1000         /* a step's distance: 16 pixels (8.8) */
+
+static int diagonal;                    /* the option */
+static int step_v;                      /* from the first hook to the second: the leader's step also goes up (1) or down (2) */
+
+void walkto_set_diagonal(int on) { diagonal = on; }
+int  walkto_diagonal(void) { return diagonal; }
+
+static uint32_t r32(unsigned a) { return (uint32_t)r16(a) << 16 | r16(a + 2); }
+static void w16(unsigned a, unsigned v) {
+    m68k_ram[a & 0xFFFF] = (uint8_t)(v >> 8);
+    m68k_ram[(a + 1) & 0xFFFF] = (uint8_t)v;
+}
+static void w32(unsigned a, uint32_t v) { w16(a, v >> 16); w16(a + 2, v & 0xFFFF); }
+
+/* what walking into a cell does: the game's own handler for its code */
+static uint32_t cell_handler(int cx, int cy) {
+    uint32_t t = (r8(TILE_FLAG) & 1 ? TILE_HANDLERS_NC : TILE_HANDLERS) + 4u * (unsigned)cell_code(cx, cy);
+    if (t + 3 >= m68k_rom_size) return 0;
+    return (uint32_t)m68k_rom[t] << 24 | (uint32_t)m68k_rom[t + 1] << 16 | (uint32_t)m68k_rom[t + 2] << 8 | m68k_rom[t + 3];
+}
+
+/* somebody stands on a cell or is stepping onto it (the objects FieldObj_DoObjCollision looks at) */
+static int cell_taken(int cx, int cy) {
+    if (world || r8(NO_OBJ_COLLISION)) return 0;
+    cx = wrapi(cx, map_w);
+    cy = wrapi(cy, map_h);
+    for (int i = 0; i < N_SECOND; i++) {
+        unsigned a = OBJ_SECOND + (unsigned)i * 0x40;
+        if (!r16(a) || !(r8(a + 2) & 8)) continue;
+        int ax, ay, nx, ny;
+        obj_cells(a, &ax, &ay, &nx, &ny);
+        if ((ax == cx && ay == cy) || (nx == cx && ny == cy)) return 1;
+    }
+    return 0;
+}
+
+static int cell_floor(int cx, int cy) { return cell_handler(cx, cy) == TILE_EMPTY && !cell_taken(cx, cy); }
+
+void psiv_field_step_dir(void) {
+    step_v = 0;
+    if (!diagonal) return;
+    unsigned d = D(0) & 0x0F, h = d & 0x0C, v = d & 0x03;
+    if ((h != 4 && h != 8) || (v != 1 && v != 2)) return;       /* not two directions, one of each */
+    map_read();
+    int cx, cy, nx, ny;
+    obj_cells(LEADER, &cx, &cy, &nx, &ny);
+    int dx = h == 4 ? -1 : 1, dy = v == 1 ? -1 : 1;
+    if (cell_floor(cx + dx, cy)) {
+        if (cell_floor(cx, cy + dy) && cell_floor(cx + dx, cy + dy)) step_v = (int)v;
+        return;                                                 /* else across, as the game has it */
+    }
+    /* the way across is a wall or somebody: up or down instead, if that isn't a wall too */
+    if ((cell_handler(cx + dx, cy) == TILE_SOLID || cell_taken(cx + dx, cy)) && cell_handler(cx, cy + dy) != TILE_SOLID)
+        D(0) = (D(0) & 0xFFFF0000u) | v;
+}
+
+/* the same distance and speed as the axis the game set, on the other one */
+static void add_axis(unsigned a, int x_axis, int negative) {
+    unsigned from = x_axis ? 0x24u : 0x20u, to = x_axis ? 0x20u : 0x24u;
+    uint32_t speed = r32(a + from);
+    if (speed & 0x80000000u) speed = 0u - speed;
+    w16(a + (x_axis ? 0x28u : 0x2Au), STEP_CELL);
+    w32(a + to, negative ? 0u - speed : speed);
+}
+
+/* how far a follower's place is, the short way round a map that wraps */
+static int cells_away(unsigned to, unsigned from, int size) {
+    int d = (int16_t)(uint16_t)(to - from);
+    if (d > size / 2) d -= size;
+    else if (d < -size / 2) d += size;
+    return d;
+}
+
+void psiv_field_step_begin(void) {
+    int v = step_v;
+    step_v = 0;
+    if (!diagonal || r16(GAME_ROUTINE) == ROUTINE_EVENT) return;
+    unsigned a = A(4) & 0xFFFF, xd = r16(a + 0x28), yd = r16(a + 0x2A);
+    if (a == LEADER) {
+        if (!v || xd != STEP_CELL || yd || !r32(a + 0x20)) return;      /* (the game's step: one cell across) */
+        add_axis(a, 0, v == 1);
+        w16(a + 0x3A, r16(a + 0x3A) + (v == 1 ? 0xFFF0u : 0x0010u));    /* its destination: a cell up or down too */
+        return;
+    }
+    if (a < LEADER || a >= PARTY_END) return;
+    map_read();
+    int dx = cells_away(r16(a + 0x38), r16(a + 0x30), map_w * 16), dy = cells_away(r16(a + 0x3A), r16(a + 0x34), map_h * 16);
+    if (abs(dx) != 16 || abs(dy) != 16) return;
+    if (xd == STEP_CELL && !yd && r32(a + 0x20)) add_axis(a, 0, dy < 0);
+    else if (yd == STEP_CELL && !xd && r32(a + 0x24)) add_axis(a, 1, dx < 0);
+}

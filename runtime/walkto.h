@@ -45,6 +45,15 @@ int  walkto_active(void);
  * it cancels the walk), `pad` what would go to the game without a walk. */
 uint8_t walkto_pad(uint8_t user, uint8_t pad);
 
+/* Diagonal steps (an option): with two directions held the party walks
+ * diagonally, a cell across and a cell up or down in one step. The game
+ * itself takes a diagonal as left or right; its step is a distance and a
+ * speed per axis though, and it moves, scrolls and animates each axis on its
+ * own, so the port only has to set both (two hooks in FieldObj_Move, see
+ * tools/emit.py and walkto.c). Off, the game is unchanged. */
+void walkto_set_diagonal(int on);
+int  walkto_diagonal(void);
+
 /* Where the walk is going, for a marker: world pixels (the cell's centre) */
 int  walkto_target(int *wx, int *wy);
 /* ... and that point on the game's own view (screen pixels), if it's a field map */

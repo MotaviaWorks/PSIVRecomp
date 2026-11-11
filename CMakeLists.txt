@@ -107,7 +107,7 @@ endif()
 # Hardware: bus, VDP, sound, frame loop (object files, so the code<->hardware calls link either way)
 set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/sound.c runtime/algol.c runtime/snesbank.c runtime/music.c runtime/fpview.c runtime/walkto.c runtime/frame.c runtime/depth.c runtime/sfx.c runtime/sfxsynth.c runtime/hdtext.c
                runtime/romart.c runtime/uikit.c runtime/panels.c runtime/battleui.c runtime/battledesc.c runtime/rumble.c runtime/widemap.c runtime/mixbus.c
-               runtime/weather.c runtime/fieldfx.c runtime/battlevox.c runtime/scenevox.c runtime/cheats.c runtime/journal.c runtime/rewind.c runtime/coro.c ${CORO_ASM})
+               runtime/weather.c runtime/fieldfx.c runtime/battlevox.c runtime/scenevox.c runtime/cheats.c runtime/journal.c runtime/rewind.c runtime/titleart.c runtime/perf.c runtime/par.c runtime/savepages.c runtime/coro.c ${CORO_ASM})
 set(TEST_SOURCES runtime/headless.c runtime/sha256.c runtime/testbot.c)
 
 # Headless front end: scripted input, PNG screenshots
@@ -127,7 +127,7 @@ if(WIN32 AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/SDL3-3.4.20/cmake)
 endif()
 find_package(SDL3 CONFIG)
 if(SDL3_FOUND)
-  set(GAME_SOURCES runtime/main_sdl.c runtime/touch.c runtime/unzip.c runtime/sha256.c ${HW_SOURCES})
+  set(GAME_SOURCES runtime/main_sdl.c runtime/par_sdl.c runtime/touch.c runtime/unzip.c runtime/sha256.c ${HW_SOURCES})
   if(ANDROID)
     # SDLActivity loads libSDL3.so, then libmain.so and calls its SDL_main
     add_library(psiv SHARED ${GAME_SOURCES})

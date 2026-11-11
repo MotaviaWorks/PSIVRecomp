@@ -28,6 +28,8 @@
 #include "m68k.h"
 #include "scenevox.h"
 
+#include "par.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -517,42 +519,30 @@ static void glints(uint32_t *out, int stride, int ds) {
         }
 }
 
-static void water_draw(const uint32_t *pixels, int src_stride, int w, int h, uint32_t *out, int stride, int ds) {
-    if (!ready || w != fw || h != fh || ds < 1 || w < 2 || h < 2) return;
-    water_colour(pixels, src_stride);
-    wave_fields();
-    for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++)
-            if (mask[y][x]) water_pixel(x, y);
-    /* 6. up to the display: each screen pixel of water blended from the four
-     * game pixels round it, two channels to a multiply -- down the column
-     * first, then along the row. A neighbour that isn't water lends the
-     * average of the water beside it. */
-    static uint8_t lent[VDP_MAX_H][VDP_MAX_W];
-    for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++) {
-            lent[y][x] = 0;
-            if (mask[y][x]) continue;
-            unsigned s4[4] = {0, 0, 0, 0};
-            for (int k = 0; k < 4; k++) {
-                int xx = x + (k == 0 ? -1 : k == 1 ? 1 : 0), yy = y + (k == 2 ? -1 : k == 3 ? 1 : 0);
-                if (xx < 0 || yy < 0 || xx >= w || yy >= h || !mask[yy][xx]) continue;
-                uint32_t c = res[yy][xx];
-                s4[0] += c >> 16 & 255; s4[1] += c >> 8 & 255; s4[2] += c & 255; s4[3]++;
-            }
-            if (s4[3]) {
-                res[y][x] = (s4[0] / s4[3]) << 16 | (s4[1] / s4[3]) << 8 | (s4[2] / s4[3]);
-                lent[y][x] = 1;
-            }
-        }
+/* The water's two heavy passes, the game's rows in pieces on several cores
+ * (par.h): each row's water pixels (step 5), and each row up to the
+ * display (step 6). A piece writes only its own rows. */
+static uint8_t lent[VDP_MAX_H][VDP_MAX_W];
+typedef struct {
+    uint32_t *out;
+    int w, h, stride, ds;
     int wt[4], side[4];                                  /* per sub-pixel: the neighbour's weight (of 256), which way */
-    for (int k = 0; k < ds; k++) {
-        float v = ((float)k + 0.5f) / (float)ds - 0.5f;
-        wt[k] = (int)(fabsf(v) * 256.0f + 0.5f);
-        side[k] = v < 0 ? -1 : 1;
-    }
-    static uint32_t col_v[VDP_MAX_W];
-    for (int y = 0; y < h; y++) {
+} WaterRows;
+
+static void water_pixel_rows(void *ctx, int y0, int y1) {
+    const WaterRows *q = ctx;
+    for (int y = y0; y < y1; y++)
+        for (int x = 0; x < q->w; x++)
+            if (mask[y][x]) water_pixel(x, y);
+}
+
+static void water_up_rows(void *ctx, int y0, int y1) {
+    const WaterRows *q = ctx;
+    uint32_t *out = q->out;
+    int w = q->w, h = q->h, stride = q->stride, ds = q->ds;
+    const int *wt = q->wt, *side = q->side;
+    uint32_t col_v[VDP_MAX_W];
+    for (int y = y0; y < y1; y++) {
         int any = 0;
         for (int x = 0; x < w && !any; x++) any = mask[y][x];
         if (!any) continue;
@@ -581,6 +571,40 @@ static void water_draw(const uint32_t *pixels, int src_stride, int w, int h, uin
             }
         }
     }
+}
+
+static void water_draw(const uint32_t *pixels, int src_stride, int w, int h, uint32_t *out, int stride, int ds) {
+    if (!ready || w != fw || h != fh || ds < 1 || ds > 4 || w < 2 || h < 2) return;
+    water_colour(pixels, src_stride);
+    wave_fields();
+    WaterRows q = {out, w, h, stride, ds, {0, 0, 0, 0}, {0, 0, 0, 0}};
+    par_rows(water_pixel_rows, &q, h);
+    /* 6. up to the display: each screen pixel of water blended from the four
+     * game pixels round it, two channels to a multiply -- down the column
+     * first, then along the row. A neighbour that isn't water lends the
+     * average of the water beside it. */
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            lent[y][x] = 0;
+            if (mask[y][x]) continue;
+            unsigned s4[4] = {0, 0, 0, 0};
+            for (int k = 0; k < 4; k++) {
+                int xx = x + (k == 0 ? -1 : k == 1 ? 1 : 0), yy = y + (k == 2 ? -1 : k == 3 ? 1 : 0);
+                if (xx < 0 || yy < 0 || xx >= w || yy >= h || !mask[yy][xx]) continue;
+                uint32_t c = res[yy][xx];
+                s4[0] += c >> 16 & 255; s4[1] += c >> 8 & 255; s4[2] += c & 255; s4[3]++;
+            }
+            if (s4[3]) {
+                res[y][x] = (s4[0] / s4[3]) << 16 | (s4[1] / s4[3]) << 8 | (s4[2] / s4[3]);
+                lent[y][x] = 1;
+            }
+        }
+    for (int k = 0; k < ds; k++) {
+        float v = ((float)k + 0.5f) / (float)ds - 0.5f;
+        q.wt[k] = (int)(fabsf(v) * 256.0f + 0.5f);
+        q.side[k] = v < 0 ? -1 : 1;
+    }
+    par_rows(water_up_rows, &q, h);
     glints(out, stride, ds);
 }
 

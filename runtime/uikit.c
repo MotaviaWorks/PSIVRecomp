@@ -5,6 +5,7 @@
 #include "hdtext.h"
 #include "m68k.h"
 #include "romart.h"
+#include "par.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -155,6 +156,27 @@ static void fill_span(const UiCanvas *cv, int y, float l, float r, uint32_t c, i
     }
 }
 
+/* a box's rows (from its first, iy0): each row on its own, so a large box is
+ * filled on several cores (par.h) */
+typedef struct {
+    const UiCanvas *cv;
+    float x0, y0, x1, y1, r;
+    uint32_t top, bottom;
+    int alpha, iy0;
+} BoxRows;
+
+static void box_rows(void *ctx, int a, int b) {
+    const BoxRows *q = ctx;
+    float x0 = q->x0, y0 = q->y0, x1 = q->x1, y1 = q->y1;
+    for (int y = q->iy0 + a; y < q->iy0 + b; y++) {
+        float py = (float)y + 0.5f, l, rr;
+        float vc = fminf(fminf(py - y0, y1 - py) + 0.5f, 1.0f);   /* top and bottom edges */
+        if (vc <= 0 || !row_span(x0, y0, x1, y1, q->r, fminf(fmaxf(py, y0), y1), &l, &rr)) continue;
+        uint32_t c = q->top == q->bottom ? q->top : mix(q->top, q->bottom, (py - y0) / (y1 - y0));
+        fill_span(q->cv, y, l, rr, c, (int)((float)q->alpha * vc));
+    }
+}
+
 void ui_round_rect_v(const UiCanvas *cv, float x0, float y0, float x1, float y1, float r,
                      uint32_t top, uint32_t bottom, int alpha) {
     if (alpha <= 0 || x1 <= x0 || y1 <= y0) return;
@@ -163,13 +185,10 @@ void ui_round_rect_v(const UiCanvas *cv, float x0, float y0, float x1, float y1,
     int iy0 = (int)floorf(y0), iy1 = (int)ceilf(y1);
     if (iy0 < cv->y0) iy0 = cv->y0;
     if (iy1 > cv->y1) iy1 = cv->y1;
-    for (int y = iy0; y < iy1; y++) {
-        float py = (float)y + 0.5f, l, rr;
-        float vc = fminf(fminf(py - y0, y1 - py) + 0.5f, 1.0f);   /* top and bottom edges */
-        if (vc <= 0 || !row_span(x0, y0, x1, y1, r, fminf(fmaxf(py, y0), y1), &l, &rr)) continue;
-        uint32_t c = top == bottom ? top : mix(top, bottom, (py - y0) / (y1 - y0));
-        fill_span(cv, y, l, rr, c, (int)((float)alpha * vc));
-    }
+    if (iy1 <= iy0) return;
+    BoxRows q = {cv, x0, y0, x1, y1, r, top, bottom, alpha, iy0};
+    if (x1 - x0 >= 200.0f) par_rows(box_rows, &q, iy1 - iy0);          /* a large one: in pieces */
+    else box_rows(&q, 0, iy1 - iy0);
 }
 
 void ui_round_frame(const UiCanvas *cv, float x0, float y0, float x1, float y1, float r, float w,
@@ -198,10 +217,21 @@ void ui_round_rect(const UiCanvas *cv, float x0, float y0, float x1, float y1, f
     ui_round_rect_v(cv, x0, y0, x1, y1, r, c, c, alpha);
 }
 
-void ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float size, int dim, int alpha) {
-    int ix0 = (int)x0, iy0 = (int)y0, n = (int)size;
+typedef struct {
+    const UiCanvas *cv;
+    const UiImage *im;
+    float x0, y0, size;
+    int dim, alpha;
+} ImageRows;
+
+static void image_rows(void *ctx, int a, int b) {
+    const ImageRows *q = ctx;
+    const UiCanvas *cv = q->cv;
+    const UiImage *im = q->im;
+    float size = q->size;
+    int ix0 = (int)q->x0, iy0 = (int)q->y0, n = (int)size, dim = q->dim, alpha = q->alpha;
     float r = size * 0.16f;
-    for (int y = 0; y < n; y++)
+    for (int y = a; y < b; y++)
         for (int x = 0; x < n; x++) {
             int X = ix0 + x, Y = iy0 + y;
             if (X < cv->x0 || X >= cv->x1 || Y < cv->y0 || Y >= cv->y1) continue;
@@ -218,9 +248,16 @@ void ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float s
             float rr = p[0], gg = p[1], bb = p[2];
             if (dim) { float l = (rr * 0.3f + gg * 0.59f + bb * 0.11f) * 0.55f; rr = gg = bb = l; }
             uint32_t c = (uint32_t)rr << 16 | (uint32_t)gg << 8 | (uint32_t)bb;
-            float a = (float)p[3] / 255.0f * (cover > 1 ? 1 : cover) * (float)alpha;
-            ui_blend(&cv->px[(size_t)Y * (size_t)cv->stride + (size_t)X], c, (int)a);
+            float al = (float)p[3] / 255.0f * (cover > 1 ? 1 : cover) * (float)alpha;
+            ui_blend(&cv->px[(size_t)Y * (size_t)cv->stride + (size_t)X], c, (int)al);
         }
+}
+
+void ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float size, int dim, int alpha) {
+    ImageRows q = {cv, im, x0, y0, size, dim, alpha};
+    int n = (int)size;
+    if (n >= 96) par_rows(image_rows, &q, n);                          /* a large one: in pieces */
+    else if (n > 0) image_rows(&q, 0, n);
 }
 
 void ui_bar(const UiCanvas *cv, float x0, float y0, float x1, float h, float frac, uint32_t c, int alpha) {

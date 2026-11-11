@@ -11,6 +11,7 @@
 #include "m68k.h"
 #include "uikit.h"
 #include "vdp.h"
+#include "par.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -243,6 +244,9 @@ typedef struct {
 } Member;
 static Member members[5];
 static int home_x[5];                       /* each one's place (fighter +$C) as they stand at the menus */
+/* ... and the game's own table of those places, by fighter (ROM $9A62: centre,
+ * left, right, far left, far right), whatever the party's size */
+static const int LINE_X[5] = {0x120, 0xF0, 0x150, 0xC0, 0x180};
 static int standing;                        /* members on screen at the last main menu */
 static int restore;                         /* the members drawn back this frame */
 static int shown;                           /* the members in the picture this frame (theirs or the game's) */
@@ -627,6 +631,41 @@ static int party_px(const VdpLine *l, int x) {
     return a && (a & 0x80) && party_tile(l->plane_a_tile[x]);
 }
 
+/* the aura's light on the picture, a row at a time (in pieces on several
+ * cores, par.h): the halo and the rim, sampled from their blurred fields */
+static float aura_glow[AURA_W * AURA_H], aura_rim[AURA_W * AURA_H];
+static uint8_t aura_occ[AURA_W * AURA_H];
+typedef struct {
+    int X0, X1, Y0, rw, rh, fx0, fy0;
+    float s, bx, by, a;
+    uint32_t glow_rgb, rim_rgb;
+} AuraRows;
+
+static void aura_rows(void *ctx, int r0, int r1) {
+    const AuraRows *q = ctx;
+    const float *glow = aura_glow, *rim = aura_rim;
+    const uint8_t *occ = aura_occ;
+    int X0 = q->X0, X1 = q->X1, rw = q->rw, rh = q->rh, fx0 = q->fx0, fy0 = q->fy0;
+    float s = q->s, bx = q->bx, by = q->by, a = q->a;
+    uint32_t glow_rgb = q->glow_rgb, rim_rgb = q->rim_rgb;
+    for (int Y = q->Y0 + r0; Y < q->Y0 + r1; Y++) {
+        float ly = (((float)Y + 0.5f) / S - by) / s - (float)fy0;
+        int iy = (int)floorf(ly);
+        uint32_t *row = cv.px + (size_t)Y * (size_t)cv.stride;
+        for (int X = X0; X < X1; X++) {
+            float lx = (((float)X + 0.5f) / S - bx) / s - (float)fx0;
+            int ix = (int)floorf(lx);
+            if (ix >= 0 && iy >= 0 && ix < rw && iy < rh && occ[iy * rw + ix]) continue;
+            float g = bilinear(glow, rw, rh, lx, ly), e = bilinear(rim, rw, rh, lx, ly);
+            if (g <= 0.002f && e <= 0.002f) continue;
+            g = fminf(1.0f, g * 2.4f);
+            e = fminf(1.0f, e * 2.4f);
+            add_light(&row[X], glow_rgb, a * 0.6f * g * sqrtf(g));
+            add_light(&row[X], rim_rgb, a * 0.4f * e);
+        }
+    }
+}
+
 /* k: the fighter; glow / rim: the light's colours; strength 0..1; t: seconds */
 static void draw_aura(int k, uint32_t glow_rgb, uint32_t rim_rgb, float strength, float t, int frame_w,
                       int frame_h, int with_motes) {
@@ -638,8 +677,9 @@ static void draw_aura(int k, uint32_t glow_rgb, uint32_t rim_rgb, float strength
             if (m->cell[r][c]) { if (r < r0) r0 = r; r1 = r; }
     if (r1 < 0) return;
     /* their pixels, and everyone's (the light never covers the party) */
-    static float glow[AURA_W * AURA_H], rim[AURA_W * AURA_H], tmp[AURA_W * AURA_H];
-    static uint8_t occ[AURA_W * AURA_H];
+    static float tmp[AURA_W * AURA_H];
+    float *glow = aura_glow, *rim = aura_rim;
+    uint8_t *occ = aura_occ;
     int fx0 = m->col0 * 8 + (int)OX - AURA_PAD, fy0 = (PARTY_ROW0 + r0) * 8 - AURA_PAD;
     int rw = AURA_W, rh = (r1 - r0 + 1) * 8 + 2 * AURA_PAD;
     int any = 0;
@@ -669,23 +709,8 @@ static void draw_aura(int k, uint32_t glow_rgb, uint32_t rim_rgb, float strength
     if (Y0 < cv.y0) Y0 = cv.y0;
     if (X1 > cv.x1) X1 = cv.x1;
     if (Y1 > cv.y1) Y1 = cv.y1;
-    float a = strength * fade;
-    for (int Y = Y0; Y < Y1; Y++) {
-        float ly = (((float)Y + 0.5f) / S - by) / s - (float)fy0;
-        int iy = (int)floorf(ly);
-        uint32_t *row = cv.px + (size_t)Y * (size_t)cv.stride;
-        for (int X = X0; X < X1; X++) {
-            float lx = (((float)X + 0.5f) / S - bx) / s - (float)fx0;
-            int ix = (int)floorf(lx);
-            if (ix >= 0 && iy >= 0 && ix < rw && iy < rh && occ[iy * rw + ix]) continue;
-            float g = bilinear(glow, rw, rh, lx, ly), e = bilinear(rim, rw, rh, lx, ly);
-            if (g <= 0.002f && e <= 0.002f) continue;
-            g = fminf(1.0f, g * 2.4f);
-            e = fminf(1.0f, e * 2.4f);
-            add_light(&row[X], glow_rgb, a * 0.6f * g * sqrtf(g));
-            add_light(&row[X], rim_rgb, a * 0.4f * e);
-        }
-    }
+    AuraRows q = {X0, X1, Y0, rw, rh, fx0, fy0, s, bx, by, strength * fade, glow_rgb, rim_rgb};
+    par_rows(aura_rows, &q, Y1 - Y0);
 
     if (!with_motes) return;
     /* motes: born just outside the figure (above the dock) */
@@ -752,8 +777,12 @@ static void card_layout(int view_w) {
         /* by their place in the line, left to right: where they stand at the
          * menus (the game moves the one in front of the action now and then,
          * never there), or before the first menu where they are. (Fighter
-         * +$13 is not the place: it is the character's ID + 1.) */
+         * +$13 is not the place: it is the character's ID + 1.) Someone
+         * down since before the battle is never drawn or placed (+$C stays
+         * 0): their card keeps the place the game's table gives them, the
+         * gap in the line, instead of going to the far left. */
         int x = home_x[k] ? home_x[k] : (int)r16(FIGHTERS + (unsigned)k * 0x40 + 0x0C), j = n++;
+        if (!x) x = LINE_X[k];
         while (j > 0 && xs[j - 1] > x) { ids[j] = ids[j - 1]; xs[j] = xs[j - 1]; j--; }
         ids[j] = id;
         xs[j] = x;
@@ -801,7 +830,9 @@ static void draw_hud(int acting, int target_id, int show_commands, int frame, fl
         unsigned base = CHAR_STATS + (unsigned)id * 0x80;
         unsigned hp = r16(base + 0x0E), mhp = r16(base + 0x10), tp = r16(base + 0x12), mtp = r16(base + 0x14);
         unsigned status = r8(base + 0x16);
-        int dead = (status & 0x44) != 0, me = id == acting, aimed = id == target_id;
+        /* (at the main menu the game points at its first fighter, down or not:
+         * no gold frame round someone who is down) */
+        int dead = (status & 0x44) != 0, me = id == acting && !dead, aimed = id == target_id;
         float lift = me ? 2.0f * (1.0f - strip_in) : 0.0f;
         float x0 = cards[k].x0, x1 = cards[k].x1;
         float y0 = HUD_Y0 + (HUD_Y0_STRIP - HUD_Y0) * strip_in - lift, y1 = HUD_Y1 + (HUD_Y1_STRIP - HUD_Y1) * strip_in - lift;
