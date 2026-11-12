@@ -3740,6 +3740,10 @@ static int launcher_music;                 /* the driver is running */
 static uint64_t launcher_tick_at;          /* when its next tick is due */
 
 static float launcher_music_level = 1.0f;  /* down to 0 when it is switched off */
+/* While it plays, twice the usual sound is kept queued: the launcher's own
+ * picture can take most of the usual 50 ms to draw (pushes up to 47 ms
+ * apart were logged on a fast PC), and here the delay is heard by no one. */
+static int launcher_cushion;               /* the usual cushion, kept while it is doubled (0: it is not) */
 static void launcher_music_fade(float k);
 static void launcher_music_stop(void);
 
@@ -3753,6 +3757,8 @@ static void launcher_music_run(void) {
         launcher_music = 1;
         launcher_tick_at = now;
         launcher_music_level = 1.0f;
+        launcher_cushion = audio_target;
+        audio_target *= 2;
     }
     if (!wanted) {                                   /* switched off (its note, M): out over a quarter of a second */
         launcher_music_level -= 0.05f;
@@ -3778,6 +3784,7 @@ static void launcher_music_fade(float k) {
 static void launcher_music_stop(void) {
     if (!launcher_music) return;
     launcher_music = 0;
+    if (launcher_cushion) { audio_target = launcher_cushion; launcher_cushion = 0; }
     if (audio) SDL_ClearAudioStream(audio);
     audio_rest();
     apply_audio();                                   /* the volume back */
