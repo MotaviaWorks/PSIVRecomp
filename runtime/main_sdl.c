@@ -380,7 +380,7 @@ static Setting settings[] = {
     {"video.aspect", "square", "square = square pixels; 4:3 = the console's TV shape (pixels a bit narrower)"},
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed"},
     {"audio.volume", "100", "0-200 percent: everything"},
-    {"audio.launcher_music", "on", "the launcher plays Her Last Breath from your ROM (the game's own sound, before the game starts): on / off"},
+    {"audio.launcher_music", "on", "the launcher plays Her Last Breath from your ROM (the game's own sound, before the game starts; or your own file for song A4 in the music folder): on / off -- the note at the launcher's top right, M or the pad's north button switch it"},
     {"audio.music", "100", "the music, 0-100 percent: the game's songs (either chip) or your own files"},
     {"audio.effects", "100", "sound effects, 0-100 percent: the game's or the port's or yours, and the battle weather"},
     {"audio.voices", "100", "voices, 0-100 percent: the party's in battle and the voiced scenes"},
@@ -1599,6 +1599,11 @@ enum { L_CONTINUE, L_START, L_MODE, L_SETTINGS, L_QUIT, N_LAUNCHER };
 static int launch_has_continue(void);
 static int launch_first(void) { return launch_has_continue() ? L_CONTINUE : L_START; }   /* Continue: only with a save */
 static int launch_rows(void) { return N_LAUNCHER - launch_first(); }
+/* the launcher's music on or off -- its note, M, the pad's north button: the
+ * launcher's loop starts it, or fades it out (launcher_music_run) */
+static void launcher_music_toggle(void) {
+    save_setting_str("audio.launcher_music", SDL_strcasecmp(setting("audio.launcher_music"), "off") ? "off" : "on");
+}
 #define MODE_ITEM (&GAME_ITEMS[0])    /* Classic / Enhanced */
 static int menu_page;                 /* the settings page (kept while the game runs) */
 static uint64_t menu_opened;          /* when it opened (it fades in); 0 = at once */
@@ -1836,7 +1841,8 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
 #define C_HINT      0x8C9CC8
 
 typedef struct { float x0, y0, x1, y1; int kind, index; } MenuHit;   /* render pixels */
-enum { HIT_ROW, HIT_STEP_BACK, HIT_PAGE, HIT_BACK, HIT_MODE, HIT_JTAB, HIT_JHINT, HIT_JUP, HIT_JDOWN, HIT_SLIDER };
+enum { HIT_ROW, HIT_STEP_BACK, HIT_PAGE, HIT_BACK, HIT_MODE, HIT_JTAB, HIT_JHINT, HIT_JUP, HIT_JDOWN, HIT_SLIDER,
+       HIT_MUSIC };
 /* the launcher fills the window: units of 1/224 of its height (narrow windows:
  * 1/300 of the width), its content in a 224-tall column in the middle; the
  * emblem (drawn under it, launcher_backdrop) is centred this far down */
@@ -1990,8 +1996,9 @@ static void menu_hint(char *out, size_t n) {
     }
     if (menu_screen == MENU_LAUNCHER) {
         if (touch_visible()) snprintf(out, n, "Tap to choose");
-        else snprintf(out, n, "%s select%sLeft / Right switch the mode",
-                      menu_last_pad && pad ? pad_button_name(pad_of[IN_C]) : "Enter", sep);
+        else snprintf(out, n, "%s select%sLeft / Right switch the mode%s%s music",
+                      menu_last_pad && pad ? pad_button_name(pad_of[IN_C]) : "Enter", sep, sep,
+                      menu_last_pad && pad ? pad_button_name(pad_of[IN_AUTO]) : "M");
     } else if (touch_visible())
         snprintf(out, n, "%s%sTap outside to go back", settings_screen ? "Tap a setting to change it" : "Tap to choose", sep);
     else if (menu_last_pad && pad) {
@@ -2534,6 +2541,25 @@ static void draw_launcher(float W, float H, const char *hint) {
     if (L.side) m_wrap(cx - pw / 2.0f, ab, pw, 7.6f, 3, 3.8f, about, C_VALUE, 1);   /* under the panel, as wide */
     else m_wrap(cx - 95.0f, ab, 190.0f, 7.6f, 2, 3.8f, about, C_VALUE, 1);
 
+    {   /* the music's switch: a pair of notes at the top right, struck through when it is off */
+        int on = SDL_strcasecmp(setting("audio.launcher_music"), "off") != 0;
+        float bx = W - 15.0f, by = 15.0f, r = 9.5f;
+        uint32_t ink = on ? C_GOLD : C_DIM;
+        m_box(bx - r, by - r, bx + r, by + r, r, C_PANEL_TOP, C_PANEL_LOW, 236);
+        m_frame(bx - r, by - r, bx + r, by + r, r, on ? C_GOLD : C_RULE, on ? 190 : 130);
+        m_box(bx - 5.8f, by + 1.6f, bx - 1.6f, by + 5.0f, 1.7f, ink, ink, 255);     /* the heads */
+        m_box(bx + 0.8f, by + 1.6f, bx + 5.0f, by + 5.0f, 1.7f, ink, ink, 255);
+        m_box(bx - 2.5f, by - 5.2f, bx - 1.6f, by + 3.4f, 0.0f, ink, ink, 255);     /* their stems */
+        m_box(bx + 4.1f, by - 5.2f, bx + 5.0f, by + 3.4f, 0.0f, ink, ink, 255);
+        m_box(bx - 2.5f, by - 5.4f, bx + 5.0f, by - 3.2f, 0.0f, ink, ink, 255);     /* and the beam */
+        if (!on)
+            for (int k = 0; k <= 26; k++) {
+                float t = (float)k / 26.0f, x = bx - 6.0f + 12.0f * t, y = by + 6.0f - 12.0f * t;
+                m_box(x - 0.85f, y - 0.85f, x + 0.85f, y + 0.85f, 0.85f, 0xF07882, 0xF07882, 255);
+            }
+        m_hit(bx - r - 1.5f, by - r - 1.5f, bx + r + 1.5f, by + r + 1.5f, HIT_MUSIC, 0);
+    }
+
     m_text(6.0f, H - 5.0f, 3.2f, APP_NAME " " PSIV_VERSION, C_DIM, 0);
     m_text(W - 6.0f, H - 5.0f, 3.4f, hint, C_HINT, 1);
 }
@@ -2671,6 +2697,8 @@ static void menu_tap(float rx, float ry) {
         if (rx < h->x0 || ry < h->y0 || rx >= h->x1 || ry >= h->y1) continue;
         if (h->kind == HIT_BACK) {
             menu_input(0, 0, 0, 0, 0, 1);
+        } else if (h->kind == HIT_MUSIC) {          /* the launcher's note */
+            launcher_music_toggle();
         } else if (menu_screen == MENU_JOURNAL) {   /* a page, the hint, the arrows, a job */
             if (h->kind == HIT_JTAB) { j_tab = h->index; j_scroll = 0; menu_sel = 0; }
             else if (h->kind == HIT_JHINT) journal_input(0, 0, 0, 0, 1);
@@ -3010,6 +3038,10 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
                 break;
             }
             if (menu_is_open()) {                        /* the menu takes the keyboard */
+                if (in_launcher && menu_screen == MENU_LAUNCHER && sc == SDL_SCANCODE_M) {
+                    if (!e.key.repeat) launcher_music_toggle();
+                    break;
+                }
                 if (sc == SDL_SCANCODE_TAB || sc == SDL_SCANCODE_PAGEDOWN || sc == SDL_SCANCODE_PAGEUP) {
                     if (!e.key.repeat || sc != SDL_SCANCODE_TAB)    /* settings pages */
                         menu_turn_page(sc == SDL_SCANCODE_PAGEUP || (sc == SDL_SCANCODE_TAB && (e.key.mod & SDL_KMOD_SHIFT)) ? -1 : 1);
@@ -3050,6 +3082,10 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             if (!menu_is_open()) {
                 if (b == pad_of[IN_REWIND] && !in_launcher) rewind_now();
                 if (b == pad_of[IN_AUTO] && !in_launcher) toggle_auto_text();
+                break;
+            }
+            if (in_launcher && menu_screen == MENU_LAUNCHER && b == pad_of[IN_AUTO]) {   /* the launcher's music */
+                launcher_music_toggle();
                 break;
             }
             if (b == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER || b == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) {   /* settings pages */
@@ -3684,14 +3720,28 @@ static void launcher_present(uint64_t t0, float shade) {
 static int launcher_music;                 /* the driver is running */
 static uint64_t launcher_tick_at;          /* when its next tick is due */
 
+static float launcher_music_level = 1.0f;  /* down to 0 when it is switched off */
+static void launcher_music_fade(float k);
+static void launcher_music_stop(void);
+
 static void launcher_music_run(void) {
     uint64_t now = SDL_GetTicksNS();
+    int wanted = SDL_strcasecmp(setting("audio.launcher_music"), "off") != 0;
     if (!launcher_music) {
-        if (!rom_ready || !audio || !SDL_strcasecmp(setting("audio.launcher_music"), "off")) return;
+        if (!rom_ready || !audio || !wanted) return;
         bus_init(rom_buf, rom_size);
         frame_song_start(LAUNCHER_SONG);
         launcher_music = 1;
         launcher_tick_at = now;
+        launcher_music_level = 1.0f;
+    }
+    if (!wanted) {                                   /* switched off (its note, M): out over a quarter of a second */
+        launcher_music_level -= 0.05f;
+        if (launcher_music_level <= 0.0f) { launcher_music_stop(); return; }
+        launcher_music_fade(launcher_music_level);
+    } else if (launcher_music_level < 1.0f) {        /* and on again before it had gone */
+        launcher_music_level = 1.0f;
+        launcher_music_fade(1.0f);
     }
     if (backgrounded || now > launcher_tick_at + 8 * NTSC_FRAME_NS) launcher_tick_at = now;   /* away, or a long stall: no catching up */
     for (int n = 0; now >= launcher_tick_at && n < 4; n++) {

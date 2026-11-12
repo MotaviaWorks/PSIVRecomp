@@ -67,10 +67,15 @@ is committed in `res/fonts/` with its licence.
   game is chosen. The launcher's music is Her Last Breath (the game's song
   $A4), played from your ROM by the game's own sound driver running on its
   own (`frame_song_start` / `frame_song_tick` in `runtime/frame.c`): the
-  machine is reset before the game starts, so it boots as it always did. A
-  first run with no ROM installed is silent; `audio.launcher_music = off`
-  in `psiv.ini` turns it off. `psiv_headless --song A4 --frames N --wav
-  FILE` records any song the same way.
+  machine is reset before the game starts, so it boots as it always did.
+  With your own music on and a file for song A4 in the music folder, that
+  file plays instead (the driver still runs under it, as in the game). The
+  pair of notes at the top right switches the music off and on -- a click
+  or a tap, M, or the pad's north button -- and the choice is kept
+  (`audio.launcher_music` in `psiv.ini`); off, it fades out in a quarter of
+  a second; on, it starts from the top. A first run with no ROM installed
+  is silent. `psiv_headless --song A4 --frames N --wav FILE` records any
+  song the same way.
   `psiv --play` skips it (for frontends and shortcuts); the game-frame
   testing hooks (`--menu`, `--test-keys`, `--test-click`, `--test-rumble`,
   `--capture`) skip it too, unless a `--menu-script` drives the launcher.
