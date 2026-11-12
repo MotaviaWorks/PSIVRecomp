@@ -28,6 +28,7 @@
  *     --diagonal         diagonal steps on the field with two directions held (walkto.h)
  *     --title-art        the port's IV and RECOMP on the title screen (titleart.h)
  *     --no-pan           battles: no camera pan to the one attacked (battleui.h)
+ *     --field-menu       the field menu redrawn (fieldmenu.h; needs --text FONT)
  *     --cheat NAME[=V]   a cheat (cheats.h): hp, tp, nobattles, money, exp=2|4, weak
  *     --voices DIR       the party's battle voices from DIR/<name>_<moment>_<n>.wav (battlevox.h)
  *     --scene-voices DIR a voiced-scenes pack: DIR/scenes.txt and its clips (scenevox.h)
@@ -60,7 +61,10 @@
  *     --fpview S        first-person dungeons (fpview.h); shots at S x
  *     --click F:X,Y[,R]  with --movie: a mouse click at logical frame F on frame
  *                        pixel (X, Y) -- click to walk (walkto.h), battle menus
- *                        (battleui.h); R: the right button; repeatable
+ *                        (battleui.h); R: the right button; repeatable. Without
+ *                        a movie, at frame F: the field menu's mouse
+ *                        (fieldmenu.h; X, Y on the whole picture); ,U / ,D: a
+ *                        turn of the wheel up / down
  *     --poke F[-G]:ADDR=VAL  testing: set RAM byte $FFADDR to VAL (both hex) before
  *                        the work after frame F (each frame to G); logical with
  *                        --movie; repeatable
@@ -88,6 +92,7 @@
 #include "hdtext.h"
 #include "panels.h"
 #include "battleui.h"
+#include "fieldmenu.h"
 #include "algol.h"
 #include "music.h"
 #include "fpview.h"
@@ -122,7 +127,7 @@ typedef struct { uint64_t frame; const char *path; } Shot;
 static Press presses[256];
 static Shot shots[64];
 static int npress, nshot;
-static struct { uint64_t frame; int x, y, right; } clicks[64];   /* --click */
+static struct { uint64_t frame; int x, y, right, wheel; } clicks[64];   /* --click */
 static int nclick;
 static struct { uint64_t from, to; uint32_t addr; uint8_t val; } pokes[64];   /* --poke */
 /* --teleport: a map change as a map transition makes one (DoMapTransitionData):
@@ -806,6 +811,11 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
                 hires = 1;
             }
         }
+        if (fieldmenu_active()) {                          /* the field menu, redrawn: over the whole picture */
+            if (!hires) hdtext_upscale(pixels, VDP_MAX_W, width, height, depth_buf, out_w * hs, hs);
+            fieldmenu_draw(depth_buf, out_w * hs, hs, out_w, height);
+            hires = 1;
+        }
         depth_active = hires;
     }
     int sw = depth_active ? out_w * hs : width, sh = depth_active ? height * hs : height;
@@ -848,7 +858,8 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         for (int i = 0; i < nclick; i++)                   /* click to walk (walkto.h) */
             if (clicks[i].frame == logical) {
                 int cx = -1, cy = -1, slot = -1, ok;
-                if (battleui_active()) ok = battleui_click((float)clicks[i].x, (float)clicks[i].y, clicks[i].right) ? 3 : 0;
+                if (fieldmenu_active()) ok = fieldmenu_click((float)clicks[i].x, (float)clicks[i].y, clicks[i].right) ? 3 : 0;
+                else if (battleui_active()) ok = battleui_click((float)clicks[i].x, (float)clicks[i].y, clicks[i].right) ? 3 : 0;
                 else if (clicks[i].right) { ok = walkto_click_button(1) ? 2 : 0; walkto_cancel(); }
                 else if (walkto_click_button(0)) ok = 2;   /* text up: C */
                 else if (fpview_active() && fpview_pick((float)clicks[i].x, (float)clicks[i].y, width, height, &cx, &cy, &slot))
@@ -858,7 +869,7 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
                        clicks[i].x, clicks[i].y, cx, cy, slot,
                        ok == 3 ? "a battle menu pick" : ok == 2 ? "C (text up)" : ok ? "walking" : "nowhere to go");
             }
-        bus_pad[0] = scenevox_pad(keys, battleui_pad(keys, walkto_pad(keys, keys)));
+        bus_pad[0] = fieldmenu_pad(scenevox_pad(keys, battleui_pad(keys, walkto_pad(keys, keys))));
     }
     for (int i = 0; i < npoke && fresh; i++)               /* --poke: a RAM byte set before the next frame's work */
         if (when >= pokes[i].from && when <= pokes[i].to) {
@@ -891,7 +902,12 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         uint8_t keys = 0;
         for (int i = 0; i < npress; i++)
             if (f >= presses[i].frame && f < presses[i].frame + presses[i].len) keys |= presses[i].keys;
-        bus_pad[0] = keys;
+        for (int i = 0; i < nclick; i++)                   /* --click by frame: the field menu's mouse (fieldmenu.h) */
+            if (clicks[i].frame == f && fieldmenu_active()) {
+                if (clicks[i].wheel) fieldmenu_wheel(clicks[i].wheel > 0);
+                else fieldmenu_click((float)clicks[i].x, (float)clicks[i].y, clicks[i].right);
+            }
+        bus_pad[0] = fieldmenu_pad(keys);
     }
     /* --rewind-test S:R: a state kept at S (with the input already set for
      * S+1), put back at R; the game must go on from S exactly as it did */
@@ -1085,6 +1101,7 @@ int main(int argc, char **argv) {
             if (*e == ':') clicks[nclick].x = (int)strtol(e + 1, &e, 10);
             if (*e == ',') clicks[nclick].y = (int)strtol(e + 1, &e, 10);
             clicks[nclick].right = *e == ',' && (e[1] == 'R' || e[1] == 'r');
+            clicks[nclick].wheel = *e == ',' && (e[1] == 'D' || e[1] == 'd') ? 1 : *e == ',' && (e[1] == 'U' || e[1] == 'u') ? -1 : 0;
             nclick++;
         } else if (!strcmp(argv[i], "--fpview") && i + 1 < argc) {
             fpview_set_enabled(1);                         /* first-person dungeons (fpview.h) */
@@ -1178,6 +1195,8 @@ int main(int argc, char **argv) {
             if (text_scale < 1) text_scale = 1;
             if (text_scale > 4) text_scale = 4;
             hdtext_set_enabled(hdtext_init(font));
+        } else if (!strcmp(argv[i], "--field-menu")) {
+            fieldmenu_set_enabled(1);                      /* the field menu, redrawn (needs --text FONT) */
         } else if (!strcmp(argv[i], "--battle-ui")) {
             battleui_set_enabled(1);                       /* modern battle menus (needs --text FONT) */
         } else if (!strcmp(argv[i], "--panels")) {

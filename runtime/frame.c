@@ -16,6 +16,7 @@
  */
 #include "frame.h"
 #include "battleui.h"
+#include "fieldmenu.h"
 #include "bus.h"
 #include "m68k.h"
 #include "mixbus.h"
@@ -85,6 +86,7 @@ void frame_run(void) {
     int counter = vdp.reg[10];
     widemap_frame(wide);               /* field margins drawn from the map in RAM */
     battleui_frame();                  /* modern battle menus: the game's windows left out of the picture */
+    fieldmenu_frame();                 /* the field menu, redrawn: the same for the camp menu's windows */
 
     vdp.in_vblank = 0;
     perf_begin(PERF_VDP);

@@ -414,6 +414,71 @@ original game, unchanged; **Enhanced** turns on the additions:
   inventory. Portraits, item names and level tables come from your ROM at
   startup; nothing from the game ships with the port.
 
+- **Field menu** (modern / original; `runtime/fieldmenu.c`): the camp menu
+  on the whole screen, in framed windows after the game's own. The main
+  menu: the commands, the party with levels, HP and TP, the meseta.
+  **Equipment**: the member's four slots, all seven stats with what each
+  becomes while something is tried on, everything in the pack they could
+  put on with its attack or defense, and a line on the item under the
+  cursor and who can wear it; the party stands across the top there, so
+  Left and Right choose the member (the game's list is one under the other:
+  they reach it as Up and Down). **Items**: the pack with the game's pages
+  of eight side by side (Left and Right turn them, as in the game), Use /
+  Look / Discard, the party with HP, TP and how each is (who it would be
+  used on), and a line on what the item does; the game's messages ("Monomate
+  is used!") take the foot of the screen, its questions and the Telepipe's
+  list of places come up in the middle. **Macros**: the eight letters
+  across the top (Left and Right choose; one that is set stands out), the
+  turns of the one chosen in the order they are played -- who, and what
+  they do, spelled out ("Skill: Earth") where the game shows an icon; a
+  turn that cannot be played as things stand is greyed -- and, while one is
+  set up, who is still to be given a turn and the five commands as words
+  across (the game's icons: Left and Right, as there); its lists of
+  techniques, skills and items come up in the middle. **Techniques** and
+  **Skills**: the party across the top (Left and Right), the member's
+  techniques that can be used outside battle with what each costs (their
+  skills with the uses left) -- greyed when the TP or the uses are short;
+  more than eight stand in two columns, the game's pages -- the party with
+  HP and TP as the one to use it on, a line on what it does, and the amount
+  restored beside the member's name ("+88") where the game opens a little
+  window for it (items show it the same way); Ryuka's list of places comes
+  up in the middle. **Status**: Status or Order, then the party across the
+  top (Left and Right) and the member's three pages, turned as in the game
+  by choosing again -- the profile (the portrait from your ROM, profession,
+  level, age, HP and TP as bars, experience and what the next level needs,
+  how they are, all seven stats and what they wear), every technique with
+  its cost, every skill with its uses left; the profile of the member under
+  the cursor shows before one is chosen. Order's two lists come up under
+  the party's rows. **Shops and inns** (the same module: their windows are
+  another of the game's groups): the meseta and the keeper's portrait on the
+  left with Buy / Sell, the goods with their prices (greyed when the money
+  is short) or, selling, the pack in the game's pages of eight, a panel on
+  who could use the thing under the cursor and what it would do for them
+  ("Attack +4", "cannot use", "wearing it"; how many are in the pack, or
+  what it sells for), and the keeper's words at the foot; yes / no comes up
+  in the middle. **Something found** (a chest): the game's windows where it
+  has them, in the new frames, over the field as it is (held, not dimmed).
+  **Talk**: the game's layout in the new frames. A window not laid out anew
+  is drawn where the game has it, with the game's own words read back --
+  its window font a tile a letter, a line of dialogue from the two tiles a
+  letter is drawn into -- and a picture in it (a portrait) is drawn from
+  the game's own tiles, a whole number of output pixels to each of its own.
+  **The mouse** (and a finger; with `click_walk` on): a left click on a
+  row picks it -- the game's own cursor is walked there a press at a time,
+  its page turned first where the list has pages, then C -- and anywhere
+  else it is C (the next message, the choice the cursor is on); a right
+  click is B; the wheel moves the cursor a row. A button or a key held
+  takes over from a click at once.
+  The menu is still the game's: it runs its own
+  windows and reads the pad, and the port draws from its memory (the stack
+  of open windows, their cursors, the lists it built, the text in its
+  plane), keeping the game's windows off the picture by drawing plane A
+  from what the game saved from under them; the field behind is one
+  picture, dimmed, taken as the menu opens and held until it closes (pieces
+  of the game's windows that are in none of its records for a few frames
+  would otherwise flash between the new ones). `PSIV_FIELDMENU_LOG=1` says
+  whenever the menu is up and the port leaves it to the game, and why.
+
 - **Battle menus** (modern / original): the battle windows replaced by menus
   drawn at full resolution -- a party bar with portraits and HP / TP bars
   (and each member's chosen action), the commands spelled out (Attack,

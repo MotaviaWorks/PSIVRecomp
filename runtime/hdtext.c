@@ -152,6 +152,18 @@ static void find_cells(const VdpLine *lines, int w, int h) {
     }
 }
 
+/* a cell of the dialogue canvas (its upper tile): the character drawn in it */
+int hdtext_canvas_char(int tile, uint32_t *cp) {
+    uint8_t rows[16];
+    if (!dlg_char[1]) build_tables();
+    load_dialogue_font();
+    if (!dlg_ready || tile < CANVAS_LO || tile + 1 >= CANVAS_HI || ((tile - CANVAS_LO) & 1)) return 0;
+    if (!font_rows(tile, rows) || !font_rows(tile + 1, rows + 8)) return 0;
+    for (int c = 0; c < 128; c++)
+        if (!memcmp(dlg_bitmap[c], rows, 16)) { *cp = dlg_char[c]; return 1; }
+    return 0;
+}
+
 /* the dialogue on screen, as letters and digits only, lower case, in
  * reading order (for scenevox.c: which page of the script this is) */
 int hdtext_dialogue_key(const VdpLine *lines, int w, int h, char *out, int n) {

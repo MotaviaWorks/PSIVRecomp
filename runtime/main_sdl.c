@@ -42,6 +42,7 @@
 #include "hdtext.h"
 #include "panels.h"
 #include "battleui.h"
+#include "fieldmenu.h"
 #include "algol.h"
 #include "music.h"
 #include "fpview.h"
@@ -408,6 +409,7 @@ static Setting settings[] = {
     {"enhance.diagonal", "on", "diagonal walking: on = two directions held walk the party diagonally, a cell at a time (not through a wall's corner; doors, exits and people are still met straight on); off = the game's four directions"},
     {"enhance.custom_music", "on", "your music: on = audio files in the music folder play in place of the game's songs (music/8F.wav, or named in music/music.ini; see runtime/music.h); off = the game's"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
+    {"enhance.field_menu", "modern", "the field menu: modern = the port's own, on the whole screen (the main menu and the equipment screen so far; the rest are still the game's windows); original = the game's windows"},
     {"enhance.battle_fx", "1", "attack and technique effects light the scene; sparks, flashes, embers, lens flares: 0 off, 1 subtle, 2 full"},
     {"keys.up", "Up", "keyboard keys use SDL key names (e.g. Up, Z, Return, Left Shift, Keypad 8)"},
     {"keys.down", "Down", ""},
@@ -1248,6 +1250,11 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
                 depth_shown = 1;
             }
         }
+        if (fieldmenu_active()) {                        /* the field menu, redrawn: over the whole picture */
+            if (!depth_shown) hdtext_upscale(pixels, VDP_MAX_W, w, h, depth_pixels, stride, ds);
+            fieldmenu_draw(depth_pixels, stride, ds, fw, h);
+            depth_shown = 1;
+        }
         if (depth_shown) {
             if (fw * ds != depth_tex_w || h * ds != depth_tex_h) {
                 if (depth_texture) SDL_DestroyTexture(depth_texture);
@@ -1393,6 +1400,7 @@ static void apply_enhancements(void) {
                  : !SDL_strcasecmp(sm, "custom") ? SFX_CUSTOM : SFX_MODERN);
     hdtext_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.text"), "original") != 0);
     battleui_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_ui"), "original") != 0);
+    fieldmenu_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.field_menu"), "original") != 0);
     battleui_set_pan(SDL_strcasecmp(setting("enhance.battle_camera"), "off") != 0);
     battlevox_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.voices"), "off") != 0);
     scenevox_set_auto(!SDL_strcasecmp(setting("enhance.auto_text"), "on"));
@@ -1472,6 +1480,9 @@ static const MenuItem GAME_ITEMS[] = {
      "Classic turns every addition off: the original game, unchanged.", apply_enhancements},
     {"Text", "enhance.text", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1,
      "Dialogue and the game's windows in a modern font at full resolution, or the game's own pixel font.",
+     apply_enhancements},
+    {"Menu", "enhance.field_menu", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1,
+     "The field menu on the whole screen (the main menu and equipment so far), or the game's own windows.",
      apply_enhancements},
     {"Rewind", "enhance.rewind", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 0,
      "Backspace or the left shoulder goes back about ten seconds: a fade to white and back.",
@@ -2999,6 +3010,10 @@ static void click_at(float rx, float ry, int right) {
     if (paused || !walkto_enabled() || pic_dst.w <= 0) return;
     float gx = (rx - pic_dst.x) / pic_dst.w * (float)pic_fw - (float)pic_pm;   /* the game's frame pixels */
     float gy = (ry - pic_dst.y) / pic_dst.h * (float)pic_h;
+    if (fieldmenu_active()) {                      /* the field menu, a shop, a chest: pick, C, or back */
+        fieldmenu_click(gx + (float)pic_pm, gy, right);
+        return;
+    }
     if (battleui_active()) {                       /* the battle menus: pick, or back */
         battleui_click(gx, gy, right);
         return;
@@ -3069,6 +3084,10 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             if (e.key.key == SDLK_F8) cycle_battle_fog();
             break;
         }
+        case SDL_EVENT_MOUSE_WHEEL:                      /* the field menu: the cursor a row on, or back */
+            if (!menu_is_open() && !paused && walkto_enabled() && fieldmenu_active() && e.wheel.y != 0.0f)
+                fieldmenu_wheel(e.wheel.y < 0.0f);
+            break;
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
             SDL_GamepadButton b = (SDL_GamepadButton)e.gbutton.button;
             touch_hide();                                /* a gamepad in use: the on-screen pad goes */
@@ -3279,7 +3298,7 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
     }
     /* first person: the d-pad turns with the view; a click's walk, or its
      * presses in a battle menu, hold it while they run */
-    bus_pad[0] = scenevox_pad(user, battleui_pad(user, walkto_pad(user, fpview_remap_pad(user))));
+    bus_pad[0] = fieldmenu_pad(scenevox_pad(user, battleui_pad(user, walkto_pad(user, fpview_remap_pad(user)))));
     if (input_hold) {
         if (bus_pad[0]) bus_pad[0] = 0;
         else input_hold = 0;

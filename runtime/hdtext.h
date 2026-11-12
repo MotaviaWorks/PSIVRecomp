@@ -53,6 +53,11 @@ uint32_t hdtext_over(uint32_t dst, uint32_t rgb, int alpha);   /* rgb at alpha o
 /* nearest-neighbour upscale of a frame (src_stride pixels per row) */
 void hdtext_upscale(const uint32_t *src, int src_stride, int w, int h, uint32_t *out, int out_stride, int scale);
 
+/* a cell of the dialogue canvas, by its upper tile ($580, $582 ...): 1 and
+ * the character drawn in it (a blank: a space); 0 if the tiles hold
+ * something else (a portrait is loaded there on some screens) */
+int hdtext_canvas_char(int tile, uint32_t *cp);
+
 /* the dialogue box's text as it stands, letters and digits only, lower
  * case (scenevox.c); its length */
 int hdtext_dialogue_key(const VdpLine *lines, int w, int h, char *out, int n);

@@ -24,6 +24,10 @@ void  ui_round_rect_v(const UiCanvas *cv, float x0, float y0, float x1, float y1
 /* the outline of a rounded rectangle, w pixels wide, inside the box */
 void  ui_round_frame(const UiCanvas *cv, float x0, float y0, float x1, float y1, float r, float w,
                      uint32_t rgb, int alpha);
+/* A window of the port's own menus, in the manner of the game's: a dark
+ * edge, a pale frame and a deep blue inside. `unit` = output pixels per game
+ * pixel (the frame is two and a half of them wide). */
+void  ui_frame_window(const UiCanvas *cv, float x0, float y0, float x1, float y1, float unit);
 /* an image (nearest neighbour: pixel art) into a rounded square; dim = grey and dark */
 void  ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float size, int dim, int alpha);
 /* a bar: dark track, `frac` of it filled */
