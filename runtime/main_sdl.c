@@ -2780,14 +2780,34 @@ static bool SDLCALL test_pad_rumble(void *ud, Uint16 lo, Uint16 hi) {
  * click. Counted on SDL's audio thread while the game is playing (it pushed
  * sound within the last 250 ms: not paused, in a menu or loading). */
 static SDL_AtomicInt audio_last_push_ms, audio_underruns, audio_missing, audio_starved;
+/* (PSIV_AUDIO_LOG) the device's side: the sound it asked for, in the game's
+ * bytes; the longest wait between two of its calls and how many came over
+ * two and a half of its periods apart -- a device that asks late has played
+ * a gap of its own */
+static SDL_AtomicInt audio_taken, audio_call_gap_us, audio_calls_late;
+static int audio_late_us = 25000;                       /* (set when the device opens) */
 static void SDLCALL audio_requested(void *ud, SDL_AudioStream *s, int additional, int total) {
-    (void)ud; (void)s; (void)total;
+    (void)ud; (void)s;
+    static uint64_t last;                                /* (the audio thread's own) */
+    uint64_t t = SDL_GetTicksNS();
+    if (last) {
+        int us = (int)((t - last) / 1000);
+        if (us > SDL_GetAtomicInt(&audio_call_gap_us)) SDL_SetAtomicInt(&audio_call_gap_us, us);
+        if (us > audio_late_us) SDL_AddAtomicInt(&audio_calls_late, 1);
+    }
+    last = t;
+    if (total > 0) SDL_AddAtomicInt(&audio_taken, total);
     if (additional <= 0) return;
     if ((int)SDL_GetTicks() - SDL_GetAtomicInt(&audio_last_push_ms) > 250) return;
     SDL_AddAtomicInt(&audio_underruns, 1);
     SDL_AddAtomicInt(&audio_missing, additional);
     SDL_SetAtomicInt(&audio_starved, 1);
 }
+
+/* The sound stops on purpose (a menu, the pause, the launcher's end): what
+ * the device asks for meanwhile is not a gap, and the next push starts the
+ * cushion afresh. */
+static void audio_rest(void) { SDL_SetAtomicInt(&audio_last_push_ms, (int)SDL_GetTicks() - 1000); }
 
 /* The queue: the game keeps audio_target bytes ahead of the device, a
  * cushion for a frame that runs late (set from the device's buffer when the
@@ -2806,6 +2826,8 @@ static struct {
     double qsum;
     float rmin, rmax;
     uint64_t since;
+    int made;                                            /* bytes the game handed over */
+    int push_gap_us, pushes_late, pushes_close;          /* between two pushes: the longest; over 25 ms; under 8 ms */
 } astat;
 
 /* a line in psiv.log every 30 s that had a gap, a drop or a refill
@@ -2817,13 +2839,25 @@ static void audio_report(void) {
     if (!astat.since) astat.since = now;
     if (now - astat.since < (uint64_t)every_ms) return;
     int under = SDL_SetAtomicInt(&audio_underruns, 0), missing = SDL_SetAtomicInt(&audio_missing, 0);
-    if (under || astat.drops || astat.primes > 1 || every_ms == 5000) {
+    int said = under || astat.drops || astat.primes > 1 || every_ms == 5000;
+    if (said) {
         double ms = 1000.0 / (SOUND_RATE * 4.0);
         SDL_Log("audio: %d underruns (%.0f ms of sound missing), %d frames dropped, %d refills; queue %.0f / %.0f / "
                 "%.0f ms (least / average / most; target %.0f); speed %+.3f%% to %+.3f%%; over %.0f s",
                 under, missing * ms, astat.drops, astat.primes, astat.qmin * ms,
                 astat.pushes ? astat.qsum / astat.pushes * ms : 0.0, astat.qmax * ms, audio_target * ms,
                 (astat.rmin - 1.0f) * 100.0f, (astat.rmax - 1.0f) * 100.0f, (double)(now - astat.since) / 1000.0);
+    }
+    {
+        int taken = SDL_SetAtomicInt(&audio_taken, 0), gap = SDL_SetAtomicInt(&audio_call_gap_us, 0);
+        int late = SDL_SetAtomicInt(&audio_calls_late, 0);
+        if (said) {                                      /* the two sides, with every line above */
+            double ms = 1000.0 / (SOUND_RATE * 4.0);
+            SDL_Log("audio: the game made %.0f ms of sound, the device took %.0f ms; pushes up to %.1f ms apart "
+                    "(%d over 25 ms, %d under 8 ms); the device's calls up to %.1f ms apart (%d over %.0f ms)",
+                    astat.made * ms, taken * ms, astat.push_gap_us / 1000.0, astat.pushes_late, astat.pushes_close,
+                    gap / 1000.0, late, audio_late_us / 1000.0);
+        }
     }
     memset(&astat, 0, sizeof astat);
     astat.since = now;
@@ -2855,6 +2889,25 @@ void platform_audio(const int16_t *samples, int count) {
     }
     int queued = SDL_GetAudioStreamQueued(audio), bytes = count * 4;
     int now = (int)SDL_GetTicks();
+    {   /* (PSIV_AUDIO_LOG) the game's side: how far apart its pushes come; at 2, each late one and each jump */
+        static uint64_t last_ns;
+        static int last_queued = -1, loud = -1;
+        if (loud < 0) loud = SDL_getenv("PSIV_AUDIO_LOG") && SDL_atoi(SDL_getenv("PSIV_AUDIO_LOG")) >= 2;
+        uint64_t t = SDL_GetTicksNS();
+        int us = last_ns ? (int)((t - last_ns) / 1000) : 0;
+        if (us < 250000) {
+            if (us > astat.push_gap_us) astat.push_gap_us = us;
+            if (us > 25000) astat.pushes_late++;
+            if (last_ns && us < 8000) astat.pushes_close++;
+            if (loud && (us > 25000 || (last_queued >= 0 && queued > last_queued + bytes)))
+                SDL_Log("audio: frame %llu: push after %.1f ms; queue %d ms, was %d ms after the last push",
+                        (unsigned long long)frame_count, us / 1000.0, queued * 1000 / (SOUND_RATE * 4),
+                        last_queued * 1000 / (SOUND_RATE * 4));
+        }
+        last_ns = t;
+        last_queued = queued + bytes;
+        astat.made += bytes;
+    }
     int idle = now - SDL_GetAtomicInt(&audio_last_push_ms) > 250;   /* the first sound, or after a pause or a menu */
     if (!astat.pushes || queued < astat.qmin) astat.qmin = queued;
     if (queued > astat.qmax) astat.qmax = queued;
@@ -3152,7 +3205,10 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
             menu_sel = test_menu_row >= -1 && test_menu_row < page_now()->n ? test_menu_row : page_now()->n ? 0 : -1;
         }
     }
-    if (paused || menu_is_open()) rumble_off();          /* the game holds: so does the rumble */
+    if (paused || menu_is_open()) {                      /* the game holds: so do the rumble and the sound */
+        rumble_off();
+        audio_rest();
+    }
     while (paused || menu_is_open()) {                   /* F10 or the menu: hold here, keep the window alive */
         holding = 1;                                     /* (the watchdog knows it's on purpose) */
         present(pixels, w, h, 0);
@@ -3654,6 +3710,7 @@ static void launcher_music_stop(void) {
     if (!launcher_music) return;
     launcher_music = 0;
     if (audio) SDL_ClearAudioStream(audio);
+    audio_rest();
     apply_audio();                                   /* the volume back */
     memset(&m68k, 0, sizeof m68k);                   /* the processor as it was: nothing has run */
 }
@@ -3861,9 +3918,36 @@ int main(int argc, char **argv) {
 #endif
     if (setting_int("video.fullscreen")) SDL_SetWindowFullscreen(window, true);
 
-    /* the game's native rate; SDL resamples to the output device */
+    /* The game's native rate; SDL's stream resamples to the output device.
+     * On Windows the device is opened in its own format. Asked for 53267 Hz,
+     * Windows takes the device at that rate and resamples itself (its 10 ms
+     * period is then 532.67 frames, which SDL rounds to 533), and every few
+     * minutes the device falls to taking less than real time, up to a tenth
+     * less, for most of a minute: the queue fills and frames of sound have
+     * to be thrown away, two or three a second -- the hitches heard on
+     * Windows and nowhere else. Side by side on the same device for five
+     * minutes: 142 frames thrown away that way, none this way (the device's
+     * side is in psiv.log with PSIV_AUDIO_LOG=1).
+     * PSIV_AUDIO_DEVICE=game opens it at the game's rate (as before, and as
+     * the other systems still do); =own in its own format anywhere. */
     SDL_AudioSpec spec = {SDL_AUDIO_S16, 2, SOUND_RATE};
-    audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+    const char *how = SDL_getenv("PSIV_AUDIO_DEVICE");
+#ifdef _WIN32
+    int own_format = !(how && !SDL_strcmp(how, "game"));
+#else
+    int own_format = how && !SDL_strcmp(how, "own");
+#endif
+    SDL_AudioDeviceID out = own_format ? SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, NULL) : 0;
+    if (out) {
+        SDL_AudioSpec own;
+        audio = SDL_GetAudioDeviceFormat(out, &own, NULL) ? SDL_CreateAudioStream(&spec, &own) : NULL;
+        if (!audio || !SDL_BindAudioStream(out, audio)) {
+            if (audio) SDL_DestroyAudioStream(audio);
+            audio = NULL;
+            SDL_CloseAudioDevice(out);
+        }
+    }
+    if (!audio) audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
     if (audio) {
         SDL_SetAudioStreamGain(audio, (float)setting_int("audio.volume") / 100.0f);
         SDL_SetAudioStreamGetCallback(audio, audio_requested, NULL);
@@ -3874,6 +3958,7 @@ int main(int argc, char **argv) {
             double buf_ms = dev.freq > 0 ? 1000.0 * dev_frames / dev.freq : 10.0, want_ms = 2.0 * buf_ms + 17.0;
             if (want_ms < 50.0) want_ms = 50.0;
             audio_target = (int)(want_ms / 1000.0 * SOUND_RATE) * 4;
+            audio_late_us = (int)(buf_ms * 2500.0);
             SDL_Log("audio: %s, %d Hz, %d channels, %d-frame buffer (%.1f ms); %.0f ms kept queued",
                     SDL_GetAudioDeviceName(SDL_GetAudioStreamDevice(audio)), dev.freq, dev.channels, dev_frames,
                     buf_ms, want_ms);

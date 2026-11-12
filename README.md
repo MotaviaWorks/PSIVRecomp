@@ -582,9 +582,17 @@ per-sample soft clipping it replaced (heard as distortion); `psiv_headless`
 prints how much it worked. The app keeps ~50 ms queued for the output device
 (twice its buffer and a frame) and holds it there by nudging the playback
 speed (at most 0.5%, typically a few hundredths of a percent: the PC's timer
-and the device's clock drift apart). `psiv.log` gets an `audio:` line for any
-30 s with a gap (underrun) or a dropped frame; `PSIV_AUDIO_LOG=1` logs every
-5 s, `=2` each refill too; `psiv --test-ff F:N` holds fast forward.
+and the device's clock drift apart). On Windows the device is opened in its
+own format and SDL resamples the game's 53267 Hz to it: asked for that rate,
+Windows resamples itself, and every few minutes the device then takes less
+than real time for most of a minute, the queue fills and frames of sound are
+thrown away (heard as hitches); `PSIV_AUDIO_DEVICE=game` opens it at the
+game's rate as before, `=own` in its own format on the other systems.
+`psiv.log` gets an `audio:` line for any 30 s with a gap (underrun) or a
+dropped frame, and a second for the two sides (the sound the game made and
+the device took, how far apart the game's pushes and the device's calls
+came); `PSIV_AUDIO_LOG=1` logs every 5 s, `=2` each refill and late push
+too; `psiv --test-ff F:N` holds fast forward.
 
 `prepare_rom.py` accepts raw and interleaved SMD dumps and refuses anything
 that isn't the USA ROM (SHA1 `bc7ff6d6a8408f38562bc610f24645cad6c42629`).
