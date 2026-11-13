@@ -1613,7 +1613,7 @@ static int launch_first(void) { return launch_has_continue() ? L_CONTINUE : L_ST
 static int launch_rows(void) { return N_LAUNCHER - launch_first(); }
 /* the project's Discord server -- the launcher's Discord button, D: the invite
  * opens in the player's browser (or the Discord app, where it takes such links) */
-#define DISCORD_URL "https://discord.gg/634RTBX2F"
+#define DISCORD_URL "https://discord.gg/YmgWfQGJAr"
 static void open_discord(void) {
     if (!SDL_OpenURL(DISCORD_URL)) SDL_Log("Discord: %s could not be opened: %s", DISCORD_URL, SDL_GetError());
 }
