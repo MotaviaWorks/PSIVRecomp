@@ -253,6 +253,31 @@ static void image_rows(void *ctx, int a, int b) {
         }
 }
 
+void ui_mask(const UiCanvas *cv, const uint8_t *mask, int mw, int mh, float x0, float y0, float x1, float y1,
+             uint32_t rgb, int alpha) {
+    if (x1 <= x0 || y1 <= y0) return;
+    int ix0 = (int)floorf(x0), iy0 = (int)floorf(y0), ix1 = (int)ceilf(x1), iy1 = (int)ceilf(y1);
+    if (ix0 < cv->x0) ix0 = cv->x0;
+    if (iy0 < cv->y0) iy0 = cv->y0;
+    if (ix1 > cv->x1) ix1 = cv->x1;
+    if (iy1 > cv->y1) iy1 = cv->y1;
+    for (int Y = iy0; Y < iy1; Y++)
+        for (int X = ix0; X < ix1; X++) {                /* the mask's four nearest, weighed; nothing outside it */
+            float u = ((float)X + 0.5f - x0) / (x1 - x0) * (float)mw - 0.5f;
+            float v = ((float)Y + 0.5f - y0) / (y1 - y0) * (float)mh - 0.5f;
+            int u0 = (int)floorf(u), v0 = (int)floorf(v);
+            float fu = u - (float)u0, fv = v - (float)v0, cover = 0.0f;
+            for (int k = 0; k < 4; k++) {
+                int uu = u0 + (k & 1), vv = v0 + (k >> 1);
+                if (uu < 0 || vv < 0 || uu >= mw || vv >= mh) continue;
+                cover += (float)mask[(size_t)vv * (size_t)mw + (size_t)uu] * ((k & 1) ? fu : 1.0f - fu) *
+                         ((k >> 1) ? fv : 1.0f - fv);
+            }
+            if (cover >= 1.0f)
+                ui_blend(&cv->px[(size_t)Y * (size_t)cv->stride + (size_t)X], rgb, (int)(cover * (float)alpha / 255.0f));
+        }
+}
+
 void ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float size, int dim, int alpha) {
     ImageRows q = {cv, im, x0, y0, size, dim, alpha};
     int n = (int)size;

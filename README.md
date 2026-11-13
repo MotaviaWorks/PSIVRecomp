@@ -75,7 +75,11 @@ is committed in `res/fonts/` with its licence.
   (`audio.launcher_music` in `psiv.ini`); off, it fades out in a quarter of
   a second; on, it starts from the top. A first run with no ROM installed
   is silent. `psiv_headless --song A4 --frames N --wav FILE` records any
-  song the same way.
+  song the same way. Beside the notes, the Discord button (a click or a
+  tap, or D) opens the project's Discord server in your browser
+  (`DISCORD_URL` in `runtime/main_sdl.c`; the mark is drawn from
+  `runtime/discord_mark.h`, made by `tools/make_discord_mark.py`. Discord
+  and its logo are trademarks of Discord Inc.).
   `psiv --play` skips it (for frontends and shortcuts); the game-frame
   testing hooks (`--menu`, `--test-keys`, `--test-click`, `--test-rumble`,
   `--capture`) skip it too, unless a `--menu-script` drives the launcher.

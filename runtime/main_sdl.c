@@ -71,6 +71,7 @@
 #include "sha256.h"
 #include "sound.h"
 #include "touch.h"
+#include "discord_mark.h"
 #include "uikit.h"
 #include "unzip.h"
 
@@ -1610,6 +1611,12 @@ enum { L_CONTINUE, L_START, L_MODE, L_SETTINGS, L_QUIT, N_LAUNCHER };
 static int launch_has_continue(void);
 static int launch_first(void) { return launch_has_continue() ? L_CONTINUE : L_START; }   /* Continue: only with a save */
 static int launch_rows(void) { return N_LAUNCHER - launch_first(); }
+/* the project's Discord server -- the launcher's Discord button, D: the invite
+ * opens in the player's browser (or the Discord app, where it takes such links) */
+#define DISCORD_URL "https://discord.gg/634RTBX2F"
+static void open_discord(void) {
+    if (!SDL_OpenURL(DISCORD_URL)) SDL_Log("Discord: %s could not be opened: %s", DISCORD_URL, SDL_GetError());
+}
 /* the launcher's music on or off -- its note, M, the pad's north button: the
  * launcher's loop starts it, or fades it out (launcher_music_run) */
 static void launcher_music_toggle(void) {
@@ -1853,7 +1860,7 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
 
 typedef struct { float x0, y0, x1, y1; int kind, index; } MenuHit;   /* render pixels */
 enum { HIT_ROW, HIT_STEP_BACK, HIT_PAGE, HIT_BACK, HIT_MODE, HIT_JTAB, HIT_JHINT, HIT_JUP, HIT_JDOWN, HIT_SLIDER,
-       HIT_MUSIC };
+       HIT_MUSIC, HIT_DISCORD };
 /* the launcher fills the window: units of 1/224 of its height (narrow windows:
  * 1/300 of the width), its content in a 224-tall column in the middle; the
  * emblem (drawn under it, launcher_backdrop) is centred this far down */
@@ -2007,9 +2014,10 @@ static void menu_hint(char *out, size_t n) {
     }
     if (menu_screen == MENU_LAUNCHER) {
         if (touch_visible()) snprintf(out, n, "Tap to choose");
-        else snprintf(out, n, "%s select%sLeft / Right switch the mode%s%s music",
+        else snprintf(out, n, "%s select%sLeft / Right switch the mode%s%s music%s",
                       menu_last_pad && pad ? pad_button_name(pad_of[IN_C]) : "Enter", sep, sep,
-                      menu_last_pad && pad ? pad_button_name(pad_of[IN_AUTO]) : "M");
+                      menu_last_pad && pad ? pad_button_name(pad_of[IN_AUTO]) : "M",
+                      menu_last_pad && pad ? "" : m_ttf ? "   \xC2\xB7   D Discord" : "   D Discord");
     } else if (touch_visible())
         snprintf(out, n, "%s%sTap outside to go back", settings_screen ? "Tap a setting to change it" : "Tap to choose", sep);
     else if (menu_last_pad && pad) {
@@ -2570,6 +2578,15 @@ static void draw_launcher(float W, float H, const char *hint) {
             }
         m_hit(bx - r - 1.5f, by - r - 1.5f, bx + r + 1.5f, by + r + 1.5f, HIT_MUSIC, 0);
     }
+    {   /* the Discord server: Discord's mark, white on its blue, beside the notes */
+        float bx = W - 15.0f - 23.0f, by = 15.0f, r = 9.5f, k = 6.3f;
+        m_box(bx - r, by - r, bx + r, by + r, r, 0x5865F2, 0x5865F2, 255);
+        if (m_ttf)
+            ui_mask(&m_cv, DISCORD_MARK, DISCORD_MARK_N, DISCORD_MARK_N, (bx - k) * m_S, (by - k + 0.2f) * m_S,
+                    (bx + k) * m_S, (by + k + 0.2f) * m_S, 0xFFFFFF, 255);
+        else m_text(bx, by + 2.5f, 5.0f, "D", 0xFFFFFF, 2);
+        m_hit(bx - r - 1.5f, by - r - 1.5f, bx + r + 1.5f, by + r + 1.5f, HIT_DISCORD, 0);
+    }
 
     m_text(6.0f, H - 5.0f, 3.2f, APP_NAME " " PSIV_VERSION, C_DIM, 0);
     m_text(W - 6.0f, H - 5.0f, 3.4f, hint, C_HINT, 1);
@@ -2710,6 +2727,8 @@ static void menu_tap(float rx, float ry) {
             menu_input(0, 0, 0, 0, 0, 1);
         } else if (h->kind == HIT_MUSIC) {          /* the launcher's note */
             launcher_music_toggle();
+        } else if (h->kind == HIT_DISCORD) {        /* and its Discord button */
+            open_discord();
         } else if (menu_screen == MENU_JOURNAL) {   /* a page, the hint, the arrows, a job */
             if (h->kind == HIT_JTAB) { j_tab = h->index; j_scroll = 0; menu_sel = 0; }
             else if (h->kind == HIT_JHINT) journal_input(0, 0, 0, 0, 1);
@@ -3055,6 +3074,10 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             if (menu_is_open()) {                        /* the menu takes the keyboard */
                 if (in_launcher && menu_screen == MENU_LAUNCHER && sc == SDL_SCANCODE_M) {
                     if (!e.key.repeat) launcher_music_toggle();
+                    break;
+                }
+                if (in_launcher && menu_screen == MENU_LAUNCHER && sc == SDL_SCANCODE_D) {
+                    if (!e.key.repeat) open_discord();
                     break;
                 }
                 if (sc == SDL_SCANCODE_TAB || sc == SDL_SCANCODE_PAGEDOWN || sc == SDL_SCANCODE_PAGEUP) {

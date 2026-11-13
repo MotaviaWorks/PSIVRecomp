@@ -30,6 +30,9 @@ void  ui_round_frame(const UiCanvas *cv, float x0, float y0, float x1, float y1,
 void  ui_frame_window(const UiCanvas *cv, float x0, float y0, float x1, float y1, float unit);
 /* an image (nearest neighbour: pixel art) into a rounded square; dim = grey and dark */
 void  ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float size, int dim, int alpha);
+/* a coverage mask (mw x mh bytes, 0-255) in one colour, scaled smoothly into the box */
+void  ui_mask(const UiCanvas *cv, const uint8_t *mask, int mw, int mh, float x0, float y0, float x1, float y1,
+              uint32_t rgb, int alpha);
 /* a bar: dark track, `frac` of it filled */
 void  ui_bar(const UiCanvas *cv, float x0, float y0, float x1, float h, float frac, uint32_t rgb, int alpha);
 /* a small triangle pointing down (dir 0), up (1), right (2) or left (3) */
