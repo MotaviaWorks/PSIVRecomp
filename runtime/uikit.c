@@ -285,11 +285,15 @@ void ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float s
     else if (n > 0) image_rows(&q, 0, n);
 }
 
+void ui_frame_window_a(const UiCanvas *cv, float x0, float y0, float x1, float y1, float u, int alpha) {
+    ui_round_rect(cv, x0, y0, x1, y1, 3.0f * u, 0x070B26, alpha);
+    ui_round_rect(cv, x0 + u, y0 + u, x1 - u, y1 - u, 2.2f * u, 0xDDE1EE, alpha);
+    ui_round_rect(cv, x0 + 2.0f * u, y0 + 2.0f * u, x1 - 2.0f * u, y1 - 2.0f * u, 1.4f * u, 0x8A93B8, alpha);
+    ui_round_rect_v(cv, x0 + 2.5f * u, y0 + 2.5f * u, x1 - 2.5f * u, y1 - 2.5f * u, 1.2f * u, 0x2A4AAE, 0x1A3084, alpha);
+}
+
 void ui_frame_window(const UiCanvas *cv, float x0, float y0, float x1, float y1, float u) {
-    ui_round_rect(cv, x0, y0, x1, y1, 3.0f * u, 0x070B26, 255);
-    ui_round_rect(cv, x0 + u, y0 + u, x1 - u, y1 - u, 2.2f * u, 0xDDE1EE, 255);
-    ui_round_rect(cv, x0 + 2.0f * u, y0 + 2.0f * u, x1 - 2.0f * u, y1 - 2.0f * u, 1.4f * u, 0x8A93B8, 255);
-    ui_round_rect_v(cv, x0 + 2.5f * u, y0 + 2.5f * u, x1 - 2.5f * u, y1 - 2.5f * u, 1.2f * u, 0x2A4AAE, 0x1A3084, 255);
+    ui_frame_window_a(cv, x0, y0, x1, y1, u, 255);
 }
 
 void ui_bar(const UiCanvas *cv, float x0, float y0, float x1, float h, float frac, uint32_t c, int alpha) {

@@ -2,8 +2,9 @@
  * Modern battle menus (M7, Enhanced): the game's battle windows -- the
  * status bar, the command icons, the technique / skill / item lists with
  * their checkbox cursors -- replaced by menus drawn at the output
- * resolution: full names and costs, a line on what each choice does, and a
- * party bar with the dialogue portraits from the player's ROM.
+ * resolution, in the camp menu's framed windows (fieldmenu.h): full names
+ * and costs, a line on what each choice does, and a window for each member
+ * with their dialogue portrait from the player's ROM.
  *
  * The battle itself is untouched. The game still runs its own menus and
  * reads the pad; this module mirrors their state from RAM (which routine is
@@ -22,9 +23,11 @@
  * the main menu, are drawn back into plane A (behind the game's action
  * sprites), and a member the game moves goes back to their place with the
  * sprites on them. The member choosing has a gold aura (an ally being
- * targeted a cyan one); the commands sit in a strip the dock opens under the
- * party and the game's battle messages move to the top, so nothing covers
- * anyone.
+ * targeted a cyan one); what is being chosen lies across a bar the dock
+ * opens under the party -- the battle's three choices, the member's five
+ * commands, then the command chosen and a line on the list's entry or the
+ * target -- and the game's battle messages move to the top, so nothing
+ * covers anyone.
  */
 #ifndef PSIV_BATTLEUI_H
 #define PSIV_BATTLEUI_H

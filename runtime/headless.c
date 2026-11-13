@@ -858,7 +858,8 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         for (int i = 0; i < nclick; i++)                   /* click to walk (walkto.h) */
             if (clicks[i].frame == logical) {
                 int cx = -1, cy = -1, slot = -1, ok;
-                if (fieldmenu_active()) ok = fieldmenu_click((float)clicks[i].x, (float)clicks[i].y, clicks[i].right) ? 3 : 0;
+                if (fieldmenu_active() && clicks[i].wheel) { fieldmenu_wheel(clicks[i].wheel > 0); ok = 3; }
+                else if (fieldmenu_active()) ok = fieldmenu_click((float)clicks[i].x, (float)clicks[i].y, clicks[i].right) ? 3 : 0;
                 else if (battleui_active()) ok = battleui_click((float)clicks[i].x, (float)clicks[i].y, clicks[i].right) ? 3 : 0;
                 else if (clicks[i].right) { ok = walkto_click_button(1) ? 2 : 0; walkto_cancel(); }
                 else if (walkto_click_button(0)) ok = 2;   /* text up: C */

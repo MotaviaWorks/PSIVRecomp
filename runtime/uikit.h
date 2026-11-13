@@ -28,6 +28,8 @@ void  ui_round_frame(const UiCanvas *cv, float x0, float y0, float x1, float y1,
  * edge, a pale frame and a deep blue inside. `unit` = output pixels per game
  * pixel (the frame is two and a half of them wide). */
 void  ui_frame_window(const UiCanvas *cv, float x0, float y0, float x1, float y1, float unit);
+/* ... at an alpha (the battle menus follow the game's fades) */
+void  ui_frame_window_a(const UiCanvas *cv, float x0, float y0, float x1, float y1, float unit, int alpha);
 /* an image (nearest neighbour: pixel art) into a rounded square; dim = grey and dark */
 void  ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float size, int dim, int alpha);
 /* a coverage mask (mw x mh bytes, 0-255) in one colour, scaled smoothly into the box */

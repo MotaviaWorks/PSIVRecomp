@@ -459,15 +459,26 @@ static void party_frame(void) {
 
 static const char *const COMMANDS[5] = {"Attack", "Technique", "Skill", "Item", "Defend"};
 static const char *const COMMAND_HELP[5] = {
-    "Strike one enemy with your weapon.",
+    "Strike an enemy with your weapon.",
     "Use a technique. Costs TP.",
-    "Use a special skill. Uses recover when you rest.",
-    "Use something from the bag or your equipment.",
-    "Brace yourself and take less damage this turn.",
+    "Use a skill. Its uses come back with rest.",
+    "Use something from the pack, or what you wear.",
+    "Brace, and take less damage this turn.",
 };
 static const uint32_t COMMAND_COLOR[6] = {0xB8C4E8, 0xFFA77A, 0x8FD3FF, 0xFFD27A, 0x9BE89B, 0xC8C8FF};
 
 /* ------------------------------------------------------------------ drawing helpers */
+/* The look is the camp menu's (fieldmenu.c): its framed windows, its
+ * colours, one size of text, a pale bar under the cursor's row. */
+#define WHITE   0xFFFFFFu
+#define SOFT    0xAEBEF0u         /* labels */
+#define FAINT   0x7C8CCCu         /* what cannot be chosen */
+#define NAVY    0x16287Au         /* text on the cursor's bar */
+#define BAR     0xE8ECF8u         /* the cursor's row */
+#define BAR_OFF 0x4868C8u         /* a choice made, the cursor elsewhere */
+#define ILL     0xFF9E9Eu         /* down, poisoned, ... */
+#define CAP     5.6f              /* capitals' height, game pixels */
+
 static UiCanvas cv;
 static float S;                   /* output pixels per game pixel */
 static float OX;                  /* game x 0 in the view, game pixels */
@@ -477,27 +488,41 @@ static float SX(float gx) { return (gx + OX) * S; }
 static float SY(float gy) { return gy * S; }
 static int AL(float a) { a *= fade; return a <= 0 ? 0 : a >= 255 ? 255 : (int)a; }
 
-static void panel(float x0, float y0, float x1, float y1, float alpha) {
-    float r = 4.0f * S;
-    ui_round_rect_v(&cv, SX(x0), SY(y0), SX(x1), SY(y1), r, 0x1B2756, 0x0C1230, AL(228 * alpha));
-    ui_round_frame(&cv, SX(x0) - 1, SY(y0) - 1, SX(x1) + 1, SY(y1) + 1, r + 1, fmaxf(1.0f, S * 0.4f),
-                   0x6F8FE0, AL(120 * alpha));
+static void win(float x0, float y0, float x1, float y1, float alpha) {
+    ui_frame_window_a(&cv, SX(x0), SY(y0), SX(x1), SY(y1), S, AL(255 * alpha));
 }
-
-static void pill(float x0, float y0, float x1, float y1, uint32_t top, uint32_t bottom, float alpha) {
-    ui_round_rect_v(&cv, SX(x0), SY(y0), SX(x1), SY(y1), (y1 - y0) * S / 2, top, bottom, AL(255 * alpha));
+/* the bar behind a row whose text sits on `base` */
+static void bar(float x0, float x1, float base, uint32_t c, float alpha) {
+    ui_round_rect(&cv, SX(x0), SY(base - 8.6f), SX(x1), SY(base + 3.2f), 1.5f * S, c, AL(255 * alpha));
 }
-
-static float text(float gx, float gbase, float cap, const char *s, uint32_t c, float alpha) {
-    return ui_text(&cv, SX(gx), SY(gbase), cap * S, s, c, AL(255 * alpha)) / S;
+static float text(float gx, float base, const char *s, uint32_t c, float alpha) {
+    return ui_text(&cv, SX(gx), SY(base), CAP * S, s, c, AL(255 * alpha)) / S;
 }
-static void text_right(float gx, float gbase, float cap, const char *s, uint32_t c, float alpha) {
-    ui_text_right(&cv, SX(gx), SY(gbase), cap * S, s, c, AL(255 * alpha));
+static void text_right(float gx, float base, const char *s, uint32_t c, float alpha) {
+    ui_text_right(&cv, SX(gx), SY(base), CAP * S, s, c, AL(255 * alpha));
 }
-static void text_center(float gx, float gbase, float cap, const char *s, uint32_t c, float alpha) {
-    ui_text_center(&cv, SX(gx), SY(gbase), cap * S, s, c, AL(255 * alpha));
+static void text_mid(float gx, float base, const char *s, uint32_t c, float alpha) {
+    ui_text_center(&cv, SX(gx), SY(base), CAP * S, s, c, AL(255 * alpha));
 }
-static float width(const char *s, float cap) { return ui_text_width(s, cap * S) / S; }
+static float width(const char *s) { return ui_text_width(s, CAP * S) / S; }
+/* a line in the room it has: at the usual size, or smaller (down to three
+ * quarters); 0 if it cannot be fitted */
+static int text_fit(float gx, float base, float room, const char *s, uint32_t c, float alpha) {
+    float w = width(s), cap = CAP;
+    if (w > room) {
+        cap = CAP * room / w;
+        if (cap < CAP * 0.75f) return 0;
+    }
+    ui_text(&cv, SX(gx), SY(base), cap * S, s, c, AL(255 * alpha));
+    return 1;
+}
+/* text cut off at x_right */
+static void text_clip(float gx, float base, float x_right, const char *s, uint32_t c, float alpha) {
+    int keep = cv.x1, lim = (int)SX(x_right);
+    if (lim < cv.x1) cv.x1 = lim;
+    if (cv.x1 > cv.x0) text(gx, base, s, c, alpha);
+    cv.x1 = keep;
+}
 
 /* "AGILITY is UP!" -> "Agility is Up!": all-capital words in title case, the
  * way names read elsewhere in the port (HP, TP, LV and EXP stay) */
@@ -505,7 +530,7 @@ static void soften(char *s) {
     for (char *p = s; *p;) {
         char *q = p;
         int letters = 0, caps = 1;
-        while (*q && *q != ' ') {
+        while (*q && *q != ' ' && *q != ':') {
             if (*q >= 'a' && *q <= 'z') caps = 0;
             if ((*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z')) letters++;
             q++;
@@ -531,19 +556,18 @@ static int utf8(uint32_t cp, char *o) {
 }
 
 /* The party's battle art is cut off at y 168, the top of the game's status
- * window, which hid the edge. The party bar sits on a dock across the whole
- * view from just above that line, so the party stands behind it as in the
- * original, and a soft shadow above the dock lets them fade into it. */
-#define DOCK_Y    165.0f
-#define HUD_Y0    171.0f
-#define HUD_Y1    219.0f
-/* while commands are chosen the dock opens a strip for them under the party
- * (so no menu covers anyone) and the cards move down to make room */
-#define STRIP_Y   167.5f
-#define STRIP_H   11.0f
-#define HUD_Y0_STRIP 180.0f
-#define HUD_Y1_STRIP 222.0f
-static float strip_in;            /* 0..1, eased */
+ * window, which hid the edge. The party's windows sit on a dock across the
+ * whole view from just above that line, so the party stands behind it as in
+ * the original, and a soft shadow above the dock lets them fade into it. */
+#define DOCK_Y      165.0f
+#define CARD_Y0     167.0f        /* a member's window, the battle playing out */
+#define CARD_Y1     223.0f
+/* while something is chosen the dock opens a bar for it under the party (so
+ * no menu covers anyone) and the members' windows shorten to make room */
+#define BAR_Y0      166.5f
+#define BAR_Y1      184.0f
+#define CARD_Y0_BAR 185.0f
+static float strip_in;            /* 0..1, eased: the bar is up */
 
 /* ------------------------------------------------------------------ the aura */
 /* The member choosing glows: a soft light around their figure as it is in
@@ -787,7 +811,7 @@ static void card_layout(int view_w) {
         ids[j] = id;
         xs[j] = x;
     }
-    float left = -OX + 6.0f, right = (float)view_w - OX - 6.0f, gap = 4.0f;
+    float left = -OX + 4.0f, right = (float)view_w - OX - 4.0f, gap = 3.0f;
     float cw = (right - left - gap * (float)(n - 1)) / (float)(n ? n : 1);
     if (cw > 118.0f) cw = 118.0f;
     float total = (float)n * cw + (float)(n - 1) * gap, x = (left + right) / 2.0f - total / 2.0f;
@@ -819,72 +843,122 @@ static void draw_dock(float a) {
         ui_round_rect(&cv, x0, top - (float)(rows - i), x1, top - (float)(rows - i) + 1.0f, 0, 0x04060E,
                       AL(150.0f * t * t * a));
     }
-    ui_round_rect_v(&cv, x0, top, x1, (float)cv.y1, 0, 0x131C3C, 0x070A18, AL(244 * a));
-    ui_round_rect(&cv, x0, top, x1, top + fmaxf(1.0f, 0.5f * S), 0, 0x6F8FE0, AL(140 * a));
+    ui_round_rect_v(&cv, x0, top, x1, (float)cv.y1, 0, 0x101A4E, 0x070B26, AL(250 * a));
+    ui_round_rect(&cv, x0, top, x1, top + fmaxf(1.0f, 0.6f * S), 0, 0x8A93B8, AL(190 * a));
 }
 
+/* a portrait's side in `room` game pixels: a whole multiple of its 48 pixels
+ * on the screen where one fits; 0 if too small to tell who it is */
+static float portrait_side(float room) {
+    float out = room * S;
+    if (room < 18.0f) return 0.0f;
+    return out >= 48.0f ? floorf(out / 48.0f) * 48.0f / S : room;
+}
+
+/* HP or TP in a member's window: the label where there is room, the figures
+ * from the right, a thin gauge under them */
+static void card_gauge(float xl, float xr, float base, const char *label, const char *nums, float frac,
+                       uint32_t numc, uint32_t barc, float a) {
+    if (label) text(xl, base, label, SOFT, a);
+    text_right(xr, base, nums, numc, a);
+    ui_bar(&cv, SX(xl), SY(base + 1.7f), SX(xr), 1.8f * S, frac, barc, AL(255 * a));
+}
+
+/* The party's windows: each member's portrait, name, what they will do (or
+ * how they are), HP and TP. Tall while the battle plays out; short, under
+ * the bar, while something is chosen. */
 static void draw_hud(int acting, int target_id, int show_commands, int frame, float a) {
     draw_dock(a);
+    float y0 = CARD_Y0 + (CARD_Y0_BAR - CARD_Y0) * strip_in, y1 = CARD_Y1;
+    /* while a member chooses (their window in gold), the others' windows go
+     * faint: eased, a veil of the dock's dark over each (an ally being picked
+     * stays clear) */
+    static float faint[11];
+    int focus = 0;
+    if (acting >= 0)
+        for (int k = 0; k < ncards; k++)
+            if (cards[k].id == acting && !(r8(CHAR_STATS + (unsigned)acting * 0x80 + 0x16) & 0x44)) focus = 1;
+    for (int k = 0; k < ncards; k++) {
+        int id = cards[k].id;
+        if (id < 0 || id >= 11) continue;
+        float want = focus && id != acting && id != target_id ? 1.0f : 0.0f;
+        faint[id] += (want - faint[id]) * 0.25f;
+        if (fabsf(want - faint[id]) < 0.01f) faint[id] = want;
+    }
     for (int k = 0; k < ncards; k++) {
         int id = cards[k].id;
         unsigned base = CHAR_STATS + (unsigned)id * 0x80;
         unsigned hp = r16(base + 0x0E), mhp = r16(base + 0x10), tp = r16(base + 0x12), mtp = r16(base + 0x14);
         unsigned status = r8(base + 0x16);
-        /* (at the main menu the game points at its first fighter, down or not:
-         * no gold frame round someone who is down) */
         int dead = (status & 0x44) != 0, me = id == acting && !dead, aimed = id == target_id;
-        float lift = me ? 2.0f * (1.0f - strip_in) : 0.0f;
-        float x0 = cards[k].x0, x1 = cards[k].x1;
-        float y0 = HUD_Y0 + (HUD_Y0_STRIP - HUD_Y0) * strip_in - lift, y1 = HUD_Y1 + (HUD_Y1_STRIP - HUD_Y1) * strip_in - lift;
-        float cw = x1 - x0;
-        /* card */
+        float x0 = cards[k].x0, x1 = cards[k].x1, cw = x1 - x0;
+        /* the one choosing in gold, an ally being picked in cyan: as their auras */
         if (me || aimed) {
             float pulse = aimed ? 0.8f + 0.2f * sinf((float)frame * 0.25f) : 1.0f;
-            uint32_t c = aimed ? 0x7FE0FF : 0xF2C84B;
-            ui_round_frame(&cv, SX(x0) - 1.25f * S, SY(y0) - 1.25f * S, SX(x1) + 1.25f * S, SY(y1) + 1.25f * S,
-                           5.25f * S, 1.6f * S, c, AL(200 * pulse * a));
+            ui_round_frame(&cv, SX(x0) - 1.3f * S, SY(y0) - 1.3f * S, SX(x1) + 1.3f * S, SY(y1) + 1.3f * S,
+                           4.2f * S, 1.5f * S, aimed ? 0x7FE0FF : 0xF2C84B, AL(235 * pulse * a));
         }
-        panel(x0, y0, x1, y1, a);
-        /* portrait: a whole multiple of its 48 pixels where that fits */
-        float avail = (y1 - y0 - 6.0f) * S;
-        if (cw < 70.0f) avail = fminf(avail, cw * 0.42f * S);
-        float ps = avail >= 48.0f ? floorf(avail / 48.0f) * 48.0f : avail;
-        float px = SX(x0) + 3.0f * S, py = SY(y0) + 3.0f * S;
+        win(x0, y0, x1, y1, a);
+
+        char hps[24], tps[24];
+        snprintf(hps, sizeof hps, "%u/%u", hp, mhp);
+        snprintf(tps, sizeof tps, "%u/%u", tp, mtp);
+        float numw = width(mhp > 999 ? "9999/9999" : "999/999");
+        /* the portrait: as large as the window's height and the figures' width leave */
         const UiImage *im = ui_portrait(id);
+        float px = x0 + 4.0f, py = y0 + 4.0f, ps = 0.0f, widest = 0.0f;   /* (py: centred, below) */
         if (im) {
-            ui_round_rect(&cv, px, py, px + ps, py + ps, ps * 0.16f, 0x101830, AL(255 * a));
-            ui_image(&cv, im, px, py, ps, dead, AL(255 * a));
+            float room_w = cw - 8.0f - 3.0f - numw;
+            float tall = portrait_side(fminf(CARD_Y1 - CARD_Y0 - 8.0f, room_w));
+            float brief = portrait_side(fminf(CARD_Y1 - CARD_Y0_BAR - 8.0f, room_w));
+            ps = tall + (brief - tall) * strip_in;
+            widest = tall;
+            if (tall <= 0.0f || brief <= 0.0f) ps = widest = 0.0f;
         }
-        float tx = x0 + 3.0f + ps / S + 4.0f, tr = x1 - 4.0f;
-        if (tr - tx < 20.0f) tx = x0 + 4.0f;
-        float name_cap = cw >= 90.0f ? 5.4f : 4.6f;
-        text(tx, y0 + 9.5f, name_cap, UI_CHAR_NAMES[id], dead ? 0x8890A8 : 0xFFFFFF, a);
-        /* what they will do, or how they are */
+        if (ps > 0.0f) {
+            py = (y0 + y1 - ps) / 2.0f;
+            ui_round_rect(&cv, SX(px), SY(py), SX(px + ps), SY(py + ps), 1.2f * S, 0x0C1440, AL(255 * a));
+            ui_image(&cv, im, SX(px), SY(py), ps * S, dead, AL(255 * a));
+        }
+        float tx = ps > 0.0f ? px + ps + 3.5f : x0 + 6.0f, tr = x1 - 6.0f;
+        float name_base = y0 + 10.6f;
+        const char *name = UI_CHAR_NAMES[id];
+        text_clip(tx, name_base, tr, name, dead ? FAINT : WHITE, a);
+
+        /* how they are, or what they will do: on a row of its own while the
+         * window is tall; beside the name, if it fits, while it is short */
         char tag[32] = "";
-        uint32_t tc = 0x9FB4E8;
-        if (dead) { snprintf(tag, sizeof tag, "Down"); tc = 0xFF6B6B; }
-        else if (status & 0x01) { snprintf(tag, sizeof tag, "Poisoned"); tc = 0xC98CFF; }
-        else if (status & 0x02) { snprintf(tag, sizeof tag, "Paralyzed"); tc = 0xFFD65C; }
-        else if (status & 0x28) { snprintf(tag, sizeof tag, "Asleep"); tc = 0x8CD3FF; }
-        if (!tag[0] && show_commands)
+        const char *brief_tag = NULL;
+        uint32_t tc = ILL;
+        if (dead) snprintf(tag, sizeof tag, "Down");
+        else if (status & 0x01) { snprintf(tag, sizeof tag, "Poisoned"); brief_tag = "Psn"; }
+        else if (status & 0x02) { snprintf(tag, sizeof tag, "Paralyzed"); brief_tag = "Par"; }
+        else if (status & 0x28) { snprintf(tag, sizeof tag, "Asleep"); brief_tag = "Slp"; }
+        if (!tag[0] && show_commands) {
+            uint32_t unused;
             for (int f = 0; f < 5; f++)
-                if (fighter_char(f) == id) command_tag(f, tag, sizeof tag, &tc);
-        if (tag[0]) text(tx, y0 + 16.5f, 3.7f, tag, tc, a);
-        /* HP and TP */
-        char nums[24];
-        float lab = 3.6f, bh = 2.2f;
-        float frac = mhp ? (float)hp / (float)mhp : 0.0f;
-        uint32_t hc = frac > 0.5f ? 0x4CD07D : frac > 0.25f ? 0xF2C84B : 0xF0524F;
-        snprintf(nums, sizeof nums, "%u/%u", hp, mhp);
-        if (tr - tx > 34.0f) text(tx, y0 + 26.0f, lab, "HP", 0x9FB4E8, a);
-        text_right(tr, y0 + 26.0f, lab, nums, 0xFFFFFF, a);
-        ui_bar(&cv, SX(tx), SY(y0 + 27.6f), SX(tr), bh * S, frac, hc, AL(255 * a));
-        if (mtp) {
-            snprintf(nums, sizeof nums, "%u/%u", tp, mtp);
-            if (tr - tx > 34.0f) text(tx, y0 + 36.5f, lab, "TP", 0x9FB4E8, a);
-            text_right(tr, y0 + 36.5f, lab, nums, 0xFFFFFF, a);
-            ui_bar(&cv, SX(tx), SY(y0 + 38.1f), SX(tr), bh * S, (float)tp / (float)mtp, 0x47A6F2, AL(255 * a));
+                if (fighter_char(f) == id) command_tag(f, tag, sizeof tag, &unused);
+            tc = SOFT;
         }
+        if (tag[0]) {
+            float room = tr - (tx + width(name) + 4.0f);
+            if (strip_in < 0.5f) text_clip(tx, y0 + 21.6f, tr, tag, tc, a);
+            else if (width(tag) <= room) text_right(tr, name_base, tag, tc, a);
+            else if (brief_tag && width(brief_tag) <= room) text_right(tr, name_base, brief_tag, tc, a);
+        }
+
+        /* HP and TP, from the window's foot, beside the portrait */
+        float hb = y1 - 18.0f, tb = y1 - 7.4f;
+        float frac = mhp ? (float)hp / (float)mhp : 0.0f;
+        uint32_t hc = frac > 0.5f ? 0x6FD080 : frac > 0.25f ? 0xF2C84B : 0xF0524F;
+        /* the labels, if there is room for them beside the portrait at its largest */
+        float least = tr - (widest > 0.0f ? px + widest + 3.5f : x0 + 6.0f);
+        int labels = least >= fmaxf(width(hps), mtp ? width(tps) : 0.0f) + 15.0f;
+        card_gauge(tx, tr, hb, labels ? "HP" : NULL, hps, frac, frac > 0.25f ? WHITE : ILL, hc, a);
+        if (mtp) card_gauge(tx, tr, tb, labels ? "TP" : NULL, tps, (float)tp / (float)mtp, WHITE, 0x6AA8F0, a);
+        if (id >= 0 && id < 11 && faint[id] > 0.0f)
+            ui_round_rect(&cv, SX(x0) - 0.5f * S, SY(y0) - 0.5f * S, SX(x1) + 0.5f * S, SY(y1) + 0.5f * S, 3.0f * S,
+                          0x070B26, AL(150 * faint[id] * a));
     }
 }
 
@@ -907,39 +981,51 @@ static void hit_add(float x0, float y0, float x1, float y1, int menu, int index,
 }
 
 /* ------------------------------------------------------------------ menus */
-static float menu_alpha;          /* fades a menu in */
+static float menu_alpha;          /* the open menu's (1: windows do not fade in) */
 static float actor_sx = 160.0f;   /* where the character choosing stands on screen, game x */
+static const char *list_line;     /* what the entry under the cursor of the list drawn this frame does */
 
-/* a highlight eased towards the cursor: one for the open menu, one for the
- * command strip (which stays up under a list) */
-typedef struct { float x, y, w; int snap; } Glide;
-static Glide hl_menu = {0, 0, 0, 1}, hl_strip = {0, 0, 0, 1};
-
-static void highlight_on(Glide *g, float x0, float y0, float x1, float y1, float alpha) {
-    if (g->snap) { g->x = x0; g->y = y0; g->w = x1 - x0; g->snap = 0; }
-    g->x += (x0 - g->x) * 0.45f;
-    g->y += (y0 - g->y) * 0.45f;
-    g->w += (x1 - x0 - g->w) * 0.45f;
-    pill(g->x, g->y, g->x + g->w, g->y + (y1 - y0), 0xFFE08A, 0xF0A83C, alpha);
-}
-static void highlight(float x0, float y0, float x1, float y1, float alpha) {
-    highlight_on(&hl_menu, x0, y0, x1, y1, alpha);
-}
-
-static void draw_main(float alpha) {
-    static const char *const label[3] = {"Command", "Macro", "Run"};
-    static const char *const help[3] = {"Choose what each member does", "Repeat a saved plan", "Try to escape"};
-    int cur = (int)r16(MAIN_OPTION);
-    float x0 = 10.0f, y0 = 34.0f, row = 17.0f, x1 = 124.0f, y1 = y0 + 6.0f + 3.0f * row;
-    panel(x0, y0, x1, y1, alpha);
-    for (int i = 0; i < 3; i++) {
-        float ry = y0 + 3.0f + (float)i * row;
-        hit_add(x0 + 3.0f, ry, x1 - 3.0f, ry + row, M_MAIN, i, 1);
-        if (i == cur) highlight(x0 + 3.0f, ry, x1 - 3.0f, ry + row, alpha);
-        int on = i == cur;
-        text(x0 + 9.0f, ry + 8.0f, 5.0f, label[i], on ? 0x1A1406 : 0xFFFFFF, alpha);
-        text(x0 + 9.0f, ry + 14.0f, 3.4f, help[i], on ? 0x3A2A08 : 0x9FB4E8, alpha);
+/* The bar the dock opens under the party: what is being chosen, across, and
+ * a line on the choice under the cursor -- the battle's three choices (the
+ * game's own window is steered Up / Down: Left / Right here, see
+ * battleui_pad); the member's five commands; with a list or a target open,
+ * the command `chosen` and `line`: what the list's entry does, the target. */
+static void draw_bar(int menu, int fighter, const char *chosen, const char *line, float alpha) {
+    static const char *const MAIN[3] = {"Command", "Macro", "Run"};
+    static const char *const MAIN_HELP[3] = {
+        "Choose what each member does.", "Play back a plan you have saved.", "Try to get away.",
+    };
+    float lo = -OX + 4.0f, hi = (float)cv.x1 / S - OX - 4.0f, base = BAR_Y0 + 11.6f;
+    /* it opens downward as the members' windows make room: cut off at its foot until then */
+    float foot = BAR_Y0 + (BAR_Y1 - BAR_Y0) * strip_in;
+    if (foot - BAR_Y0 < 6.0f) return;
+    win(lo, BAR_Y0, hi, foot, alpha);
+    int clip = cv.y1, lim = (int)SY(foot - 2.5f);
+    if (lim < cv.y1) cv.y1 = lim;
+    if (menu == M_NONE) { cv.y1 = clip; return; }            /* closing: empty */
+    float x = lo + 4.0f;
+    uint32_t lc = WHITE;
+    if (chosen) {
+        float w = width(chosen) + 10.0f;
+        bar(x, x + w, base, BAR_OFF, alpha);
+        text(x + 5.0f, base, chosen, WHITE, alpha);
+        x += w;
+    } else {
+        int main_menu = menu == M_MAIN, n = main_menu ? 3 : 5;
+        const char *const *names = main_menu ? MAIN : COMMANDS;
+        int cur = main_menu ? (int)r16(MAIN_OPTION) % 3 : (int)r16(COMD_INDEX + (unsigned)fighter * 2) % 5;
+        for (int i = 0; i < n; i++) {
+            float w = width(names[i]) + 10.0f;
+            hit_add(x, BAR_Y0, x + w, BAR_Y1, main_menu ? M_MAIN : M_COMMAND, i, 1);
+            if (i == cur) bar(x, x + w, base, BAR, alpha);
+            text(x + 5.0f, base, names[i], i == cur ? NAVY : WHITE, alpha);
+            x += w;
+        }
+        if (!line) line = main_menu ? MAIN_HELP[cur] : COMMAND_HELP[cur];
+        lc = SOFT;
     }
+    if (line && *line) text_fit(x + 7.0f, base, hi - 7.0f - (x + 7.0f), line, lc, alpha);
+    cv.y1 = clip;
 }
 
 /* where the party stands (game x, y), from the members in the picture this
@@ -964,52 +1050,10 @@ static int party_span(void) {
     return any;
 }
 
-/* the commands, in the strip the dock opens under the party, centred under
- * the member choosing; what the highlighted one does beside them. `chosen`
- * >= 0: one is picked (a list or a target is open), the rest dim */
-static void draw_commands(int fighter, int chosen, const char *prompt, float alpha) {
-    int cur = chosen >= 0 ? chosen : (int)r16(COMD_INDEX + (unsigned)fighter * 2) % 5;
-    float cap = 4.4f, padx = 5.0f, gap = 2.0f, h = STRIP_H, y0 = STRIP_Y;
-    float wsum = 0, w[5];
-    for (int i = 0; i < 5; i++) { w[i] = width(COMMANDS[i], cap) + 2 * padx; wsum += w[i]; }
-    wsum += 4 * gap;
-    float lo = -OX + 4.0f, hi = (float)(cv.x1 / S) - OX - 4.0f;
-    float x = actor_sx - wsum / 2.0f;
-    if (x < lo + 2.0f) x = lo + 2.0f;
-    if (x + wsum > hi - 2.0f) x = hi - 2.0f - wsum;
-    ui_round_rect_v(&cv, SX(x - 2.0f), SY(y0 - 0.5f), SX(x + wsum + 2.0f), SY(y0 + h + 0.5f), (h + 1.0f) * S / 2,
-                    0x26346A, 0x18214A, AL(235 * alpha));
-    ui_round_frame(&cv, SX(x - 2.0f) - 1, SY(y0 - 0.5f) - 1, SX(x + wsum + 2.0f) + 1, SY(y0 + h + 0.5f) + 1,
-                   (h + 1.0f) * S / 2 + 1, fmaxf(1.0f, S * 0.4f), 0x6F8FE0, AL(110 * alpha));
-    float bx = x;
-    for (int i = 0; i < 5; i++) {
-        int on = i == cur;
-        if (chosen < 0) hit_add(bx, y0, bx + w[i], y0 + h, M_COMMAND, i, 1);
-        if (on) highlight_on(&hl_strip, bx, y0 + 0.5f, bx + w[i], y0 + h - 0.5f, alpha);
-        text_center(bx + w[i] / 2.0f, y0 + 7.6f, cap, COMMANDS[i],
-                    on ? 0x1A1406 : chosen >= 0 ? 0x6F7FA8 : 0xFFFFFF, alpha);
-        bx += w[i] + gap;
-    }
-    /* what it does (or what to pick), on the side with more room: one line,
-     * or two smaller ones */
-    const char *line = prompt ? prompt : COMMAND_HELP[cur];
-    uint32_t col = prompt ? 0xFFE08A : 0xD8E2FF;
-    float room_l = x - 6.0f - lo, room_r = hi - (x + wsum + 6.0f);
-    int right = room_r >= room_l;
-    float room = right ? room_r : room_l;
-    float one = width(line, 3.8f);
-    if (one <= room) {
-        float lx = right ? x + wsum + 6.0f : x - 6.0f - one;
-        text(lx, y0 + 7.4f, 3.8f, line, col, alpha);
-    } else if (room >= 36.0f) {
-        float lw = fminf(room, one * 0.62f + 8.0f), lx = right ? x + wsum + 6.0f : x - 6.0f - lw;
-        ui_text_wrap(&cv, SX(lx), SY(y0 + 4.6f), lw * S, 4.6f * S, 2, 3.4f * S, line, col, AL(255 * alpha));
-    }
-}
-
 typedef struct { char name[24]; char cost[12]; int usable; const char *desc; } Entry;
 
-/* a list in pages of four: the pages side by side, as many as fit */
+/* a list in pages of four: the pages side by side, as many as fit. What the
+ * entry under the cursor does goes to the bar (list_line). */
 static void draw_list(int menu, const char *title, const char *info, const Entry *e, int count, int cur, float alpha) {
     int pages = (count + 3) / 4;
     if (pages < 1) pages = 1;
@@ -1017,18 +1061,18 @@ static void draw_list(int menu, const char *title, const char *info, const Entry
     int page = cur / 4, first = page - cols / 2;
     if (first > pages - cols) first = pages - cols;
     if (first < 0) first = 0;
-    float colw = 66.0f, row = 10.5f, cap = 4.6f;
-    float w = 10.0f + (float)cols * colw;
-    /* room for the list's longest description, whole (two lines at least,
-     * four at most), so the panel keeps its size as the cursor moves */
-    int dl = 2;
-    for (int i = 0; i < count; i++)
-        if (e[i].name[0] && e[i].desc && *e[i].desc) {
-            int l = ui_text_lines((w - 12.0f) * S, 3.7f * S, e[i].desc);
-            if (l > dl) dl = l;
-        }
-    if (dl > 4) dl = 4;
-    float h = 14.0f + 4.0f * row + 18.0f + (float)(dl - 2) * 5.2f;
+    /* a column as wide as the longest entry needs, the window at least as wide as its heading */
+    float colw = 52.0f, row = 11.4f;
+    for (int i = 0; i < count; i++) {
+        if (!e[i].name[0]) continue;
+        float w = width(e[i].name) + (e[i].cost[0] ? width(e[i].cost) + 7.0f : 0.0f) + 11.0f;
+        if (w > colw) colw = w;
+    }
+    if (colw > 86.0f) colw = 86.0f;
+    int turns = pages > cols;                                 /* more pages than shown: arrows in the heading */
+    float need = 16.0f + width(title) + (info && *info ? 8.0f + width(info) : 0.0f) + (turns ? 20.0f : 0.0f);
+    if ((float)cols * colw + 8.0f < need) colw = (need - 8.0f) / (float)cols;
+    float w = 8.0f + (float)cols * colw, h = 66.0f;
     float lo = -OX + 4.0f, hi = (float)(cv.x1 / S) - OX - 4.0f;
     /* beside the party where there is room, on the side of the member
      * choosing, so it covers no one; else above everyone's heads */
@@ -1046,35 +1090,30 @@ static void draw_list(int menu, const char *title, const char *info, const Entry
         if (x0 < lo) x0 = lo;
         if (x0 + w > hi) x0 = hi - w;
     }
-    float y0 = y1 - h, x1 = x0 + w;
-    panel(x0, y0, x1, y1, alpha);
-    text(x0 + 6.0f, y0 + 9.0f, 4.2f, title, 0xFFE08A, alpha);
-    if (info && *info) text_right(x1 - 6.0f, y0 + 9.0f, 3.8f, info, 0x9FB4E8, alpha);
-    if (first > 0) {
-        ui_triangle(&cv, SX(x0 + 3.0f), SY(y0 + 14.0f + 2.0f * row), 4.0f * S, 3, 0xFFE08A, AL(220 * alpha));
-        hit_add(x0, y0 + 12.0f, x0 + 5.0f, y0 + 13.0f + 4.0f * row, menu, (first - 1) * 4, 0);   /* the page before */
+    float y0 = y1 - h, x1 = x0 + w, head = y0 + 12.4f, ix = x1 - 8.0f;
+    win(x0, y0, x1, y1, alpha);
+    text(x0 + 8.0f, head, title, SOFT, alpha);
+    if (turns) {
+        int before = first > 0, after = first + cols < pages;
+        ui_triangle(&cv, SX(x1 - 17.0f), SY(head - 2.8f), 5.0f * S, 3, before ? WHITE : FAINT, AL(255 * alpha));
+        ui_triangle(&cv, SX(x1 - 8.5f), SY(head - 2.8f), 5.0f * S, 2, after ? WHITE : FAINT, AL(255 * alpha));
+        if (before) hit_add(x1 - 22.0f, y0 + 2.0f, x1 - 12.75f, y0 + 17.0f, menu, (first - 1) * 4, 0);
+        if (after) hit_add(x1 - 12.75f, y0 + 2.0f, x1 - 2.0f, y0 + 17.0f, menu, (first + cols) * 4, 0);
+        ix = x1 - 24.0f;
     }
-    if (first + cols < pages) {
-        ui_triangle(&cv, SX(x1 - 3.0f), SY(y0 + 14.0f + 2.0f * row), 4.0f * S, 2, 0xFFE08A, AL(220 * alpha));
-        hit_add(x1 - 5.0f, y0 + 12.0f, x1, y0 + 13.0f + 4.0f * row, menu, (first + cols) * 4, 0);  /* the page after */
-    }
+    if (info && *info) text_right(ix, head, info, SOFT, alpha);
     for (int c = 0; c < cols; c++)
         for (int r = 0; r < 4; r++) {
             int i = (first + c) * 4 + r;
-            float ex = x0 + 5.0f + (float)c * colw, ey = y0 + 13.0f + (float)r * row;
+            float ex = x0 + 4.0f + (float)c * colw, base = y0 + 25.0f + (float)r * row;
             int on = i == cur;
-            if (on) highlight(ex, ey, ex + colw - 2.0f, ey + row - 1.0f, alpha);
+            if (on) bar(ex, ex + colw, base, BAR, alpha);
             if (i >= count || !e[i].name[0]) continue;
-            hit_add(ex, ey, ex + colw - 2.0f, ey + row - 1.0f, menu, i, 1);
-            uint32_t col = on ? 0x1A1406 : e[i].usable ? 0xFFFFFF : 0x6F7FA8;
-            text(ex + 4.0f, ey + 7.0f, cap, e[i].name, col, alpha);
-            if (e[i].cost[0]) text_right(ex + colw - 6.0f, ey + 7.0f, 3.8f, e[i].cost, on ? 0x3A2A08 : 0x9FB4E8, alpha);
+            hit_add(ex, base - 8.6f, ex + colw, base + 2.8f, menu, i, 1);
+            text(ex + 5.0f, base, e[i].name, on ? NAVY : e[i].usable ? WHITE : FAINT, alpha);
+            if (e[i].cost[0]) text_right(ex + colw - 5.0f, base, e[i].cost, on ? NAVY : e[i].usable ? SOFT : FAINT, alpha);
         }
-    /* what the highlighted one does */
-    const char *d = cur >= 0 && cur < count ? e[cur].desc : NULL;
-    if (d && *d)
-        ui_text_wrap(&cv, SX(x0 + 6.0f), SY(y1 - 10.0f - (float)(dl - 2) * 5.2f), (w - 12.0f) * S, 5.2f * S, dl,
-                     3.7f * S, d, 0xD8E2FF, AL(255 * alpha));
+    list_line = cur >= 0 && cur < count && e[cur].name[0] ? e[cur].desc : NULL;
 }
 
 static Entry entries[ITEM_SLOTS];
@@ -1137,7 +1176,7 @@ static void draw_items(int fighter, int id, float alpha) {
     draw_list(M_ITEM, "Items", info, entries, n, cur, alpha);
 }
 
-/* a chevron over what the game's cursor pointed at */
+/* a chevron over what the game's cursor pointed at, its name in a window above */
 static void draw_target(const char *label, int party, int frame, float alpha) {
     for (int i = 0; i < npointers; i++) {
         const Pointer *p = &pointers[i];
@@ -1146,45 +1185,42 @@ static void draw_target(const char *label, int party, int frame, float alpha) {
         depth_to_screen(party, gx + OX, gy, &sx, &sy);
         sx -= OX;
         float bob = 1.5f * sinf((float)frame * 0.2f);
-        ui_triangle(&cv, SX(sx), SY(sy + bob), 9.0f * S, 0, 0x101830, AL(200 * alpha));
-        ui_triangle(&cv, SX(sx), SY(sy + bob - 0.6f), 7.0f * S, 0, 0xFFE08A, AL(255 * alpha));
+        ui_triangle(&cv, SX(sx), SY(sy + bob), 9.4f * S, 0, 0x070B26, AL(235 * alpha));
+        ui_triangle(&cv, SX(sx), SY(sy + bob - 0.7f), 7.0f * S, 0, BAR, AL(255 * alpha));
         if (label && *label) {
-            float lw = width(label, 4.4f) + 10.0f, ly = sy - 18.0f + bob;
+            float lw = width(label) + 15.0f, ly = sy - 23.5f + bob;
             if (ly < 2.0f) ly = 2.0f;
-            panel(sx - lw / 2.0f, ly, sx + lw / 2.0f, ly + 10.0f, alpha);
-            text_center(sx, ly + 7.3f, 4.4f, label, 0xFFFFFF, alpha);
+            win(sx - lw / 2.0f, ly, sx + lw / 2.0f, ly + 16.0f, alpha);
+            text_mid(sx, ly + 10.9f, label, WHITE, alpha);
         }
         break;
     }
 }
 
-/* any other window: its text, read back from the tiles, in the same style.
+/* any other window: its text, read back from the tiles, in the same frame.
  * The game puts its messages during the battle (a technique's name,
  * "Victory!") where the party stood, as they were gone by then: one that
  * would cover them goes to the top of the screen, under the enemy names if
  * those are up, clear of the action */
 static void draw_window(const Win *w, int names, float alpha) {
-    float x0 = (float)w->x * 8.0f + 2.0f, y0 = (float)w->y * 8.0f + 2.0f;
-    float x1 = (float)(w->x + w->w) * 8.0f - 2.0f, y1 = (float)(w->y + w->h) * 8.0f - 2.0f;
+    float x0 = (float)w->x * 8.0f + 1.5f, y0 = (float)w->y * 8.0f + 1.5f;
+    float x1 = (float)(w->x + w->w) * 8.0f - 1.5f, y1 = (float)(w->y + w->h) * 8.0f - 1.5f;
     float dy = 0.0f;
     if (w->y >= 4 && party_span() && x1 > party_l && x0 < party_r && y1 > party_top) {
-        float top = 6.0f;
+        float top = 5.5f;
         for (int i = 0; i < nwins; i++) {
             const Win *o = &wins[i];
             if (o->y < 4 && (float)(o->x + o->w) * 8.0f > x0 && (float)o->x * 8.0f < x1)
-                top = fmaxf(top, (float)(o->y + o->h) * 8.0f + 2.0f);
+                top = fmaxf(top, (float)(o->y + o->h) * 8.0f + 1.5f);
         }
         dy = top - y0;
     }
     y0 += dy;
     y1 += dy;
-    int any = 0;
-    for (int r = 0; r < w->h - 2 && !any; r++)
-        for (int c = 0; c < w->w - 2; c++) if (w->ch[r][c]) { any = 1; break; }
-    panel(x0, y0, x1, y1, alpha * (any ? 1.0f : 0.6f));
+    win(x0, y0, x1, y1, alpha);
     for (int r = 0; r < w->h - 2; r++) {
-        float base = (float)(w->y + 1 + r) * 8.0f + 6.6f + dy;
-        if (r == w->cursor) highlight(x0 + 2.0f, base - 6.8f, x1 - 2.0f, base + 1.8f, alpha);
+        float base = (float)(w->y + 1 + r) * 8.0f + 6.9f + dy;
+        if (r == w->cursor) bar(x0 + 3.5f, x1 - 3.5f, base, BAR, alpha);
         /* runs of text split at gaps of two cells or more; a run of digits
          * is right-aligned to its last cell so columns of numbers line up */
         int c = 0, cols = w->w - 2;
@@ -1205,10 +1241,10 @@ static void draw_window(const Win *w, int names, float alpha) {
             }
             buf[n] = 0;
             if (names || !digits) soften(buf);
-            uint32_t col = r == w->cursor ? 0x1A1406 : w->dim[r][s] ? 0x7F8FB8 : 0xFFFFFF;
+            uint32_t col = r == w->cursor ? NAVY : w->dim[r][s] ? FAINT : WHITE;
             float gx = (float)(w->x + 1 + s) * 8.0f;
-            if (digits) text_right((float)(w->x + 2 + e) * 8.0f - 1.0f, base, 5.0f, buf, col, alpha);
-            else text(gx + 0.5f, base, 5.0f, buf, col, alpha);
+            if (digits) text_right((float)(w->x + 2 + e) * 8.0f - 1.0f, base, buf, col, alpha);
+            else text(gx + 0.5f, base, buf, col, alpha);
         }
     }
 }
@@ -1240,7 +1276,7 @@ static void target_hits(int menu) {
         }
         band_hits(xs, n, 0.0f, DOCK_Y, M_TARGET_ENEMY);
     } else if (menu == M_TARGET_ALLY) {
-        float y0 = HUD_Y0 + (HUD_Y0_STRIP - HUD_Y0) * strip_in, y1 = HUD_Y1 + (HUD_Y1_STRIP - HUD_Y1) * strip_in;
+        float y0 = CARD_Y0 + (CARD_Y0_BAR - CARD_Y0) * strip_in, y1 = CARD_Y1;
         for (int k = 0; k < ncards; k++) {
             hit_add(cards[k].x0, y0, cards[k].x1, y1, M_TARGET_ALLY, k, 1);
             depth_to_screen(1, cards[k].stand + OX, 120.0f, &sx, &sy);
@@ -1274,11 +1310,8 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     int fighter = (int)r16(COMD_INPUT), acting = menu != M_NONE ? fighter_char(fighter) : -1;
     if (fighter > 4) acting = -1;
     int key = menu * 8 + fighter;
-    if (key != last_key) {
-        if (key % 8 != last_key % 8 || last_key < 0) hl_strip.snap = 1;        /* another member */
-        menu_alpha = 0; hl_menu.snap = 1; last_key = key;
-    }
-    menu_alpha = fminf(1.0f, menu_alpha + 0.25f);
+    if (key != last_key) { menu_alpha = 0; last_key = key; }
+    menu_alpha = 1.0f;                      /* a window is there or not, as in the camp menu */
 
     card_layout(view_w);
     int target_id = -1;
@@ -1314,60 +1347,66 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
         draw_motes(0xFFE08A);
     }
 
-    /* the commands chosen this round, on the cards: not over the results */
+    /* the commands chosen this round, in the members' windows: not over the results */
     int tags = !((r2 >= 0x1E && r2 <= 0x26) || r2 == 0x2D || r2 == 0x2F);
-    strip_in += ((acting >= 0 && choosing(menu) ? 1.0f : 0.0f) - strip_in) * 0.22f;
-    if (ncards) draw_hud(acting, target_id, tags, frame, hud_in);
+    int bar_up = menu == M_MAIN || (acting >= 0 && choosing(menu));
+    strip_in += ((bar_up ? 1.0f : 0.0f) - strip_in) * 0.22f;
+    if (ncards) draw_hud(menu == M_MAIN ? -1 : acting, target_id, tags, frame, hud_in);
 
     /* other windows: enemy names, messages, results */
     for (int i = 0; i < nwins; i++) {
         const Win *w = &wins[i];
-        if (w->y >= 20 && w->w >= 30) continue;                  /* the status bar: the party bar instead */
+        if (w->y >= 20 && w->w >= 30) continue;                  /* the status bar: the party's windows instead */
         if (menu != M_NONE && w->y >= 4) continue;               /* a menu: drawn below */
         draw_window(w, w->y < 4, 1.0f);
     }
 
-    /* the commands, in the dock's strip for as long as they are chosen; a
-     * list or a target over it, the command that opened it highlighted */
+    /* the open list or the target; then the bar: the choices across it, or
+     * the command chosen and a line on what the cursor is at */
     if (acting >= 0) actor_sx = (float)r16(FIGHTERS + (unsigned)fighter * 0x40 + 0x0C) - 128.0f;
-    int chosen = -1;
-    const char *prompt = NULL;
-    char pbuf[48];
-    unsigned cmd = r8(COMMAND_DATA + (unsigned)(fighter < 5 ? fighter : 0) * 4);
+    const char *chosen = NULL, *line = NULL;
+    char cbuf[32] = "", lbuf[64];
+    uint32_t unused;
+    list_line = NULL;
     switch (menu) {
-    case M_TECH: chosen = 1; prompt = "Choose a technique"; break;
-    case M_SKILL: chosen = 2; prompt = "Choose a skill"; break;
-    case M_ITEM: chosen = 3; prompt = "Choose an item"; break;
-    case M_TARGET_ENEMY: case M_TARGET_ALLY:
-        chosen = cmd >= 1 && cmd <= 5 ? (int)cmd - 1 : 0;
-        prompt = "Choose a target";
-        if (menu == M_TARGET_ALLY && target_id >= 0) {
-            snprintf(pbuf, sizeof pbuf, "Target: %s", UI_CHAR_NAMES[target_id]);
-            prompt = pbuf;
-        }
+    case M_TECH:
+        draw_techs(fighter, acting, menu_alpha);
+        chosen = COMMANDS[1];
+        line = list_line && *list_line ? list_line : "Choose a technique.";
         break;
-    default: break;
-    }
-    if (acting >= 0 && choosing(menu) && strip_in > 0.01f) draw_commands(fighter, chosen, prompt, strip_in * hud_in);
-
-    switch (menu) {
-    case M_MAIN: draw_main(menu_alpha); break;
-    case M_TECH: draw_techs(fighter, acting, menu_alpha); break;
-    case M_SKILL: draw_skills(fighter, menu_alpha); break;
-    case M_ITEM: draw_items(fighter, acting, menu_alpha); break;
-    case M_TARGET_ENEMY: {
+    case M_SKILL:
+        draw_skills(fighter, menu_alpha);
+        chosen = COMMANDS[2];
+        line = list_line && *list_line ? list_line : "Choose a skill.";
+        break;
+    case M_ITEM:
+        draw_items(fighter, acting, menu_alpha);
+        chosen = COMMANDS[3];
+        line = list_line && *list_line ? list_line : "Choose an item.";
+        break;
+    case M_TARGET_ENEMY: case M_TARGET_ALLY: {
         char name[32] = "";
-        int f = nth_fighter(5, 10, (int)r16(ENEMY_INDEX));
-        if (f >= 0) {
-            uint32_t st = ui_ram32(FIGHTERS + (unsigned)f * 0x40 + 4) & 0xFFFF;
-            if (st >= ENEMY_STATS && st < ENEMY_STATS + 0x200)
-                ui_decode_name(&m68k_ram[st], 14, name, (int)sizeof name);
+        if (menu == M_TARGET_ENEMY) {
+            int f = nth_fighter(5, 10, (int)r16(ENEMY_INDEX));
+            if (f >= 0) {
+                uint32_t st = ui_ram32(FIGHTERS + (unsigned)f * 0x40 + 4) & 0xFFFF;
+                if (st >= ENEMY_STATS && st < ENEMY_STATS + 0x200)
+                    ui_decode_name(&m68k_ram[st], 14, name, (int)sizeof name);
+            }
+            draw_target(name, 0, frame, menu_alpha);
+        } else if (target_id >= 0) {
+            snprintf(name, sizeof name, "%s", UI_CHAR_NAMES[target_id]);
         }
-        draw_target(name, 0, frame, menu_alpha);
+        if (fighter < 5) command_tag(fighter, cbuf, sizeof cbuf, &unused);   /* the technique, skill or item by name */
+        chosen = cbuf[0] ? cbuf : COMMANDS[0];
+        if (name[0]) snprintf(lbuf, sizeof lbuf, "On whom?  %s", name);
+        else snprintf(lbuf, sizeof lbuf, "On whom?");
+        line = lbuf;
         break;
     }
     default: break;
     }
+    if (bar_up || strip_in > 0.05f) draw_bar(bar_up ? menu : M_NONE, fighter, chosen, line, hud_in);
     target_hits(menu);
 }
 
@@ -1419,6 +1458,10 @@ static uint8_t drive_step(void) {
 }
 
 uint8_t battleui_pad(uint8_t user, uint8_t pad) {
+    /* the battle's three choices lie across the bar: Left and Right move
+     * among them as Up and Down do in the game's own window */
+    if (active && (pad & (PAD_LEFT | PAD_RIGHT)) && menu_of((int)(r16(BATTLE_ROUTINE_2) & 0x7FFF)) == M_MAIN)
+        pad = (uint8_t)((pad & ~(PAD_LEFT | PAD_RIGHT)) | (pad & PAD_LEFT ? PAD_UP : 0) | (pad & PAD_RIGHT ? PAD_DOWN : 0));
     if (pulse_b > 0) {                                  /* a right click: B */
         if (user) pulse_b = 0;
         else return --pulse_b > 0 ? PAD_B : 0;
