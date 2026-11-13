@@ -1,4 +1,4 @@
-PSIV Recomp: alpha
+PSIV Recomp: beta
 ==================
 
 A native port of Phantasy Star IV for Windows, macOS, Linux and Android. The game's
@@ -36,17 +36,17 @@ Installing
 
 **Windows (64-bit, Windows 10 or 11)**
 Unzip the folder somewhere you can write to, for example `Documents\PSIV Recomp`,
-then run `psiv.exe`. The alpha isn't code-signed, so SmartScreen may say
+then run `psiv.exe`. The beta isn't code-signed, so SmartScreen may say
 "Windows protected your PC". Click **More info**, then **Run anyway**.
 
 **macOS (Apple Silicon: M1 or newer, macOS 11 or newer)**
 Unzip it and drag **PSIV Recomp.app**, from the folder it makes, into
-Applications. The alpha isn't notarized
+Applications. The beta isn't notarized
 by Apple, so the first time you open it macOS says it can't check it. Click
 **Done**, open System Settings > Privacy & Security, scroll down to
 "PSIV Recomp was blocked" and click **Open Anyway**. (On older macOS:
 right-click the app, Open, then Open.) After that it opens normally.
-Intel Macs aren't supported in this alpha.
+Intel Macs aren't supported in this beta.
 
 **Linux, including the Steam Deck (x86-64)**
 Extract the archive and run `./psiv`. It needs glibc 2.35 or newer, so Ubuntu
@@ -124,8 +124,8 @@ Please send:
 - your save (`saves/psiv.srm`) if the problem is somewhere in the game.
 
 
-Not in this alpha
------------------
+Not in this beta
+----------------
 
 - Intel Macs.
 - Save states: the game's own saves only. (Rewind goes back up to two minutes, ten
