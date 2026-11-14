@@ -41,6 +41,8 @@
 #define TILE_PARTY_HI   0x280
 #define TILE_UI_HI      0x680            /* $680-$7FF: window frames, font, digits */
 #define PARTY_FEET_Y    168              /* top of the status window */
+#define VEHICLE_INDEX   0xF43Cu          /* Vehicle_Index: 0 on foot */
+#define TILE_DASH_LO    0x19B            /* a vehicle's dashboard: $19B-$27F ($196-$19A: its windows' frames) */
 #define MAX_SCALE       4
 
 #define F_BG    0.25f                    /* how far each layer follows the camera */
@@ -633,6 +635,9 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     static long pop_ysum[VDP_MAX_W];
     memset(pop_cnt, 0, sizeof pop_cnt);
     memset(pop_ysum, 0, sizeof pop_ysum);
+    /* a vehicle's battle: no party; the art in the party's tiles is the cockpit's dashboard (and the
+     * cockpit's own window frames, $196-$19A), which stays put like a window */
+    int vehicle = (m68k_ram[VEHICLE_INDEX] << 8 | m68k_ram[VEHICLE_INDEX + 1]) != 0;
     for (int y = 0; y < h; y++) {
         const VdpLine *l = &lines[y];
         for (int x = 0; x < w; x++) {
@@ -645,6 +650,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             if (a) {
                 if (l->win_in[x]) layer[L_UI][y][x] = a;
                 else if (!(a & 0x80)) layer[L_ENEMY][y][x] = a;
+                else if (vehicle && tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI) layer[L_UI][y][x] = a;
                 else if (tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI) {
                     layer[L_PARTY][y][x] = a;
                     party_under[y][x] = l->plane_a_under[x];
@@ -682,6 +688,24 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             if (empty * 10 < 2 * m * 9) continue;              /* the margins have art: keep it */
             for (int x = 0; x < m; x++) layer[L_BG][y][x] = layer[L_BG][y][2 * m - 1 - x];
             for (int x = right0; x < w; x++) layer[L_BG][y][x] = layer[L_BG][y][2 * right0 - 1 - x];
+        }
+    }
+    /* and a vehicle's dashboard is 320 pixels wide too: mirrored into the margins, it spans the view (its
+     * art is mirror-symmetric already). Only the dashboard's own tiles: not a window near the edge */
+    if (wide && vehicle) {
+        int m = -vdp_view_x0, right0 = m + (w - 2 * m);
+        for (int y = 0; y < h; y++) {
+            const VdpLine *l = &lines[y];
+            for (int x = 0; x < m; x++) {
+                int sx = 2 * m - 1 - x, tile = l->plane_a_tile[sx] & 0x7FF;
+                if (!layer[L_UI][y][x] && layer[L_UI][y][sx] && tile >= TILE_DASH_LO && tile < TILE_PARTY_HI)
+                    layer[L_UI][y][x] = layer[L_UI][y][sx];
+            }
+            for (int x = right0; x < w; x++) {
+                int sx = 2 * right0 - 1 - x, tile = l->plane_a_tile[sx] & 0x7FF;
+                if (!layer[L_UI][y][x] && layer[L_UI][y][sx] && tile >= TILE_DASH_LO && tile < TILE_PARTY_HI)
+                    layer[L_UI][y][x] = layer[L_UI][y][sx];
+            }
         }
     }
 

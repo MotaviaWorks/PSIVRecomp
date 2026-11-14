@@ -54,7 +54,19 @@
 #define T_BOX     0x6E7          /* blue checkbox */
 #define T_BOX_ON  0x6E8          /* red: the cursor */
 
+/* a vehicle's battle: the cockpit's own window art (in the party's tiles), and
+ * its SP readout, font tiles on the dashboard's left monitor (plane A row 19) */
+#define V_CORNER  0x198
+#define V_HORIZ   0x199
+#define V_VERT    0x19A
+#define V_BOX     0x196
+#define V_BOX_ON  0x197
+#define V_SP_ROW  19
+#define V_SP_COL0 6
+#define V_SP_COL1 11
+
 static int enabled, active, vx0;
+static int vehicle;                       /* Vehicle_Index while the menus are up: 0 = the party's battle */
 static uint16_t override[64 * 32];
 static uint8_t cell_flags[64 * 32];       /* see vdp_plane_a_flags */
 static uint8_t shadow[0x10000];           /* the party's art as they stand, at its VRAM addresses */
@@ -98,16 +110,27 @@ static uint16_t nt(int r, int c) {
 
 static int is(uint16_t e, int tile, int flips) { return (e & 0x7FF) == tile && (e & 0x1800) == flips; }
 
+/* window art in a vehicle's battle: its frames and checkboxes, and the font
+ * anywhere but the dashboard's SP readout */
+static int veh_ui_tile(uint16_t e, int r, int c) {
+    int t = e & 0x7FF;
+    if (t >= V_BOX && t <= V_VERT) return 1;
+    return t >= 0x680 && !(r == V_SP_ROW && c >= V_SP_COL0 && c <= V_SP_COL1);
+}
+
 static void read_windows(void) {
+    /* (a vehicle's windows: the cockpit's frame, the same tile at each corner) */
+    int corner = vehicle ? V_CORNER : T_CORNER, horiz = vehicle ? V_HORIZ : T_HORIZ, vert = vehicle ? V_VERT : T_VERT;
+    int box_on = vehicle ? V_BOX_ON : T_BOX_ON;
     nwins = 0;
     for (int r = 0; r < 28 && nwins < MAX_WINS; r++)
         for (int c = 0; c < 40 && nwins < MAX_WINS; c++) {
-            if (!is(nt(r, c), T_CORNER, 0)) continue;
+            if (!is(nt(r, c), corner, 0)) continue;
             int c2 = c + 1, r2 = r + 1;
-            while (c2 < 64 && ((nt(r, c2) & 0x7FF) == T_HORIZ || (nt(r, c2) & 0x7FF) == T_TEE)) c2++;
-            if (c2 >= 64 || !is(nt(r, c2), T_CORNER, 0x800)) continue;
-            while (r2 < 32 && (nt(r2, c) & 0x7FF) == T_VERT) r2++;
-            if (r2 >= 32 || !is(nt(r2, c), T_CORNER, 0x1000)) continue;
+            while (c2 < 64 && ((nt(r, c2) & 0x7FF) == horiz || (!vehicle && (nt(r, c2) & 0x7FF) == T_TEE))) c2++;
+            if (c2 >= 64 || (nt(r, c2) & 0x7FF) != corner || (!vehicle && !is(nt(r, c2), T_CORNER, 0x800))) continue;
+            while (r2 < 32 && (nt(r2, c) & 0x7FF) == vert) r2++;
+            if (r2 >= 32 || (nt(r2, c) & 0x7FF) != corner || (!vehicle && !is(nt(r2, c), T_CORNER, 0x1000))) continue;
             Win *w = &wins[nwins];
             w->x = c; w->y = r; w->w = c2 - c + 1; w->h = r2 - r + 1;
             w->cursor = -1;
@@ -117,7 +140,7 @@ static void read_windows(void) {
                     uint16_t e = nt(r + 1 + y, c + 1 + x);
                     int t = e & 0x7FF;
                     uint32_t cp = 0;
-                    if (t == T_BOX_ON) w->cursor = y;
+                    if (t == box_on) w->cursor = y;
                     else if (t >= 0x680 && t < 0x700 && t != T_BOX) cp = hdtext_win_char(t - 0x680);
                     else if (t >= 0x7BF && t < 0x7BF + 0x40) cp = hdtext_win_char(t - 0x7BF);
                     w->ch[y][x] = cp == ' ' ? 0 : cp;
@@ -138,26 +161,32 @@ void battleui_frame(void) {
     vdp_tile_shadow = NULL;
     vdp_plane_a_back = NULL;
     if (!enabled || !ui_ready()) { party_reset(); return; }
-    if (r16(GAME_MODE_INDEX) / 4 != MODE_BATTLE || r16(VEHICLE_INDEX) != 0) { party_reset(); return; }
+    if (r16(GAME_MODE_INDEX) / 4 != MODE_BATTLE) { party_reset(); return; }
     if (!(vdp.reg[1] & 0x40) || (vdp.reg[16] & 3) != 1) return;    /* display on, 64-cell planes */
     active = 1;
     vx0 = vdp_view_x0;
+    vehicle = (int)r16(VEHICLE_INDEX);
 
     /* the game's windows as they are now, then out of the picture */
     read_windows();
     for (int r = 0; r < 32; r++)
         for (int c = 0; c < 64; c++) {
             uint16_t e = nt(r, c), o = 0xFFFF;
-            if (ui_tile(e)) {
+            if (vehicle ? veh_ui_tile(e, r, c) : ui_tile(e)) {
                 o = 0;
                 if (r >= CLEAN_ROW0 && r < CLEAN_ROW0 + CLEAN_ROWS && c < 40) {
                     uint16_t k = (uint16_t)r16(CLEAN_MAP + (unsigned)(r - CLEAN_ROW0) * 0x50u + (unsigned)c * 2u);
-                    if (!ui_tile(k)) o = k;
+                    if (!(vehicle ? veh_ui_tile(k, r, c) : ui_tile(k))) o = k;
                 }
+            } else if (vehicle && r == V_SP_ROW && c >= V_SP_COL0 && c <= V_SP_COL1 && (e & 0x7FF) >= 0x680) {
+                /* the SP readout: the monitor's blank glass in its place (the dashboard is mirror-symmetric
+                 * and its right monitor is empty); the figures are drawn by battleui_draw */
+                o = (uint16_t)(nt(r, 39 - c) ^ 0x0800);
             }
             override[r * 64 + c] = o;
         }
     vdp_plane_a_override = override;
+    if (vehicle) { npointers = 0; party_reset(); return; }          /* no party in the picture, no cursor sprites */
     memset(cell_flags, 0, sizeof cell_flags);
     vdp_plane_a_flags = cell_flags;
     vdp_tile_shadow = shadow;
@@ -188,10 +217,12 @@ void battleui_frame(void) {
 }
 
 /* ------------------------------------------------------------------ battle state */
-enum { M_NONE, M_MAIN, M_COMMAND, M_TECH, M_SKILL, M_ITEM, M_TARGET_ENEMY, M_TARGET_ALLY };
+enum { M_NONE, M_MAIN, M_COMMAND, M_TECH, M_SKILL, M_ITEM, M_TARGET_ENEMY, M_TARGET_ALLY, M_VEH_MAIN, M_VEH_WEAPON };
 
 static int menu_of(int r2) {
     switch (r2) {
+    case 0x33: case 0x34: case 0x35: return M_VEH_MAIN;       /* a vehicle: ATTAC / OPTIN / RUN */
+    case 0x36: case 0x37: case 0x38: return M_VEH_WEAPON;     /* its two special weapons ("optins") */
     case 0x01: case 0x02: case 0x03: return M_MAIN;
     case 0x04: case 0x05: case 0x06: case 0x0A: case 0x09: case 0x12: case 0x18: return M_COMMAND;
     case 0x07: case 0x08: case 0x0B: case 0x0E: case 0x0F: return M_TECH;
@@ -1286,6 +1317,153 @@ static void target_hits(int menu) {
     }
 }
 
+/* ------------------------------------------------------------------ a vehicle's battle */
+/* In the Land Rover, the Ice Digger or the Hydrofoil there is no party: the
+ * cockpit's dashboard fills the foot of the picture (depth.c keeps it still
+ * and spans the view with it), its left monitor shows the vehicle's SP, and
+ * the game has two small menus: ATTAC / OPTIN / RUN, and the vehicle's two
+ * "optins" (special weapons, a few uses each; all hit every enemy). Here the
+ * monitor's readout is redrawn sharp, and the menus lie across a bar at the
+ * foot of the dashboard, which is up only while something is chosen: the
+ * vehicle and its SP, the three choices or the two weapons, and a line on
+ * the one under the cursor; with more than one enemy, Attack then asks
+ * which (the game's usual target picker, under the cockpit's crosshair). */
+#define VBAR_Y0   204.5f
+#define VBAR_Y1   221.5f
+static float veh_in;              /* 0..1, eased: the bar is up */
+
+static const char *const VEHICLE_NAMES[4] = {"", "Land Rover", "Ice Digger", "Hydrofoil"};
+/* the weapons, by their bit in the vehicle's stats +$62 (VehicleSkillData's order) */
+static const char *const WEAPON_NAMES[8] = {"Cluster", "Graviton", "Thunder Grid", "X-Burst", "Napalm", "", "N-Sphere", ""};
+static const char *const WEAPON_HELP[8] = {
+    "Physical damage to all enemies.",
+    "Gravity damage to all enemies.",
+    "Electric damage to all enemies.",
+    "Energy damage to all enemies.",
+    "Fire damage to all enemies.",
+    "",
+    "May destroy all enemies outright.",
+    "",
+};
+
+/* the vehicle's stats (fighter 0's), or 0 */
+static unsigned veh_stats(void) {
+    if (!r16(FIGHTERS)) return 0;
+    return (unsigned)(ui_ram32(FIGHTERS + 4) & 0xFFFF);
+}
+
+/* its n-th weapon (0, 1): the bit, or -1 */
+static int veh_weapon(unsigned stats, int n) {
+    unsigned bits = r8(stats + 0x62);
+    for (int b = 0; b < 8; b++)
+        if (bits >> b & 1 && n-- == 0) return b;
+    return -1;
+}
+
+static void draw_vehicle(int menu, int frame, float alpha) {
+    static const char *const MAIN[3] = {"Attack", "Weapons", "Run"};
+    static const char *const MAIN_HELP[3] = {
+        "Fire the main gun.", "Use one of the vehicle's special weapons.", "Try to get away.",
+    };
+    (void)frame;
+    unsigned stats = veh_stats();
+    unsigned sp = stats ? r16(stats + 0x0E) : 0, msp = stats ? r16(stats + 0x10) : 0;
+    float frac = msp ? (float)sp / (float)msp : 0.0f;
+    uint32_t spc = frac > 0.5f ? 0x6FD080 : frac > 0.25f ? 0xF2C84B : 0xF0524F;
+    char nums[24];
+
+    /* the monitor's readout, where the game writes it (plane A row 19, columns 6-11) */
+    if (stats) {
+        float base = (float)V_SP_ROW * 8.0f + 6.9f;
+        snprintf(nums, sizeof nums, "%u", sp);
+        text((float)V_SP_COL0 * 8.0f + 1.0f, base, "SP", 0xD8FFF0, alpha);
+        text_right((float)(V_SP_COL1 + 1) * 8.0f - 1.0f, base, nums, frac > 0.25f ? 0xFFFFFF : ILL, alpha);
+    }
+
+    /* other windows: enemy names, messages, results (the menus are drawn below) */
+    for (int i = 0; i < nwins; i++) {
+        const Win *w = &wins[i];
+        if (menu != M_NONE && w->y >= 4) continue;
+        draw_window(w, w->y < 4, 1.0f);
+    }
+
+    /* the bar: up while something is chosen, sliding down behind the foot of the picture after */
+    int up = menu != M_NONE && stats;
+    veh_in += ((up ? 1.0f : 0.0f) - veh_in) * 0.22f;
+    if (veh_in < 0.03f) return;
+    float lo = -OX + 4.0f, hi = (float)cv.x1 / S - OX - 4.0f, dy = (1.0f - veh_in) * (VBAR_Y1 - VBAR_Y0 + 6.0f);
+    float y0 = VBAR_Y0 + dy, y1 = VBAR_Y1 + dy, base = y0 + 11.4f;
+    win(lo, y0, hi, y1, alpha);
+    /* the vehicle and its SP: on a 4:3 picture the name is left out, and with the weapons up the SP
+     * too (it is on the monitor), so the line on the weapon has room */
+    int narrow = hi - lo < 350.0f;
+    float x = lo + 7.0f;
+    if (!narrow) x += text(x, base, VEHICLE_NAMES[vehicle & 3], WHITE, alpha) + 8.0f;
+    if (!(narrow && menu == M_VEH_WEAPON)) {
+        snprintf(nums, sizeof nums, "%u/%u", sp, msp);
+        float gw = width("SP") + 5.0f + width(msp > 999 ? "9999/9999" : "999/999");
+        card_gauge(x, x + gw, base, "SP", nums, frac, frac > 0.25f ? WHITE : ILL, spc, alpha);
+        x += gw + 9.0f;
+        ui_round_rect(&cv, SX(x - 4.5f), SY(y0 + 3.5f), SX(x - 4.5f) + fmaxf(1.0f, 0.5f * S), SY(y1 - 3.5f), 0, 0x8A93B8,
+                      AL(120 * alpha));
+    } else {
+        x -= 3.0f;
+    }
+    const char *line = NULL;
+    uint32_t lc = SOFT;
+    if (menu == M_VEH_WEAPON) {
+        float w = width(MAIN[1]) + 10.0f;
+        bar(x, x + w, base, BAR_OFF, alpha);
+        text(x + 5.0f, base, MAIN[1], WHITE, alpha);
+        x += w + 2.0f;
+        int cur = (int)(r16(COMD_INDEX) & 0x7F) & 1;
+        for (int i = 0; i < 2; i++) {
+            int b = veh_weapon(stats, i);
+            if (b < 0 || !WEAPON_NAMES[b][0]) continue;
+            unsigned uses = r8(stats + 0x6A + (unsigned)i * 2);
+            char cost[12];
+            snprintf(cost, sizeof cost, "\xC3\x97%u", uses);                 /* x8 */
+            float nw = width(WEAPON_NAMES[b]), ew = nw + 6.0f + width(cost) + 10.0f;
+            hit_add(x, y0, x + ew, y1, M_VEH_WEAPON, i, 1);
+            if (i == cur) bar(x, x + ew, base, BAR, alpha);
+            text(x + 5.0f, base, WEAPON_NAMES[b], i == cur ? NAVY : uses ? WHITE : FAINT, alpha);
+            text_right(x + ew - 5.0f, base, cost, i == cur ? NAVY : uses ? SOFT : FAINT, alpha);
+            x += ew;
+            if (i == cur) line = uses ? WEAPON_HELP[b] : "None left.";
+        }
+        lc = WHITE;
+    } else if (menu == M_VEH_MAIN) {
+        int cur = (int)r16(MAIN_OPTION) % 3;
+        for (int i = 0; i < 3; i++) {
+            float w = width(MAIN[i]) + 10.0f;
+            hit_add(x, y0, x + w, y1, M_VEH_MAIN, i, 1);
+            if (i == cur) bar(x, x + w, base, BAR, alpha);
+            text(x + 5.0f, base, MAIN[i], i == cur ? NAVY : WHITE, alpha);
+            x += w;
+        }
+        line = MAIN_HELP[cur];
+    } else if (menu == M_TARGET_ENEMY) {                      /* Attack, with more than one enemy: which (the
+                                                               * cockpit's own crosshair is on it) */
+        float w = width(MAIN[0]) + 10.0f;
+        bar(x, x + w, base, BAR_OFF, alpha);
+        text(x + 5.0f, base, MAIN[0], WHITE, alpha);
+        x += w;
+        static char lbuf[64];
+        char name[32] = "";
+        int f = nth_fighter(5, 10, (int)r16(ENEMY_INDEX));
+        if (f >= 0) {
+            uint32_t st = ui_ram32(FIGHTERS + (unsigned)f * 0x40 + 4) & 0xFFFF;
+            if (st >= ENEMY_STATS && st < ENEMY_STATS + 0x200) ui_decode_name(&m68k_ram[st], 14, name, (int)sizeof name);
+        }
+        if (name[0]) snprintf(lbuf, sizeof lbuf, "On whom?  %s", name);
+        else snprintf(lbuf, sizeof lbuf, "On whom?");
+        line = lbuf;
+        lc = WHITE;
+        target_hits(menu);
+    }
+    if (line && *line) text_fit(x + 7.0f, base, hi - 7.0f - (x + 7.0f), line, lc, alpha);
+}
+
 /* ------------------------------------------------------------------ the frame */
 void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) {
     static int frame, last_key = -1;
@@ -1307,6 +1485,10 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     fade = (float)hi / 7.0f * (1.0f - (float)lo / 7.0f);
 
     int r2 = (int)(r16(BATTLE_ROUTINE_2) & 0x7FFF), menu = menu_of(r2);
+    if (vehicle) {                          /* no party: the cockpit's readout, its windows, its bar */
+        draw_vehicle(menu == M_VEH_MAIN || menu == M_VEH_WEAPON || menu == M_TARGET_ENEMY ? menu : M_NONE, frame, 1.0f);
+        return;
+    }
     int fighter = (int)r16(COMD_INPUT), acting = menu != M_NONE ? fighter_char(fighter) : -1;
     if (fighter > 4) acting = -1;
     int key = menu * 8 + fighter;
@@ -1441,8 +1623,11 @@ static uint8_t drive_step(void) {
     unsigned f = (unsigned)drive.fighter * 2;
     int t = drive.target, cur;
     switch (drive.menu) {
-    case M_MAIN:                                        /* up / down */
+    case M_MAIN: case M_VEH_MAIN:                       /* up / down */
         cur = (int)r16(MAIN_OPTION) & 3;
+        return cur < t ? PAD_DOWN : cur > t ? PAD_UP : 0;
+    case M_VEH_WEAPON:                                  /* a vehicle's two weapons: up / down */
+        cur = (int)r16(COMD_INDEX) & 1;
         return cur < t ? PAD_DOWN : cur > t ? PAD_UP : 0;
     case M_COMMAND:                                     /* left / right */
         cur = (int)r16(COMD_INDEX + f) % 5;
@@ -1460,7 +1645,8 @@ static uint8_t drive_step(void) {
 uint8_t battleui_pad(uint8_t user, uint8_t pad) {
     /* the battle's three choices lie across the bar: Left and Right move
      * among them as Up and Down do in the game's own window */
-    if (active && (pad & (PAD_LEFT | PAD_RIGHT)) && menu_of((int)(r16(BATTLE_ROUTINE_2) & 0x7FFF)) == M_MAIN)
+    int across = active && (pad & (PAD_LEFT | PAD_RIGHT)) ? menu_of((int)(r16(BATTLE_ROUTINE_2) & 0x7FFF)) : M_NONE;
+    if (across == M_MAIN || across == M_VEH_MAIN || across == M_VEH_WEAPON)   /* (a vehicle's menus lie across its bar too) */
         pad = (uint8_t)((pad & ~(PAD_LEFT | PAD_RIGHT)) | (pad & PAD_LEFT ? PAD_UP : 0) | (pad & PAD_RIGHT ? PAD_DOWN : 0));
     if (pulse_b > 0) {                                  /* a right click: B */
         if (user) pulse_b = 0;

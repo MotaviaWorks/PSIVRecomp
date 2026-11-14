@@ -14,7 +14,10 @@
  * $FF2540 to put back what a window covered), and by leaving out the cursor
  * sprites. Other windows (enemy names, "AGILITY is UP!", the victory
  * messages) are read back from their tiles and redrawn in the same style.
- * Vehicle battles keep the original windows.
+ * A vehicle's battle has no party: the cockpit's SP readout is redrawn on
+ * its monitor, and its two menus (ATTAC / OPTIN / RUN and the vehicle's two
+ * special weapons) lie across a bar at the foot of the dashboard, with the
+ * target picker's line when Attack asks which enemy.
  *
  * The game shows the whole party only at the main menu: while commands are
  * chosen, only the member choosing; while the battle plays out, only the one

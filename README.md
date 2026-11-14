@@ -503,8 +503,13 @@ original game, unchanged; **Enhanced** turns on the additions:
   it, so no menu covers anyone. The game
   still runs its own menus: the port mirrors their state from RAM, so the
   controls are the original ones. Names come from your ROM; the descriptions
-  are the port's own (`runtime/battledesc.c`). Vehicle battles keep the
-  original windows. Needs the modern-text font.
+  are the port's own (`runtime/battledesc.c`). In a vehicle's battle there
+  is no party: the cockpit's dashboard spans the view and stays still under
+  the battle camera, its monitor's SP readout is redrawn sharp, and the
+  menus lie across a bar at the dashboard's foot -- the vehicle and its SP,
+  Attack / Weapons / Run, the vehicle's two special weapons with their uses
+  left and a line on each, and which enemy to fire at. Needs the
+  modern-text font.
 
 Planned (see `docs/IDEAS.md`): the rest of the sound set synthesized (rarer
 techniques and enemy attacks, the field: doors, chests, stairs).
