@@ -219,9 +219,10 @@ original game, unchanged; **Enhanced** turns on the additions:
   slides along instead of overlapping (`runtime/depth.c`).
 - **Voices** (Sound page: on / off): the party speaks in battle -- a shout
   as they attack, a grunt when hit, a breath as they cast, a cry when they
-  fall, a cheer when they win (`runtime/battlevox.c`). The voices are AI-made
-  placeholders, `res/voices/<name>_<moment>_<n>.wav` for all ten characters;
-  files of your own in the home folder's `voices/` take their place. The
+  fall, a cheer when they win (`runtime/battlevox.c`). The voice lines are made
+  with VoiceDesign, placeholders, `res/voices/<name>_<moment>_<n>.wav` for
+  all ten characters; files of your own in the home folder's `voices/` take
+  their place. The
   same setting plays voiced story scenes from an optional pack in
   `voices/scenes` (`runtime/scenevox.c`: each line is found by the text on
   screen, and a flashback turns the scene to sepia); the pack is not part of

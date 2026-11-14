@@ -5,8 +5,8 @@ A native port of Phantasy Star IV for Windows, macOS, Linux and Android. The gam
 68000 code is translated into C and runs directly on your machine, with
 optional extras: widescreen, modern text and battle menus, battle depth and
 effects, a battle camera, living water and swaying trees, the party's voices
-in battle (AI placeholders for now), the port's own sound effects, a Journal,
-cheats, click/tap to walk.
+in battle (made with VoiceDesign, placeholders for now), the port's own sound
+effects, a Journal, cheats, click/tap to walk.
 
 The sound effects most heard in battle -- blades, claws, guns, the
 techniques, the combination attacks, enemies' blows -- are the port's own,

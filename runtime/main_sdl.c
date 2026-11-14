@@ -1011,6 +1011,8 @@ static void screenshot_any(const uint32_t *pixels, int w, int h, int stride) {
 static uint64_t test_menu_frame, test_capture_frame;
 static int test_menu_settings, test_menu_journal, test_menu_page, test_menu_row;
 static const char *test_menu_script;                                  /* --menu-script */
+static uint64_t menu_script_passes;   /* its steps so far: the launcher's clock under a script (1/60 s a step), so
+                                      * captures animate at the same pace however fast the shots are written */
 static const char *test_shot;                                         /* its shot:FILE, taken at the next present */
 static const char *test_capture_path;
 static struct { uint64_t frame, len; uint8_t keys; } test_keys[32];   /* --test-keys */
@@ -1522,7 +1524,7 @@ static const MenuItem SOUND_ITEMS[] = {
     {"Voice volume", "audio.voices", {0}, {0}, 0, 100, 5, 1,
      "The voices on their own: the party in battle, and the voiced scenes.", apply_audio},
     {"Music", "enhance.music", {"original", "algol"}, {"Original chip", "Algol"}, 0, 0, 0, 1,
-     "Algol: the port's own modern sound chip plays the game's music on new instruments, with rock drums.",
+     "Algol: the port's own modern sound chip plays the game's music: the same songs on new instruments.",
      apply_enhancements},
     {"Voices", "enhance.voices", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "The party shout as they attack, grunt when hit, draw breath as they cast. Your own in the voices folder.",
@@ -3225,6 +3227,7 @@ static void menu_script_step(void) {
     static char shot_path[300];
     if (!p) p = test_menu_script;
     if (!*p) quit(0);
+    menu_script_passes++;
     char tok[300];
     size_t n = strcspn(p, ",");
     snprintf(tok, sizeof tok, "%.*s", (int)n, p);
@@ -3738,7 +3741,8 @@ static void launcher_present(uint64_t t0, float shade) {
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
-    launcher_backdrop(ow, oh, S, (float)(SDL_GetTicks() - t0) / 1000.0f, &L, menu_screen != MENU_LAUNCHER);
+    launcher_backdrop(ow, oh, S, test_menu_script ? (float)menu_script_passes / 60.0f : (float)(SDL_GetTicks() - t0) / 1000.0f,
+                      &L, menu_screen != MENU_LAUNCHER);
     menu_draw();
     if (shade > 0.0f) {
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
