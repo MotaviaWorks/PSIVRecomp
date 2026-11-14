@@ -68,18 +68,20 @@ typedef struct {
 } Inst;
 
 enum { I_BASS, I_LEAD, I_BRASS, I_STRINGS, I_PLUCK, I_GUITAR, I_BELL, I_ORGAN, I_KEYS, I_CHIP, N_INST };
+/* (levels 2026-11-13: brass, bell, guitar and the lead down, strings, bass and the chip voices up, part of the way to
+ * the game's own balance -- each instrument's share of the mix against the chips' channels, over twelve songs) */
 static const Inst INST[N_INST] = {
     /* name      wave     uni det   wid   sub    a       d      s      r       cut    trk   q      hp    famt  fd     fs     vib    vr    vd     ratio idx   idec   drive lvl    rev    dly    cho    glide */
-    {"bass",    W_SAW,    2,  7.0f, 0.10f, 0.45f, 0.003f, 0.30f, 0.65f, 0.050f, 700,   0.55f, 1.10f, 30,   2.2f, 0.16f, 0.25f, 0.00f, 0.0f, 0.00f, 0,    0,    0,     1.6f, 0.26f, 0.04f, 0.00f, 0.00f, 0.02f},
-    {"lead",    W_SAW,    5, 16.0f, 0.65f, 0.00f, 0.008f, 0.40f, 0.85f, 0.160f, 7000,  0.45f, 0.90f, 160,  0.7f, 0.30f, 0.60f, 0.10f, 5.5f, 0.30f, 0,    0,    0,     0.5f, 0.40f, 0.22f, 0.16f, 0.00f, 0.03f},
-    {"brass",   W_SAW,    3, 11.0f, 0.50f, 0.00f, 0.030f, 0.45f, 0.80f, 0.140f, 3400,  0.70f, 0.80f, 130,  1.4f, 0.30f, 0.55f, 0.08f, 5.0f, 0.30f, 0,    0,    0,     0.7f, 0.40f, 0.25f, 0.05f, 0.20f, 0.00f},
-    {"strings", W_SAW,    6, 18.0f, 0.90f, 0.00f, 0.110f, 0.60f, 0.90f, 0.450f, 4200,  0.40f, 0.70f, 170,  0.3f, 0.60f, 0.80f, 0.06f, 5.0f, 0.40f, 0,    0,    0,     0.0f, 0.26f, 0.35f, 0.00f, 0.60f, 0.00f},
+    {"bass",    W_SAW,    2,  7.0f, 0.10f, 0.45f, 0.003f, 0.30f, 0.65f, 0.050f, 700,   0.55f, 1.10f, 30,   2.2f, 0.16f, 0.25f, 0.00f, 0.0f, 0.00f, 0,    0,    0,     1.6f, 0.30f, 0.04f, 0.00f, 0.00f, 0.02f},
+    {"lead",    W_SAW,    5, 16.0f, 0.65f, 0.00f, 0.008f, 0.40f, 0.85f, 0.160f, 7000,  0.45f, 0.90f, 160,  0.7f, 0.30f, 0.60f, 0.10f, 5.5f, 0.30f, 0,    0,    0,     0.5f, 0.34f, 0.22f, 0.16f, 0.00f, 0.03f},
+    {"brass",   W_SAW,    3, 11.0f, 0.50f, 0.00f, 0.030f, 0.45f, 0.80f, 0.140f, 3400,  0.70f, 0.80f, 130,  1.4f, 0.30f, 0.55f, 0.08f, 5.0f, 0.30f, 0,    0,    0,     0.7f, 0.31f, 0.25f, 0.05f, 0.20f, 0.00f},
+    {"strings", W_SAW,    6, 18.0f, 0.90f, 0.00f, 0.110f, 0.60f, 0.90f, 0.450f, 4200,  0.40f, 0.70f, 170,  0.3f, 0.60f, 0.80f, 0.06f, 5.0f, 0.40f, 0,    0,    0,     0.0f, 0.36f, 0.35f, 0.00f, 0.60f, 0.00f},
     {"pluck",   W_SAW,    2,  6.0f, 0.40f, 0.00f, 0.002f, 0.30f, 0.00f, 0.180f, 1400,  0.80f, 1.00f, 140,  3.0f, 0.11f, 0.00f, 0.00f, 0.0f, 0.00f, 0,    0,    0,     0.4f, 0.55f, 0.22f, 0.14f, 0.10f, 0.00f},
-    {"guitar",  W_SAW,    2,  9.0f, 0.35f, 0.00f, 0.002f, 0.10f, 0.20f, 0.040f, 5200,  0.15f, 1.40f, 110,  0.6f, 0.06f, 0.30f, 0.00f, 0.0f, 0.00f, 0,    0,    0,     3.0f, 0.30f, 0.12f, 0.06f, 0.00f, 0.00f},
-    {"bell",    W_FM,     1,  0.0f, 0.30f, 0.00f, 0.001f, 1.20f, 0.00f, 0.700f, 12000, 0.00f, 0.70f, 200,  0.0f, 0.00f, 0.00f, 0.00f, 0.0f, 0.00f, 3.5f, 2.2f, 0.60f, 0.0f, 0.36f, 0.35f, 0.15f, 0.00f, 0.00f},
+    {"guitar",  W_SAW,    2,  9.0f, 0.35f, 0.00f, 0.002f, 0.10f, 0.20f, 0.040f, 5200,  0.15f, 1.40f, 110,  0.6f, 0.06f, 0.30f, 0.00f, 0.0f, 0.00f, 0,    0,    0,     3.0f, 0.24f, 0.12f, 0.06f, 0.00f, 0.00f},
+    {"bell",    W_FM,     1,  0.0f, 0.30f, 0.00f, 0.001f, 1.20f, 0.00f, 0.700f, 12000, 0.00f, 0.70f, 200,  0.0f, 0.00f, 0.00f, 0.00f, 0.0f, 0.00f, 3.5f, 2.2f, 0.60f, 0.0f, 0.28f, 0.35f, 0.15f, 0.00f, 0.00f},
     {"organ",   W_ORGAN,  1,  0.0f, 0.40f, 0.00f, 0.004f, 0.10f, 1.00f, 0.060f, 7000,  0.20f, 0.70f, 90,   0.0f, 0.00f, 0.00f, 0.06f, 6.0f, 0.20f, 0,    0,    0,     0.3f, 0.34f, 0.25f, 0.00f, 0.50f, 0.00f},
     {"keys",    W_FM,     2,  5.0f, 0.40f, 0.00f, 0.002f, 0.90f, 0.35f, 0.300f, 9000,  0.00f, 0.70f, 120,  0.0f, 0.00f, 0.00f, 0.05f, 5.0f, 0.30f, 1.0f, 1.6f, 0.35f, 0.0f, 0.46f, 0.28f, 0.08f, 0.25f, 0.00f},
-    {"chip",    W_SQUARE, 2,  9.0f, 0.50f, 0.00f, 0.003f, 0.20f, 1.00f, 0.040f, 5200,  0.50f, 0.80f, 200,  0.6f, 0.20f, 0.50f, 0.00f, 0.0f, 0.00f, 0,    0,    0,     0.0f, 0.21f, 0.22f, 0.20f, 0.15f, 0.010f},
+    {"chip",    W_SQUARE, 2,  9.0f, 0.50f, 0.00f, 0.003f, 0.20f, 1.00f, 0.040f, 5200,  0.50f, 0.80f, 200,  0.6f, 0.20f, 0.50f, 0.00f, 0.0f, 0.00f, 0,    0,    0,     0.0f, 0.23f, 0.22f, 0.20f, 0.15f, 0.010f},
 };
 static float k_d[N_INST], k_r[N_INST], k_fd[N_INST];
 static float uni_ratio[N_INST][8], uni_l[N_INST][8], uni_r[N_INST][8];
@@ -1306,8 +1308,29 @@ static unsigned solo_mask(void) {
     return mask;
 }
 
+/* PSIV_ALGOL_METER=1: each channel's energy, and how much of it each instrument made, printed when
+ * the program ends -- to set the instruments' levels against the game's own mix (the chips' channels
+ * soloed with PSIV_CHANNELS, the same numbering) */
+static int meter_on = -1;
+static double meter_ch[12], meter_inst[12][N_INST];
+static void meter_print(void) {
+    printf("algol meter: channel energy");
+    for (int c = 0; c < 12; c++) printf(" %.6g", meter_ch[c]);
+    printf("\n");
+    for (int c = 0; c < 10; c++) {
+        printf("algol meter: ch %d", c);
+        for (int i = 0; i < N_INST; i++)
+            if (meter_inst[c][i] > 0.0) printf(" %s=%.6g", INST[i].name, meter_inst[c][i]);
+        printf("\n");
+    }
+}
+
 void algol_render(float *left, float *right) {
     if (!ready) silence();
+    if (meter_on < 0) {
+        meter_on = getenv("PSIV_ALGOL_METER") != NULL;
+        if (meter_on) atexit(meter_print);
+    }
     float l = 0.0f, r = 0.0f, rev = 0.0f, dly = 0.0f, cho = 0.0f;
     unsigned solo = solo_mask();
     for (int i = 0; i < NVOICES; i++) {
@@ -1316,6 +1339,11 @@ void algol_render(float *left, float *right) {
         float vl = 0.0f, vr = 0.0f, vrev = 0.0f, vdly = 0.0f, vcho = 0.0f;
         if (i == V_NOISE) noise_run(v, &vl, &vr, &vrev);
         else voice_run(v, &vl, &vr, &vrev, &vdly, &vcho);
+        if (meter_on) {
+            double e = (double)vl * vl + (double)vr * vr;
+            meter_ch[i] += e;
+            if (i != V_NOISE && v->inst >= 0 && v->inst < N_INST) meter_inst[i][v->inst] += e;
+        }
         if (!(solo >> i & 1)) continue;
         l += vl; r += vr; rev += vrev; dly += vdly; cho += vcho;
     }
@@ -1338,6 +1366,7 @@ void algol_render(float *left, float *right) {
         float dl = 0.0f, dr = 0.0f, dm = 0.0f;
         int added = drums[i].added;
         drum_run(&drums[i], &dl, &dr, &dm);
+        if (meter_on) meter_ch[added ? 11 : 10] += (double)dl * dl + (double)dr * dr;
         if (solo >> (added ? 11 : 10) & 1) { bl += dl; br += dr; room += dm; }
     }
     {
