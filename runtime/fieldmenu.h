@@ -29,7 +29,9 @@
  * game's own tiles. Over the screens above, a message of a line or two
  * takes the foot's place and a question or a list comes up in the middle
  * (the Telepipe's places, the order the party stands in, yes or no); Talk
- * keeps the game's layout.
+ * keeps the game's layout. The Start button's menu (the game's SYS window)
+ * is laid out anew the same way: Save, with the three slots of the page of
+ * saves and what each holds; the message and battle speeds; the buttons.
  *
  * Where a row is laid out across that the game has one under the other (the
  * members on the equipment, technique, skill and status screens, the
@@ -49,6 +51,9 @@ int  fieldmenu_enabled(void);
 void fieldmenu_frame(void);
 /* the menu is up this frame: the front end draws it */
 int  fieldmenu_active(void);
+/* ... and it is the Start button's menu, which shows the page of saves itself (savepages_note's
+ * line is not needed over it) */
+int  fieldmenu_system_up(void);
 /* The pad the game sees. A row laid out across (the party on the equipment
  * screen, the macros' letters) is steered with Left and Right: while the
  * game's cursor is in it they are handed over as Up and Down, which its own

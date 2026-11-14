@@ -5,9 +5,11 @@
 #include "battledesc.h"
 #include "bus.h"
 #include "hdtext.h"
+#include "savepages.h"
 #include "uikit.h"
 #include "vdp.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -98,6 +100,18 @@
 #define R_NOTHING   0x05F460u     /* "No equippable item." */
 #define R_FULL      0x05F53Au     /* nothing can be taken off: the pack is full */
 #define R_GENERIC   0x0697E4u
+/* the Start button's menu (the game's SYS window): its group and its windows' routines */
+#define WINGROUP_SYSTEM 0x069400u
+#define R_SYS        0x0591DAu    /* SAVE / MESSAGE / BTL SPD / BUTTONS */
+#define R_SYS_SAVE   0x059326u    /* the three slots */
+#define R_SYS_MSG    0x059892u    /* the message speed, FST 1-5 SLW */
+#define R_SYS_BTL    0x059992u    /* the battle speed, the same */
+#define R_SYS_BTN    0x059A92u    /* the six button layouts */
+#define R_SYS_YESNO  0x0596D6u    /* "Previous Data will be erased. OK?" */
+#define R_SYS_NOTE   0x059848u    /* its line of words */
+#define MESSAGE_SPEED 0xF441u     /* 0 fast .. 4 slow (the low byte of Message_Speed) */
+#define BATTLE_SPEED  0xF443u
+#define BUTTON_LAYOUT 0xF43Fu     /* Button_Mappings_Index, 0-5 */
 #define R_TECH_WHO      0x05FDEEu /* techniques: whose, the list, on whom */
 #define R_TECH_LIST     0x06002Au
 #define R_TECH_TARGET   0x060552u
@@ -151,7 +165,8 @@
 #define T_BOX    0x6E7            /* a choice's checkbox */
 #define T_CURSOR 0x6E8            /* the red one: the cursor's sprite */
 
-enum { SCR_MAIN, SCR_EQUIP, SCR_ITEMS, SCR_MACROS, SCR_TECHS, SCR_SKILLS, SCR_STATUS, SCR_SHOP, SCR_CHEST, SCR_PLAIN };
+enum { SCR_MAIN, SCR_EQUIP, SCR_ITEMS, SCR_MACROS, SCR_TECHS, SCR_SKILLS, SCR_STATUS, SCR_SHOP, SCR_CHEST, SCR_PLAIN,
+       SCR_SYSTEM };
 
 /* a window the game has open, as it stands in the plane */
 typedef struct {
@@ -195,6 +210,7 @@ static void aside(const char *why, unsigned a, unsigned b) {
 }
 
 void fieldmenu_set_enabled(int on) { enabled = on; }
+int  fieldmenu_system_up(void) { return active && screen == SCR_SYSTEM; }
 int  fieldmenu_enabled(void) { return enabled; }
 int  fieldmenu_active(void) { return active; }
 
@@ -203,7 +219,7 @@ static unsigned r16(unsigned a) { return ui_ram16(a); }
 
 static uint32_t routine_of(unsigned index) { return ui_rom32(group + index * 8u + 4u); }
 
-enum { K_MAIN, K_EQUIP, K_ITEMS, K_MACROS, K_TECHS, K_SKILLS, K_STATUS, K_SHOP, K_NOTE, K_OTHER };
+enum { K_MAIN, K_EQUIP, K_ITEMS, K_MACROS, K_TECHS, K_SKILLS, K_STATUS, K_SHOP, K_NOTE, K_OTHER, K_SYSTEM };
 static int kind_of(uint32_t r) {
     switch (r) {
     case R_MENU: case R_MESETA: case R_OVERVIEW: return K_MAIN;
@@ -222,6 +238,8 @@ static int kind_of(uint32_t r) {
     case R_TECH_NOTE: case R_RYUKA: case R_TECH_TELEPORT: case R_TECH_USED: case R_SKILL_NOTE: case R_SKILL_USED:
     case R_ORDER: case R_ORDER_ALONE: return K_NOTE;
     case R_SHOP_MESETA: case R_SHOP_MSG: case R_SHOP_BUYSELL: case R_SHOP_BUY: case R_SHOP_SELL: return K_SHOP;
+    case R_SYS: case R_SYS_SAVE: case R_SYS_MSG: case R_SYS_BTL: case R_SYS_BTN: case R_SYS_YESNO: case R_SYS_NOTE:
+        return K_SYSTEM;
     case R_SHOP_BUY_Q: case R_SHOP_SELL_Q: case R_REST_Q:
     case R_CHEST_FOUND: case R_CHEST_DECIDE: case R_CHEST_CONFIRM: case R_CHEST_LIST: case R_CHEST_WHO: case R_CHEST_MSG:
         return K_NOTE;
@@ -266,6 +284,12 @@ static void hit_cell(float x0, float x1, float base, int cell_row) {
     if (nhits >= (int)(sizeof hits / sizeof hits[0])) return;
     hits[nhits++] = (Hit){x0, base - 8.6f, x1, base + 3.6f, 0, 0, 0, 0, 0, cell_row, PAD_UP, PAD_DOWN};
 }
+/* a hit of any height (a save's card); target -1: a press of `dec` and no more (a page's arrow) */
+static void hit_box(float x0, float y0, float x1, float y1, uint32_t routine, unsigned var, int target, uint8_t dec,
+                    uint8_t inc) {
+    if (nhits >= (int)(sizeof hits / sizeof hits[0])) return;
+    hits[nhits++] = (Hit){x0, y0, x1, y1, routine, var, 0, target, 0, -1, dec, inc};
+}
 /* (the party's rows and the members across the top serve several screens: whose cursor they are) */
 static uint32_t party_routine, strip_routine;
 static unsigned strip_var;
@@ -295,6 +319,7 @@ int fieldmenu_click(float fx, float fy, int right) {
         const Hit *h = &hits[i];
         if (fx < h->x0 || fx >= h->x1 || fy < h->y0 || fy >= h->y1) continue;
         if (h->cell_row < 0 && routine_of(r16(WINDOW_INDEX)) != h->routine) return 1;   /* not where the cursor is: nothing */
+        if (h->cell_row < 0 && h->target < 0) { pulse = 1; pulse_key = h->dec; return 1; }   /* a press: a page's arrow */
         drive.h = *h;
         drive.on = 1;
         drive.hold = drive.rest = drive.presses = drive.waited = 0;
@@ -356,7 +381,7 @@ void fieldmenu_frame(void) {
     int n = (int)r8(WINDOWS_OPENED);
     uint32_t g = ui_ram32(WIN_GROUP);
     if (!enabled || !ui_ready() || r16(GAME_MODE_INDEX) != 0x0C || n < 1
-        || (g != WINGROUP_MENU && g != WINGROUP_SHOP && g != WINGROUP_CHEST)) {
+        || (g != WINGROUP_MENU && g != WINGROUP_SHOP && g != WINGROUP_CHEST && g != WINGROUP_SYSTEM)) {
         still_ok = 0;                                    /* the menu is not up: the next one takes its own picture */
         return;
     }
@@ -422,7 +447,8 @@ void fieldmenu_frame(void) {
             if (in_pal[k] > in_pal[w->usual]) w->usual = k;
     }
     nwins = n;
-    screen = group == WINGROUP_CHEST ? SCR_CHEST : kinds >> K_OTHER & 1 ? SCR_PLAIN : group == WINGROUP_SHOP ? SCR_SHOP
+    screen = group == WINGROUP_CHEST ? SCR_CHEST : kinds >> K_OTHER & 1 ? SCR_PLAIN
+           : group == WINGROUP_SYSTEM ? SCR_SYSTEM : group == WINGROUP_SHOP ? SCR_SHOP
            : kinds >> K_EQUIP & 1 ? SCR_EQUIP : kinds >> K_ITEMS & 1 ? SCR_ITEMS
            : kinds >> K_MACROS & 1 ? SCR_MACROS : kinds >> K_TECHS & 1 ? SCR_TECHS : kinds >> K_SKILLS & 1 ? SCR_SKILLS
            : kinds >> K_STATUS & 1 ? SCR_STATUS : SCR_MAIN;
@@ -456,7 +482,8 @@ void fieldmenu_frame(void) {
     uint32_t at = routine_of(r16(WINDOW_INDEX));
     sideways = (screen == SCR_EQUIP && at == R_MEMBERS) || (screen == SCR_MACROS && at == R_MACRO_LETTERS)
             || (screen == SCR_TECHS && at == R_TECH_WHO) || (screen == SCR_SKILLS && at == R_SKILL_WHO)
-            || (screen == SCR_STATUS && at == R_STATUS_WHO);
+            || (screen == SCR_STATUS && at == R_STATUS_WHO)
+            || (screen == SCR_SYSTEM && at == R_SYS_YESNO);      /* (its yes and no stand side by side) */
 
     /* the game's windows out of the picture: under each, what it saved when
      * it opened -- the last opened first, so the first one's wins */
@@ -1600,6 +1627,181 @@ static void draw_equip(float x0, float y0, float x1, float y1) {
     foot(x0, x1, y1, a, b);
 }
 
+/* ---- the Start button's menu (the game's SYS window): save, the two speeds, the buttons.
+ * The commands down the left in full; beside them what the one under the cursor is about: the
+ * three slots of the page of saves in memory, each with what it holds (read from the battery
+ * save itself: the party, the leader's level, the world, the meseta), the message or the battle
+ * speed as five steps from fast to slow, the six ways the A, B and C buttons can be laid out. At
+ * the foot the game's own words when it has any up ("Previous Data will be erased. OK?", with its
+ * yes and no beside them), else a line on the command. */
+static void thousands(unsigned long v, char *out, size_t n) {
+    char raw[24];
+    int len = snprintf(raw, sizeof raw, "%lu", v), o = 0;
+    for (int i = 0; i < len && o < (int)n - 2; i++) {
+        if (i && (len - i) % 3 == 0) out[o++] = ',';
+        out[o++] = raw[i];
+    }
+    out[o] = 0;
+}
+
+static void draw_system(float x0, float y0, float x1, float y1) {
+    static const char *const NAMES[4] = {"Save", "Message speed", "Battle speed", "Buttons"};
+    static const char *const HELP[4] = {
+        "Save the game in one of these slots.",
+        "How fast the words appear when someone speaks.",
+        "How fast a battle's messages go by.",
+        "What the A, B and C buttons do.",
+    };
+    static const char *const WORLDS[6] = {"Motavia", "Dezolis", "Rykros", "Zelan", "Kuran", "The Air Castle"};
+    uint32_t at = routine_of(r16(WINDOW_INDEX));
+    int sel = (int)r8(OPTION_1) & 3;
+    float cmd = 84.0f, rx0 = x0 + cmd + 3.0f, py1 = y1 - 30.0f;
+    char t[96];
+
+    /* the commands */
+    win(x0, y0, x0 + cmd, y0 + 24.0f + 4 * 13.0f);
+    text(x0 + 9.0f, y0 + 14.0f, "System", SOFT);
+    for (int i = 0; i < 4; i++) {
+        float base = y0 + 29.0f + (float)i * 13.0f;
+        uint32_t c = WHITE;
+        if (at == R_SYS) hit(x0 + 4.0f, x0 + cmd - 4.0f, base, R_SYS, OPTION_1, i, PAD_UP, PAD_DOWN, 0, 0);
+        if (i == sel) {
+            bar(x0 + 4.0f, x0 + cmd - 4.0f, base, at == R_SYS ? BAR : BAR_OFF);
+            if (at == R_SYS) c = NAVY;
+        }
+        text(x0 + 9.0f, base, NAMES[i], c);
+    }
+
+    /* what the command is about */
+    win(rx0, y0, x1, py1);
+    text(rx0 + 9.0f, y0 + 14.0f, NAMES[sel], SOFT);
+    if (sel == 0) {
+        int saving = at == R_SYS_SAVE || at == R_SYS_YESNO, cur = (int)r8(OPTION_2), page = savepages_page();
+        if (savepages_count() > 1) {                     /* which of the twelve these are; Left / Right: the others */
+            snprintf(t, sizeof t, "%d to %d of %d", page * 3 + 1, page * 3 + 3, savepages_count() * 3);
+            text_right(x1 - 30.0f, y0 + 14.0f, t, SOFT);
+            ui_triangle(&cv, (x1 - 22.0f) * S, (y0 + 11.2f) * S, 5.0f * S, 3, saving ? WHITE : FAINT, 255);
+            ui_triangle(&cv, (x1 - 12.0f) * S, (y0 + 11.2f) * S, 5.0f * S, 2, saving ? WHITE : FAINT, 255);
+            if (at == R_SYS_SAVE) {
+                hit_box(x1 - 28.0f, y0 + 3.0f, x1 - 17.0f, y0 + 19.0f, R_SYS_SAVE, 0, -1, PAD_LEFT, PAD_LEFT);
+                hit_box(x1 - 17.0f, y0 + 3.0f, x1 - 5.0f, y0 + 19.0f, R_SYS_SAVE, 0, -1, PAD_RIGHT, PAD_RIGHT);
+            }
+        }
+        float top = y0 + 21.0f, gap = 3.0f, ch = (py1 - 5.0f - top - 2.0f * gap) / 3.0f, cx0 = rx0 + 5.0f, cx1 = x1 - 5.0f;
+        for (int k = 0; k < 3; k++) {
+            float c0 = top + (float)k * (ch + gap), c1 = c0 + ch, mid = (c0 + c1) / 2.0f;
+            int on = saving && k == cur;
+            const uint8_t *slot = &bus_sram[0x100 + k * 0xA00];
+            ui_round_rect(&cv, cx0 * S, c0 * S, cx1 * S, c1 * S, 2.5f * S, on ? 0x3A56C0 : 0x24388E, on ? 235 : 150);
+            if (on) ui_round_frame(&cv, cx0 * S, c0 * S, cx1 * S, c1 * S, 2.5f * S, fmaxf(1.0f, 0.9f * S), BAR, 255);
+            if (at == R_SYS_SAVE) hit_box(cx0, c0, cx1, c1, R_SYS_SAVE, OPTION_2, k, PAD_UP, PAD_DOWN);
+            snprintf(t, sizeof t, "%d", page * 3 + k + 1);
+            ui_text_center(&cv, (cx0 + 11.0f) * S, (mid + 3.4f) * S, 8.0f * S, t, on ? WHITE : SOFT, 255);
+            if (!savepages_saved(bus_sram, k)) {
+                text(cx0 + 24.0f, mid + 2.6f, "Empty", FAINT);
+                continue;
+            }
+            /* the party's portraits, then the leader and the world, the meseta at the right
+             * (loaded here too: nothing else may have yet -- no Load game, no cutscene panels) */
+            ui_portraits_init();
+            int ids[5], n = 0;
+            for (int i = 0; i < 5; i++)
+                if (slot[0x30A + i] < 11) ids[n++] = slot[0x30A + i];
+            float ps = fminf(26.0f, ch - 8.0f), room = cx1 - cx0 - 24.0f - 6.0f - 84.0f;
+            if ((ps + 2.0f) * 5.0f > room) ps = room / 5.0f - 2.0f;
+            float px = cx0 + 24.0f;
+            for (int i = 0; i < n && ps >= 10.0f; i++) {
+                const UiImage *im = ui_portrait(ids[i]);
+                ui_round_rect(&cv, px * S, (mid - ps / 2.0f) * S, (px + ps) * S, (mid + ps / 2.0f) * S, 1.0f * S, 0x0C1440, 255);
+                if (im) ui_image(&cv, im, px * S, (mid - ps / 2.0f) * S, ps * S, 0, 255);
+                px += ps + 2.0f;
+            }
+            float tx = cx0 + 24.0f + (ps >= 10.0f ? 5.0f * (ps + 2.0f) + 5.0f : 0.0f);
+            if (n) {
+                text(tx, mid - 2.2f, UI_CHAR_NAMES[ids[0]], WHITE);
+                snprintf(t, sizeof t, "LV %u", (unsigned)(slot[0x400 + ids[0] * 0x80 + 8] << 8 | slot[0x400 + ids[0] * 0x80 + 9]));
+                text_right(cx1 - 7.0f, mid - 2.2f, t, WHITE);
+            }
+            text(tx, mid + 9.0f, slot[0x300] < 6 ? WORLDS[slot[0x300]] : "", SOFT);
+            thousands((unsigned long)slot[0x338] << 24 | (unsigned long)slot[0x339] << 16 | (unsigned long)slot[0x33A] << 8
+                      | slot[0x33B], t, sizeof t - 5);
+            strcat(t, " mst");
+            text_right(cx1 - 7.0f, mid + 9.0f, t, SOFT);
+        }
+    } else if (sel == 1 || sel == 2) {
+        uint32_t mine = sel == 1 ? R_SYS_MSG : R_SYS_BTL;
+        unsigned var = sel == 1 ? MESSAGE_SPEED : BATTLE_SPEED;
+        int cur = (int)r8(var), focus = at == mine;
+        float base = y0 + 40.0f, x = rx0 + 12.0f;
+        x += text(x, base, "Fast", SOFT) + 8.0f;
+        for (int i = 0; i < 5; i++) {
+            float bw = 22.0f;
+            if (focus) hit(x, x + bw, base, mine, var, i, PAD_LEFT, PAD_RIGHT, 0, 0);
+            if (i == cur) bar(x, x + bw, base, focus ? BAR : BAR_OFF);
+            snprintf(t, sizeof t, "%d", i + 1);
+            text_mid(x + bw / 2.0f, base, t, i == cur && focus ? NAVY : WHITE);
+            x += bw + 2.0f;
+        }
+        text(x + 6.0f, base, "Slow", SOFT);
+        /* the other speed, as it is set: both are in view */
+        int other = (int)r8(sel == 1 ? BATTLE_SPEED : MESSAGE_SPEED);
+        snprintf(t, sizeof t, "%s: %d of 5", NAMES[sel == 1 ? 2 : 1], other + 1);
+        text(rx0 + 12.0f, base + 22.0f, t, FAINT);
+    } else {
+        /* the layouts, in the game's order: what A, B and C do */
+        static const uint8_t LAYOUT[6][3] = {{0, 1, 2}, {2, 1, 0}, {0, 2, 1}, {1, 2, 0}, {1, 0, 2}, {2, 0, 1}};
+        static const char *const DOES[3] = {"Camp menu", "Cancel", "Talk"};
+        int focus = at == R_SYS_BTN, now = (int)r8(BUTTON_LAYOUT), cur = focus ? (int)r8(OPTION_3) : now;
+        float colw = fminf(74.0f, (x1 - rx0 - 24.0f) / 3.0f), tx = rx0 + 12.0f;
+        for (int b = 0; b < 3; b++) {
+            static const char *const KEYS[3] = {"A", "B", "C"};
+            text(tx + (float)b * colw, y0 + 30.0f, KEYS[b], SOFT);
+        }
+        for (int i = 0; i < 6; i++) {
+            float base = y0 + 44.0f + (float)i * 13.0f;
+            int on = i == cur;
+            if (focus) hit(rx0 + 5.0f, x1 - 5.0f, base, R_SYS_BTN, OPTION_3, i, PAD_UP, PAD_DOWN, 0, 0);
+            if (on) bar(rx0 + 5.0f, x1 - 5.0f, base, focus ? BAR : BAR_OFF);
+            for (int b = 0; b < 3; b++)
+                text(tx + (float)b * colw, base, DOES[LAYOUT[i][b]], on && focus ? NAVY : WHITE);
+            if (i == now && focus && !on) text_right(x1 - 9.0f, base, "now", SOFT);
+        }
+    }
+
+    /* the foot: the game's own words, if it has a line up; else what the command is for */
+    char said[200] = "";
+    for (int i = 0; i < nwins; i++) {
+        if (wins[i].routine != R_SYS_NOTE) continue;
+        for (int cy = 0, len = 0; cy < wins[i].h - 2 && cy < 28; cy++) {
+            char line[128];
+            if (!row_text(&wins[i], cy, line, (int)sizeof line)) continue;
+            len += snprintf(said + len, sizeof said - (size_t)len, "%s%s", len ? " " : "", line);
+            if (len >= (int)sizeof said - 1) break;
+        }
+    }
+    if (!strncmp(said, "Save in number", 14)) snprintf(said, sizeof said, "Save in which slot?");
+    else if (said[0] >= '1' && said[0] <= '3' && !strncmp(said + 1, "-File has been saved", 20))    /* "2-File has been saved." */
+        snprintf(said, sizeof said, "Saved in slot %d.", savepages_page() * 3 + (said[0] - '0'));
+    else if (!strncmp(said, "Choose message speed", 20) || !strncmp(said, "Choose battle speed", 19))
+        snprintf(said, sizeof said, "Left and Right change it; it is set as you go.");
+    else if (!strncmp(said, "Choose button settings", 22)) snprintf(said, sizeof said, "Choose what A, B and C do.");
+    else if (!strncmp(said, "Previous Data", 13)) memcpy(said, "Previous data", 13);
+    foot(rx0, x1, y1, said[0] ? said : HELP[sel],
+         at == R_SYS_SAVE && savepages_count() > 1 ? "Left and Right: the other slots." : NULL);
+    if (at == R_SYS_YESNO) {                             /* its yes and no, at the foot's right */
+        static const char *const YN[2] = {"Yes", "No"};
+        int cur = (int)r8(OPTION_3) & 1;
+        float x = x1 - 62.0f, base = y1 - 16.6f;
+        for (int i = 0; i < 2; i++) {
+            float bw = 26.0f;
+            hit(x, x + bw, base, R_SYS_YESNO, OPTION_3, i, PAD_UP, PAD_DOWN, 0, 0);
+            if (i == cur) bar(x, x + bw, base, BAR);
+            text_mid(x + bw / 2.0f, base, YN[i], i == cur ? NAVY : WHITE);
+            x += bw + 2.0f;
+        }
+    }
+}
+
 void fieldmenu_draw(uint32_t *out, int stride, int scale, int w, int h) {
     if (!active || !out || scale < 1) return;
     int ow = w * scale, oh = h * scale;
@@ -1651,6 +1853,8 @@ void fieldmenu_draw(uint32_t *out, int stride, int scale, int w, int h) {
     float m = 5.0f, cmd = 84.0f, W = (float)w, H = (float)h, rx0 = m + cmd + 3.0f;
     if (screen == SCR_SHOP) {
         draw_shop(m, m, W - m, H - m);
+    } else if (screen == SCR_SYSTEM) {
+        draw_system(m, m, W - m, H - m);
     } else if (screen != SCR_PLAIN && screen != SCR_CHEST) {
         draw_commands(m, m, m + cmd, (int)r8(OPTION_1), screen == SCR_MAIN && routine_of(r16(WINDOW_INDEX)) == R_MENU);
         draw_meseta(m, H - m, m + cmd);
