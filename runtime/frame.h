@@ -46,8 +46,11 @@ void frame_lag_vint(void);
  * the game's first instructions do and asks it for a song (its ID, as the
  * game's Sound_Index takes it); frame_song_tick then runs one of its ticks
  * and hands the frame's sound to platform_audio -- 59.92 of them a second.
- * bus_init again before the game itself is started. */
+ * frame_song_request asks the running driver for another sound (a sound
+ * effect over the song: the launcher's own). bus_init again before the game
+ * itself is started. */
 void frame_song_start(int id);
+void frame_song_request(int id);
 void frame_song_tick(void);
 
 /* Lag VInts to run right after this frame's VInt (reference replay only). */

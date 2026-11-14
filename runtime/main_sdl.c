@@ -51,6 +51,7 @@
 #include "perf.h"
 #include "par.h"
 #include "savepages.h"
+#include "autosave.h"
 #include "rewind.h"
 #include "weather.h"
 #include "fieldfx.h"
@@ -249,6 +250,7 @@ static int voicepack_install(const char *path, char *err, size_t errn) {
 
 /* a voice pack's .zip dropped into the home folder (or beside the program)
  * installs itself at the start, once: 1 if one did (and is loaded) */
+static int quip_pending;                       /* a pack unpacked itself at the start: a quip in the launcher */
 static int voicepack_nearby(void) {
     char dirs[2][1100], mark[1200], last[700] = "";
     int nd = 0;
@@ -275,6 +277,7 @@ static int voicepack_nearby(void) {
                 f = fopen(mark, "wb");
                 if (f) { fputs(id, f); fclose(f); }
                 SDL_Log("voice pack: installed %s (%d pages)", path, pages);
+                quip_pending = 1;
                 SDL_free(names);
                 return 1;
             }
@@ -389,6 +392,7 @@ static Setting settings[] = {
     {"enhance.mode", "enhanced", "enhanced = the port's additions below are on; classic = the original game, unchanged (Esc menu > Settings)"},
     {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
+    {"enhance.autosave", "on", "auto save: the game saved for you as you go -- each time the party comes to another place, and every few minutes on the way -- in a save of its own (saves/psiv-auto.srm) that the launcher's Continue and Load game take; your own saves are never touched: on / off"},
     {"enhance.rewind", "on", "rewind: Backspace or the left shoulder fades to white and back to about ten seconds before (a state kept every ten seconds, the last two minutes): on / off"},
     {"enhance.trees", "on", "trees on the field sway in the breeze, light flickering through their leaves: on / off"},
     {"enhance.water", "on", "the field's living water: ripples, light, glints and foam drawn over the sea, rivers and pools: on / off"},
@@ -399,6 +403,7 @@ static Setting settings[] = {
     {"cheat.exp", "1", "cheat: experience from battles: 1 normal, 2 double, 4 quadruple"},
     {"cheat.weak", "off", "cheat: enemies have 1 HP: on / off"},
     {"enhance.voices", "on", "the party's voices in battle: shouts as they attack, grunts when hit, a breath as they cast: on / off"},
+    {"enhance.scene_voices", "on", "the voiced story scenes, from the optional voice pack once it is installed: on / off"},
     {"enhance.battle_camera", "on", "when an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping (needs battle depth): on / off"},
     {"enhance.battle_weather", "1", "battle weather by place: rain and storms on Motavia's grass, beaches and sea, snow on Dezolis, mist clouds on Rykros, debris in space: 0 off, 1 light, 2 heavy"},
     {"enhance.battle_weather_sound", "on", "the rain and thunder heard with the battle weather: on / off"},
@@ -408,7 +413,7 @@ static Setting settings[] = {
     {"enhance.music", "original", "music: algol = the port's modern sound chip plays the game's music (new instruments, drums and reverb); original = the YM2612 and PSG"},
     {"enhance.click_walk", "on", "mouse: on = a click on the field walks the party there (a person or a chest: up to it, then C to talk or open); right click stops; with text up a click is C, a right click B; touch: a tap is a click; off = clicks and taps only work the system menu"},
     {"enhance.diagonal", "on", "diagonal walking: on = two directions held walk the party diagonally, a cell at a time (not through a wall's corner; doors, exits and people are still met straight on); off = the game's four directions"},
-    {"enhance.custom_music", "on", "your music: on = audio files in the music folder play in place of the game's songs (music/8F.wav, or named in music/music.ini; see runtime/music.h); off = the game's"},
+    {"enhance.custom_music", "on", "music pack: on = audio files in the music folder play in place of the game's songs (music/8F.wav, or named in music/music.ini; see runtime/music.h); off = the game's"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
     {"enhance.field_menu", "modern", "the field menu: modern = the port's own, on the whole screen (the main menu and the equipment screen so far; the rest are still the game's windows); original = the game's windows"},
     {"enhance.battle_fx", "1", "attack and technique effects light the scene; sparks, flashes, embers, lens flares: 0 off, 1 subtle, 2 full"},
@@ -557,6 +562,26 @@ static void sram_path(char *out, size_t n) {
     else snprintf(out, n, "%s-%d", base, save_page + 1);
 }
 
+/* The auto save (autosave.h): a file of its own beside the saves -- the same name with -auto before
+ * its ending -- in the cartridge's layout, its one save in the first slot. The game's windows never
+ * see it: to play on from it the launcher puts it in the cartridge's place for the moment the game
+ * takes to load it (auto_loading), and the page of saves comes back after. */
+#define AUTO_PAGE SAVEPAGES_MAX              /* as a page: one past the real ones */
+static uint8_t auto_page[BUS_SRAM_SIZE];     /* as the launcher read it */
+static int auto_ok;                          /* ... and it holds a save */
+static int auto_loading;                     /* it is in the cartridge's place: nothing is written back */
+static uint8_t auto_keep[BUS_SRAM_SIZE];     /* the page of saves meanwhile */
+static uint64_t auto_note_until;             /* its note is shown until then (SDL_GetTicks) */
+static void auto_path(char *out, size_t n) {
+    char base[1100];
+    if (save_arg) snprintf(base, sizeof base, "%s", save_arg);
+    else path_in_home(base, sizeof base, "saves/psiv.srm");
+    char *dot = strrchr(base, '.');
+    if (dot && (strchr(dot, '/') || strchr(dot, '\\'))) dot = NULL;
+    if (dot) snprintf(out, n, "%.*s-auto%s", (int)(dot - base), base, dot);
+    else snprintf(out, n, "%s-auto", base);
+}
+
 /* the save's file into memory: its size, 0 if there is none */
 static size_t sram_read(void) {
     char p[1100];
@@ -578,7 +603,7 @@ static void sram_load(void) {
 }
 
 static void sram_flush(void) {
-    if (!bus_sram_dirty) return;
+    if (!bus_sram_dirty || auto_loading) return;
     char p[1100], dir[1100];
     if (!save_arg) {
         path_in_home(dir, sizeof dir, "saves");
@@ -619,11 +644,15 @@ static struct { int ok, page, slot, level; uint32_t meseta; } cont;
 static int launch_continue;                /* Continue was chosen: the game goes straight to that save */
 static int continuing_now;                 /* ... and is on its way there, unseen (savepages_continuing) */
 
+/* (the pages as continue_find read them: the launcher's Load game lists what each slot holds) */
+static uint8_t save_pages[SAVEPAGES_MAX][BUS_SRAM_SIZE];
+#define pg save_pages
+
 static void continue_find(void) {
-    static uint8_t pg[SAVEPAGES_MAX][BUS_SRAM_SIZE];
     int64_t when[SAVEPAGES_MAX] = {0};
     int n = classic_mode() ? 1 : SAVEPAGES_MAX, keep = save_page;
     memset(&cont, 0, sizeof cont);
+    memset(save_pages, 0, sizeof save_pages);
     for (int k = 0; k < n; k++) {
         save_page = k;
         memset(bus_sram, 0, sizeof bus_sram);
@@ -635,12 +664,31 @@ static void continue_find(void) {
         }
         memcpy(pg[k], bus_sram, sizeof bus_sram);
     }
+    auto_ok = 0;                                     /* the auto save, if there is one (Enhanced) */
+    memset(auto_page, 0, sizeof auto_page);
+    if (!classic_mode()) {
+        char path[1100];
+        auto_path(path, sizeof path);
+        FILE *f = fopen(path, "rb");
+        if (f) {
+            static uint8_t buf[2 * BUS_SRAM_SIZE];
+            size_t got = fread(buf, 1, sizeof buf, f);
+            fclose(f);
+            memset(bus_sram, 0, sizeof bus_sram);
+            bus_sram_import(buf, got);
+            memcpy(auto_page, bus_sram, sizeof bus_sram);
+            auto_ok = savepages_saved(auto_page, 0);
+        }
+    }
     save_page = keep;
     memset(bus_sram, 0, sizeof bus_sram);
     bus_sram_dirty = 0;
     sram_format = SRAM_PORT;
     int page = -1, slot = -1, last = setting_int("saves.last") - 1;
-    if (last >= 0 && last / 3 < n && savepages_saved(pg[last / 3], last % 3)) {
+    if (last == AUTO_PAGE * 3 && auto_ok) {          /* the auto save was the last one made */
+        page = AUTO_PAGE;
+        slot = 0;
+    } else if (last >= 0 && last / 3 < n && savepages_saved(pg[last / 3], last % 3)) {
         page = last / 3;
         slot = last % 3;
     } else {
@@ -651,17 +699,53 @@ static void continue_find(void) {
             if (sl < 3 && (page < 0 || when[k] > when[page])) { page = k; slot = sl; }
         }
     }
+    if (page < 0 && auto_ok) { page = AUTO_PAGE; slot = 0; }   /* no save but the auto save */
     if (page < 0) return;
-    const uint8_t *d = &pg[page][0x100 + slot * 0xA00];      /* the slot: Chaz's level and the party's meseta */
+    const uint8_t *d = page == AUTO_PAGE ? &auto_page[0x100]  /* the slot: Chaz's level and the party's meseta */
+                     : &pg[page][0x100 + slot * 0xA00];
     cont.ok = 1;
     cont.page = page;
     cont.slot = slot;
     cont.level = d[0x409];
     cont.meseta = (uint32_t)d[0x338] << 24 | (uint32_t)d[0x339] << 16 | (uint32_t)d[0x33A] << 8 | d[0x33B];
 }
+#undef pg
 
 /* told of each save the game makes (savepages.h) */
 static void page_saved(int page, int slot) { save_setting_int("saves.last", page * 3 + slot + 1); }
+
+/* an auto save, made (autosave.h): to its file, and the launcher's Continue now goes to it (saves.last
+ * 13: one past the twelve) */
+static void auto_write(const uint8_t *made) {
+    char p[1100], dir[1100];
+    if (!save_arg) {
+        path_in_home(dir, sizeof dir, "saves");
+        SDL_CreateDirectory(dir);
+    }
+    auto_path(p, sizeof p);
+    FILE *f = fopen(p, "wb");
+    if (!f) { SDL_Log("cannot write %s", p); return; }
+    size_t n = fwrite(made, 1, AUTOSAVE_SIZE, f);
+    fclose(f);
+    if (n != AUTOSAVE_SIZE) { SDL_Log("cannot write %s", p); return; }
+    if (setting_int("saves.last") != AUTO_PAGE * 3 + 1) save_setting_int("saves.last", AUTO_PAGE * 3 + 1);
+    auto_note_until = SDL_GetTicks() + 2200;
+}
+/* the launcher's Continue or Load game took it: in the cartridge's place until the game has loaded it */
+static void auto_swap_in(void) {
+    memcpy(auto_keep, bus_sram, sizeof bus_sram);
+    memcpy(bus_sram, auto_page, sizeof bus_sram);
+    bus_sram_dirty = 0;
+    auto_loading = 1;
+}
+static void auto_swap_out(void) {
+    if (!auto_loading) return;
+    memcpy(bus_sram, auto_keep, sizeof bus_sram);
+    bus_sram_dirty = 0;
+    auto_loading = 0;
+    SDL_Log("auto save: loaded; page %d of the saves is back in the cartridge (its slots: %d %d %d)", save_page + 1,
+            savepages_saved(bus_sram, 0), savepages_saved(bus_sram, 1), savepages_saved(bus_sram, 2));
+}
 
 static void quit(int code) {
     sram_flush();
@@ -920,6 +1004,11 @@ static int pick_rom(uint8_t *rom, uint32_t *size) {
 /* Settings > Sound > Voice pack: choose the pack's .zip, install it */
 static const char *test_voicepack;       /* testing: --test-voice-pack FILE answers its file dialog */
 
+static void voice_quip(void);                  /* (with the launcher's sound, below) */
+static char quip_line[200];                    /* the last quip: who and what */
+static uint64_t quip_until;                    /* SDL_GetTicks: its words are shown until then */
+static uint64_t quip_direct_until;             /* ... and its sound, put straight in the stream, lasts until then */
+
 static void voicepack_choose(void) {
     dialog_done = 0;
     dialog_path[0] = dialog_error[0] = 0;
@@ -950,10 +1039,11 @@ static void voicepack_choose(void) {
     if (!dialog_path[0]) return;                             /* cancelled */
     int pages = voicepack_install(dialog_path, msg, sizeof msg);
     if (pages > 0) {
-        snprintf(msg, sizeof msg, "The voice pack is installed: %d page%s of the story voiced.\n\nVoices, on this "
-                 "page, turns them on and off (they're off in Classic mode). The .zip you chose isn't needed any "
-                 "more.", pages, pages == 1 ? "" : "s");
+        snprintf(msg, sizeof msg, "The voice pack is installed: %d page%s of the story voiced.\n\nScene voices, on "
+                 "this page, turns them on and off (they're off in Classic mode). The .zip you chose isn't needed "
+                 "any more.", pages, pages == 1 ? "" : "s");
         message(SDL_MESSAGEBOX_INFORMATION, msg, window);
+        voice_quip();
     } else {
         message(SDL_MESSAGEBOX_ERROR, msg, window);
     }
@@ -1117,6 +1207,7 @@ static void rewind_draw(int ow, int oh) {
     int secs = rewind_note_seconds();
     if (secs) SDL_snprintf(text, sizeof text, "Back %d seconds", secs);
     else if (SDL_GetTicks() < rewind_msg_until) SDL_snprintf(text, sizeof text, "%s", rewind_msg);
+    if (!*text && SDL_GetTicks() < auto_note_until) SDL_snprintf(text, sizeof text, "Auto-saved");   /* (autosave.h) */
     if (!*text) return;
     float s = SDL_max(1.0f, SDL_floorf((float)oh / 270.0f));     /* SDL's 8x8 font, a few times over */
     float tw = (float)SDL_strlen(text) * 8.0f * s, x = 14.0f * s, y = 12.0f * s;
@@ -1181,6 +1272,7 @@ static void detail_watch(uint64_t work_ns) {
 static void savepages_draw(int ow, int oh) {
     char text[80];
     if (!savepages_note(text, sizeof text)) return;
+    if (fieldmenu_system_up()) return;                   /* the new System screen says which saves these are itself */
     float s = SDL_max(1.0f, SDL_floorf((float)oh / 270.0f));
     float tw = (float)SDL_strlen(text) * 8.0f * s, x = ((float)ow - tw) / 2.0f, y = 12.0f * s;
     SDL_FRect bg = {x - 6.0f * s, y - 5.0f * s, tw + 12.0f * s, 18.0f * s};
@@ -1398,6 +1490,7 @@ static void apply_enhancements(void) {
     fieldfx_set_water(!classic_mode() && SDL_strcasecmp(setting("enhance.water"), "off") != 0);
     fieldfx_set_trees(!classic_mode() && SDL_strcasecmp(setting("enhance.trees"), "off") != 0);
     rewind_set_enabled(SDL_strcasecmp(setting("enhance.rewind"), "off") != 0);
+    autosave_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.autosave"), "off") != 0);
     const char *sm = setting("enhance.sfx");
     sfx_set_mode(classic_mode() || !SDL_strcasecmp(sm, "original") ? SFX_ORIGINAL
                  : !SDL_strcasecmp(sm, "custom") ? SFX_CUSTOM : SFX_MODERN);
@@ -1408,7 +1501,7 @@ static void apply_enhancements(void) {
     battlevox_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.voices"), "off") != 0);
     scenevox_set_auto(!SDL_strcasecmp(setting("enhance.auto_text"), "on"));
     journal_notes = !classic_mode() && SDL_strcasecmp(setting("enhance.journal_notes"), "off") != 0;
-    scenevox_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.voices"), "off") != 0);
+    scenevox_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.scene_voices"), "off") != 0);
     algol_set_enabled(!classic_mode() && !SDL_strcasecmp(setting("enhance.music"), "algol"));
     /* first-person dungeons are paused (PsiLok, 2026-11-05: not yet a good way
      * to play): no setting, no menu entry; PSIV_FIRST_PERSON=1 brings the
@@ -1487,6 +1580,9 @@ static const MenuItem GAME_ITEMS[] = {
     {"Menu", "enhance.field_menu", {"modern", "original"}, {"Modern", "Original"}, 0, 0, 0, 1,
      "The field menu on the whole screen (the main menu and equipment so far), or the game's own windows.",
      apply_enhancements},
+    {"Auto save", "enhance.autosave", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "Saves for you as you go, each time you come to a new place: a save of its own, for the launcher's Continue "
+     "and Load game. Your own saves are never touched.", apply_enhancements},
     {"Rewind", "enhance.rewind", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 0,
      "Backspace or the left shoulder goes back about ten seconds: a fade to white and back.",
      apply_enhancements},
@@ -1513,6 +1609,12 @@ static const MenuItem DISPLAY_ITEMS[] = {
     {"Integer scaling", "video.integer_scaling", {"1", "0"}, {"On", "Off"}, 0, 0, 0, 0,
      "Scale by whole numbers only: the sharpest pixels, with a border round the picture.", NULL},
 };
+/* Scene voices switched: on, with a pack installed, someone has a word to say */
+static void apply_scene_voices(void) {
+    apply_enhancements();
+    if (SDL_strcasecmp(setting("enhance.scene_voices"), "off") && scenevox_pages() > 0) voice_quip();
+}
+
 static const MenuItem SOUND_ITEMS[] = {
     {"Volume", "audio.volume", {0}, {0}, 0, 200, 10, 0,
      "Everything together: the music, the sound effects and the voices.", apply_audio},
@@ -1526,14 +1628,18 @@ static const MenuItem SOUND_ITEMS[] = {
     {"Music", "enhance.music", {"original", "algol"}, {"Original chip", "Algol"}, 0, 0, 0, 1,
      "Algol: the port's own modern sound chip plays the game's music: the same songs on new instruments.",
      apply_enhancements},
-    {"Voices", "enhance.voices", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+    {"Battle voices", "enhance.voices", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "The party shout as they attack, grunt when hit, draw breath as they cast. Your own in the voices folder.",
      apply_enhancements},
+    {"Scene voices", "enhance.scene_voices", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "The story scenes spoken aloud, once the voice pack below is installed. Off: the scenes are read, as ever.",
+     apply_scene_voices},
     {"Voice pack", NULL, {0}, {0}, 0, 0, 0, 0,
      "The optional voice pack for the story scenes: choose its .zip to install it, or a newer one. A pack's .zip "
      "left in the game's folder installs itself at the start.", NULL, voicepack_choose, voicepack_label},
-    {"Your music", "enhance.custom_music", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
-     "Audio files you put in the music folder play in place of the game's songs.", apply_enhancements},
+    {"Music pack", "enhance.custom_music", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "A music pack, or audio files of your own, in the music folder: they play in place of the game's songs.",
+     apply_enhancements},
     {"Sound effects", "enhance.sfx", {"modern", "custom", "original"}, {"Modern", "Your samples", "Original"},
      0, 0, 0, 1, "Modern: the port's own. Your samples: the ones in the sfx folder. Original: the game's.",
      apply_enhancements},
@@ -1604,15 +1710,61 @@ static const char *const MAIN_LABELS[] = {"Resume", "Go back 10 seconds", "Journ
 enum { M_RESUME, M_REWIND, M_JOURNAL, M_SETTINGS, M_QUIT, N_MAIN };
 static const char *const CLASSIC_NOTE = "Off in Classic mode. Set Mode to Enhanced, on the Game page, to use it.";
 
-enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT, MENU_LAUNCHER, MENU_JOURNAL };
+enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT, MENU_LAUNCHER, MENU_JOURNAL, MENU_LOAD };
 static int menu_screen, menu_sel;     /* in Settings, -1 = the page bar */
 static int in_launcher;               /* the launcher is up: the game hasn't started */
 static int launcher_go;               /* its Start game was chosen */
-static const char *const LAUNCHER_LABELS[] = {"Continue", "Start game", "Mode", "Settings", "Quit"};
-enum { L_CONTINUE, L_START, L_MODE, L_SETTINGS, L_QUIT, N_LAUNCHER };
+static const char *const LAUNCHER_LABELS[] = {"Continue", "Load game", "Start game", "Mode", "Settings", "Quit"};
+enum { L_CONTINUE, L_LOAD, L_START, L_MODE, L_SETTINGS, L_QUIT, N_LAUNCHER };
 static int launch_has_continue(void);
-static int launch_first(void) { return launch_has_continue() ? L_CONTINUE : L_START; }   /* Continue: only with a save */
+static int launch_first(void) { return launch_has_continue() ? L_CONTINUE : L_START; }   /* Continue, Load game: only with a save */
 static int launch_rows(void) { return N_LAUNCHER - launch_first(); }
+/* Load game: the saves, a page of three at a time (the cartridge's three slots; Enhanced has four
+ * pages), each with what it holds -- any of them can be played on, as Continue plays on the last.
+ * menu_sel is the slot in the page; Left / Right (the shoulders, Tab, the tabs) turn the page, and
+ * Up / Down go on past a page's ends. */
+static int load_page;
+static int load_pages(void) { return classic_mode() ? 1 : SAVEPAGES_MAX; }
+/* (the auto save, if there is one, has a tab of its own after the pages: one card) */
+static int load_tabs(void) { return load_pages() + (auto_ok && !classic_mode() ? 1 : 0); }
+static int load_on_auto(void) { return load_page == load_pages(); }
+static const uint8_t *load_cartridge(void) { return load_on_auto() ? auto_page : save_pages[load_page]; }
+/* its two sounds, the game's own from the ROM (launcher_sfx, below): $F3 as the panel opens and
+ * $CC, the healing techniques' sound, as a save is chosen (PsiLok's choice of them) */
+#define LOAD_OPEN_SFX 0xF3
+#define LOAD_PICK_SFX 0xCC
+static void launcher_sfx(int id, int ms);
+static int launcher_music;                 /* (defined with the launcher's music: its driver is running) */
+static void load_enter(void) {
+    if (rom_ready) {                                 /* the party's faces, from the ROM: it has to be in the
+                                                      * machine (the music's driver put it there, if it runs) */
+        if (!launcher_music) bus_init(rom_buf, rom_size);
+        ui_portraits_init();
+    }
+    launcher_sfx(LOAD_OPEN_SFX, 350);
+    load_page = cont.ok && cont.page == AUTO_PAGE && load_tabs() > load_pages() ? load_pages()
+              : cont.ok && cont.page < load_pages() ? cont.page : 0;
+    menu_sel = cont.ok ? cont.slot : 0;              /* on the save Continue would take */
+    menu_screen = MENU_LOAD;
+}
+static void load_turn(int dir) {
+    load_page = (load_page + dir + load_tabs()) % load_tabs();
+    if (load_on_auto()) menu_sel = 0;                /* its one card */
+}
+/* the slot under the cursor is played on, if it holds a save: as Continue, with this one */
+static void load_pick(void) {
+    if (menu_sel < 0 || menu_sel > 2 || !savepages_saved(load_cartridge(), menu_sel)) return;
+    const uint8_t *d = &load_cartridge()[0x100 + menu_sel * 0xA00];
+    cont.ok = 1;
+    cont.page = load_on_auto() ? AUTO_PAGE : load_page;
+    cont.slot = menu_sel;
+    cont.level = d[0x409];
+    cont.meseta = (uint32_t)d[0x338] << 24 | (uint32_t)d[0x339] << 16 | (uint32_t)d[0x33A] << 8 | d[0x33B];
+    menu_screen = MENU_LAUNCHER;                     /* (the launcher fades out as it does for Continue) */
+    menu_sel = L_LOAD;
+    launcher_go = 2;
+    launcher_sfx(LOAD_PICK_SFX, 1200);               /* (the fade to black waits for it: it sounds whole) */
+}
 /* the project's Discord server -- the launcher's Discord button, D: the invite
  * opens in the player's browser (or the Discord app, where it takes such links) */
 #define DISCORD_URL "https://discord.gg/YmgWfQGJAr"
@@ -1776,6 +1928,7 @@ static void journal_input(int up, int down, int left, int right, int ok) {
 /* the next or previous settings page or journal page (shoulder buttons, Tab, the page bar) */
 static void menu_turn_page(int dir) {
     if (menu_screen == MENU_JOURNAL) { journal_turn(dir); return; }
+    if (menu_screen == MENU_LOAD) { load_turn(dir); return; }
     if (menu_screen != MENU_SETTINGS) return;
     menu_page = (menu_page + dir + N_PAGES) % N_PAGES;
     if (menu_sel >= page_now()->n) menu_sel = page_now()->n - 1;
@@ -1787,6 +1940,7 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
         if (menu_screen == MENU_LAUNCHER) menu_sel = L_QUIT;
         else if (menu_screen == MENU_MAIN) menu_close();
         else if (menu_screen == MENU_SETTINGS && in_launcher) { menu_screen = MENU_LAUNCHER; menu_sel = L_SETTINGS; }
+        else if (menu_screen == MENU_LOAD) { menu_screen = MENU_LAUNCHER; menu_sel = L_LOAD; }
         else {                                       /* back to the main menu, on the line it came from */
             menu_sel = menu_screen == MENU_SETTINGS ? M_SETTINGS : menu_screen == MENU_JOURNAL ? M_JOURNAL : M_QUIT;
             menu_screen = MENU_MAIN;
@@ -1797,6 +1951,14 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
         journal_input(up, down, left, right, ok);
         return;
     }
+    if (menu_screen == MENU_LOAD) {                   /* three slots a page: past its ends, the next page */
+        if (up) { if (menu_sel > 0) menu_sel--; else { load_turn(-1); menu_sel = load_on_auto() ? 0 : 2; } }
+        if (down) { if (menu_sel < 2 && !load_on_auto()) menu_sel++; else { load_turn(1); menu_sel = 0; } }
+        if (left) load_turn(-1);
+        if (right) load_turn(1);
+        if (ok) load_pick();
+        return;
+    }
     if (menu_screen == MENU_LAUNCHER) {
         if (up) menu_sel = menu_sel <= launch_first() ? L_QUIT : menu_sel - 1;
         if (down) menu_sel = menu_sel >= L_QUIT ? launch_first() : menu_sel + 1;
@@ -1804,6 +1966,7 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
         if (ok) {
             if (menu_sel == L_START) launcher_go = 1;
             else if (menu_sel == L_CONTINUE) launcher_go = 2;
+            else if (menu_sel == L_LOAD) load_enter();
             else if (menu_sel == L_MODE) item_change(MODE_ITEM, 1);
             else if (menu_sel == L_SETTINGS) settings_enter();
             else quit(0);
@@ -2014,6 +2177,15 @@ static void menu_hint(char *out, size_t n) {
         else snprintf(out, n, "Left / Right or Tab page%sEsc back", sep);
         return;
     }
+    if (menu_screen == MENU_LOAD) {
+        const char *more = load_tabs() > 1 ? "more saves" : NULL;
+        if (touch_visible()) snprintf(out, n, "Tap a save to play on from it%sTap outside to go back", sep);
+        else if (menu_last_pad && pad)
+            snprintf(out, n, "%s load%s%s%s%s%s back", pad_button_name(pad_of[IN_C]), sep, more ? "Left / Right " : "",
+                     more ? more : "", more ? sep : "", pad_button_name(pad_of[IN_B]));
+        else snprintf(out, n, "Enter load%s%s%s%sEsc back", sep, more ? "Left / Right " : "", more ? more : "", more ? sep : "");
+        return;
+    }
     if (menu_screen == MENU_LAUNCHER) {
         if (touch_visible()) snprintf(out, n, "Tap to choose");
         else snprintf(out, n, "%s select%sLeft / Right switch the mode%s%s music%s",
@@ -2191,6 +2363,7 @@ static void draw_settings(float W, float H, const char *hint) {
     m_box(pad, rule, W - pad, rule + 0.5f, 0, C_RULE, C_RULE, 80);
     const char *about = menu_sel < 0 ? pg->about
                       : item_disabled(&pg->items[menu_sel]) ? CLASSIC_NOTE : pg->items[menu_sel].help;
+    if (quip_until > SDL_GetTicks() && pg->items == SOUND_ITEMS) about = quip_line;   /* a quip, while it sounds */
     m_wrap(pad + 2.0f, rule + 10.5f, W - 2 * pad - 4.0f, 8.6f, 2, 4.0f, about, C_VALUE, 0);
     m_text(pad + 2.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
 }
@@ -2547,10 +2720,15 @@ static void draw_launcher(float W, float H, const char *hint) {
     }
 
     char going[120];
-    snprintf(going, sizeof going, "Save %d of %d: Chaz at level %d, %u meseta. Straight in, past the title.",
-             cont.page * 3 + cont.slot + 1, classic ? 3 : SAVEPAGES_MAX * 3, cont.level, (unsigned)cont.meseta);
+    if (cont.page == AUTO_PAGE)
+        snprintf(going, sizeof going, "Your auto save: Chaz at level %d, %u meseta. Straight in, past the title.",
+                 cont.level, (unsigned)cont.meseta);
+    else
+        snprintf(going, sizeof going, "Save %d of %d: Chaz at level %d, %u meseta. Straight in, past the title.",
+                 cont.page * 3 + cont.slot + 1, classic ? 3 : SAVEPAGES_MAX * 3, cont.level, (unsigned)cont.meseta);
     const char *about =
         menu_sel == L_CONTINUE ? going
+        : menu_sel == L_LOAD ? "Choose which of your saves to play on."
         : menu_sel == L_START ? (rom_ready ? "Your Phantasy Star IV (USA), checked and ready."
                                : rom_problem[0] ? "The ROM that's installed can't be used: Start game says why, then asks for another."
                                : "Start game asks for your copy of Phantasy Star IV (USA): a .bin, .md, .gen or .smd file, or the .zip it came in.")
@@ -2594,6 +2772,87 @@ static void draw_launcher(float W, float H, const char *hint) {
     m_text(W - 6.0f, H - 5.0f, 3.4f, hint, C_HINT, 1);
 }
 
+/* Load game: the page's three slots as cards -- the slot's number among them all, the party's faces
+ * (from the ROM), the leader and their level, the world, the meseta -- and the pages' tabs */
+#define LOAD_H 190.0f
+static void draw_load(float W, float H, const char *hint) {
+    static const char *const WORLDS[6] = {"Motavia", "Dezolis", "Rykros", "Zelan", "Kuran", "The Air Castle"};
+    const float pad = 10.0f;
+    int pages = load_tabs(), on_auto = load_on_auto();
+    const uint8_t *cart = load_cartridge();
+    char t[64];
+    m_text(pad + 2.0f, 17.0f, 6.4f, "Load game", C_GOLD, 0);
+    draw_back_button(W, pad);
+    if (pages > 1) {                                 /* the pages: which slots each holds; then the auto save */
+        float x = pad + 2.0f + m_width("Load game", 6.4f) + 12.0f;
+        for (int i = 0; i < pages; i++) {
+            if (i == load_pages()) snprintf(t, sizeof t, "Auto");
+            else snprintf(t, sizeof t, "%d-%d", i * 3 + 1, i * 3 + 3);
+            float w = m_width(t, 4.4f) + 12.0f;
+            int on = i == load_page;
+            if (on) m_box(x, 8.0f, x + w, 21.0f, 6.5f, 0x3A4C8E, 0x2A3870, 255);
+            m_text(x + w / 2, 17.2f, 4.4f, t, on ? C_TEXT : C_SOFT, 2);
+            m_hit(x, 8.0f, x + w, 21.0f, HIT_PAGE, i);
+            x += w + 2.0f;
+        }
+    }
+    m_box(pad, 25.5f, W - pad, 26.0f, 0, C_RULE, C_RULE, 80);
+    float top = 30.0f, gap = 3.0f, ch = (H - 16.0f - top - 2.0f * gap) / 3.0f;
+    if (on_auto)                                     /* its one card, and what it is */
+        m_wrap(pad + 4.0f, top + ch + gap + 14.0f, W - 2.0f * pad - 8.0f, 9.0f, 4, 4.3f,
+               "The game saves here for you as you play: each time you come to a new place, and every few minutes "
+               "on the way. It is one save, made over each time; your own saves are never touched. "
+               "Settings > Game > Auto save turns it off.", C_SOFT, 0);
+    for (int k = 0; k < (on_auto ? 1 : 3); k++) {
+        float c0 = top + (float)k * (ch + gap), c1 = c0 + ch, mid = (c0 + c1) / 2.0f, x0 = pad, x1 = W - pad;
+        int sel = k == menu_sel, saved = savepages_saved(cart, k);
+        const uint8_t *d = &cart[0x100 + k * 0xA00];
+        if (sel) m_box(x0, c0, x1, c1, 7.0f, C_GOLD, C_GOLD_LOW, 255);
+        else m_box(x0, c0, x1, c1, 7.0f, 0x243470, 0x1A2658, 255);
+        m_hit(x0, c0, x1, c1, HIT_ROW, k);
+        snprintf(t, sizeof t, "%d", load_page * 3 + k + 1);
+        if (on_auto) m_text(x0 + 14.0f, mid + 1.8f, 4.2f, "Auto", sel ? C_INK : C_SOFT, 2);
+        else m_text(x0 + 13.0f, mid + 3.6f, 8.4f, t, sel ? C_INK : C_SOFT, 2);
+        if (!saved) {
+            m_text(x0 + 28.0f, mid + 2.2f, 5.0f, "Empty", sel ? C_INK_SOFT : C_DIM, 0);
+            continue;
+        }
+        int ids[5], n = 0;
+        for (int i = 0; i < 5; i++)
+            if (d[0x30A + i] < 11) ids[n++] = d[0x30A + i];
+        float ps = fminf(27.0f, ch - 12.0f), px = x0 + 28.0f;
+        int faces = 0;
+        for (int i = 0; i < n && m_ttf; i++) faces += ui_portrait(ids[i]) != NULL;
+        if (faces) {
+            for (int i = 0; i < n; i++) {
+                const UiImage *im = ui_portrait(ids[i]);
+                m_box(px, mid - ps / 2.0f, px + ps, mid + ps / 2.0f, 1.5f, 0x0C1440, 0x0C1440, 255);
+                if (im) ui_image(&m_cv, im, px * m_S, (mid - ps / 2.0f) * m_S, ps * m_S, 0, 255);
+                px += ps + 2.0f;
+            }
+            px = x0 + 28.0f + 5.0f * (ps + 2.0f) + 5.0f;
+        }
+        if (n) {
+            m_text(px, mid - 1.6f, 5.2f, UI_CHAR_NAMES[ids[0]], sel ? C_INK : C_TEXT, 0);
+            snprintf(t, sizeof t, "LV %u", (unsigned)(d[0x400 + ids[0] * 0x80 + 8] << 8 | d[0x400 + ids[0] * 0x80 + 9]));
+            m_text(x1 - 10.0f, mid - 1.6f, 5.2f, t, sel ? C_INK : C_TEXT, 1);
+        }
+        m_text(px, mid + 9.4f, 4.4f, d[0x300] < 6 ? WORLDS[d[0x300]] : "", sel ? C_INK_SOFT : C_SOFT, 0);
+        {   /* the meseta, its thousands apart */
+            unsigned long v = (unsigned long)d[0x338] << 24 | (unsigned long)d[0x339] << 16 | (unsigned long)d[0x33A] << 8 | d[0x33B];
+            char raw[16];
+            int len = snprintf(raw, sizeof raw, "%lu", v), o = 0;
+            for (int i = 0; i < len; i++) {
+                if (i && (len - i) % 3 == 0) t[o++] = ',';
+                t[o++] = raw[i];
+            }
+            snprintf(t + o, sizeof t - (size_t)o, " meseta");
+        }
+        m_text(x1 - 10.0f, mid + 9.4f, 4.4f, t, sel ? C_INK_SOFT : C_SOFT, 1);
+    }
+    m_text(pad + 2.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
+}
+
 static void menu_layout(float W, float H) {
     char hint[200];
     menu_hint(hint, sizeof hint);
@@ -2603,7 +2862,9 @@ static void menu_layout(float W, float H) {
     }
     m_box(0, 0, W, H, 7.0f, C_PANEL_TOP, C_PANEL_LOW, 244);
     m_frame(0, 0, W, H, 7.0f, C_RULE, 150);
-    if (menu_screen == MENU_SETTINGS) {
+    if (menu_screen == MENU_LOAD) {
+        draw_load(W, H, hint);
+    } else if (menu_screen == MENU_SETTINGS) {
         draw_settings(W, H, hint);
     } else if (menu_screen == MENU_JOURNAL) {
         draw_journal(W, H, hint);
@@ -2627,7 +2888,7 @@ static uint64_t menu_signature(int ow, int oh) {
                         (uint64_t)oh, (uint64_t)touch_visible(), (uint64_t)(menu_last_pad && pad),
                         pad ? (uint64_t)SDL_GetGamepadID(pad) : 0, (uint64_t)rom_ready, (uint64_t)(rom_problem[0] != 0),
                         (uint64_t)j_tab, (uint64_t)j_scroll, (uint64_t)(j_hint_step + 2), (uint64_t)(j_hint_job + 1),
-                        journal_signature(), (uint64_t)scenevox_pages()};
+                        journal_signature(), (uint64_t)scenevox_pages(), (uint64_t)load_page};
     uint64_t h = 1469598103934665603ull;
     for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) h = (h ^ parts[i]) * 1099511628211ull;
     for (int i = 0; i < NSETTINGS; i++)
@@ -2657,9 +2918,11 @@ static void menu_draw(void) {
         th = oh;
         m_ox = m_oy = 0;
     } else {
-        int settings = menu_screen == MENU_SETTINGS, big = settings || menu_screen == MENU_JOURNAL;
+        int settings = menu_screen == MENU_SETTINGS, load = menu_screen == MENU_LOAD;
+        int big = settings || load || menu_screen == MENU_JOURNAL;
         W = big ? 288.0f : menu_screen == MENU_QUIT ? 176.0f : 168.0f;
-        H = settings ? SETTINGS_H : big ? 168.0f : menu_screen == MENU_QUIT ? 86.0f : 26.0f + 16.0f * N_MAIN + 26.0f;
+        H = settings ? SETTINGS_H : load ? LOAD_H : big ? 168.0f : menu_screen == MENU_QUIT ? 86.0f
+          : 26.0f + 16.0f * N_MAIN + 26.0f;
         /* about the game's own scale, small enough that Settings (the
          * tallest) always fits; the other menus keep the same scale */
         m_S = fminf(fminf((float)ow / 320.0f, (float)oh / 224.0f),
@@ -2737,6 +3000,9 @@ static void menu_tap(float rx, float ry) {
             else if (h->kind == HIT_JUP) journal_input(1, 0, 0, 0, 0);
             else if (h->kind == HIT_JDOWN) journal_input(0, 1, 0, 0, 0);
             else if (h->kind == HIT_ROW) menu_sel = h->index;
+        } else if (menu_screen == MENU_LOAD) {      /* a page's tab, or a save: play on from it */
+            if (h->kind == HIT_PAGE) load_page = h->index;
+            else if (h->kind == HIT_ROW) { menu_sel = h->index; load_pick(); }
         } else if (h->kind == HIT_MODE) {           /* the launcher's switch: that mode */
             menu_sel = L_MODE;
             if ((h->index == 1) != classic_mode()) item_change(MODE_ITEM, 1);
@@ -2969,6 +3235,14 @@ void platform_audio(const int16_t *samples, int count) {
         astat.made += bytes;
     }
     int idle = now - SDL_GetAtomicInt(&audio_last_push_ms) > 250;   /* the first sound, or after a pause or a menu */
+    if (quip_direct_until) {                             /* a quip put straight in the stream: the game's sound */
+        if ((uint64_t)now < quip_direct_until) {         /* does not wait behind what is left of it */
+            SDL_ClearAudioStream(audio);
+            queued = 0;
+            idle = 1;
+        }
+        quip_direct_until = 0;
+    }
     if (!astat.pushes || queued < astat.qmin) astat.qmin = queued;
     if (queued > astat.qmax) astat.qmax = queued;
     astat.qsum += queued;
@@ -3334,9 +3608,16 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         int was = continuing_now;
         continuing_now = savepages_continuing();
         if (continuing_now && !was) { since = SDL_GetTicksNS(); frames = frame_count; }
-        if (was && !continuing_now)
+        if (was && !continuing_now) {
             SDL_Log("continue: at the save after %llu frames, %.2f s", (unsigned long long)(frame_count - frames),
                     (double)(SDL_GetTicksNS() - since) / 1e9);
+            auto_swap_out();                             /* (the auto save: the page of saves back in the cartridge) */
+            autosave_reset();
+        }
+    }
+    if (!continuing_now && !auto_loading) {              /* the auto save, when one is due and can be made */
+        static uint8_t made[AUTOSAVE_SIZE];
+        if (autosave_frame(made)) auto_write(made);
     }
     if (continuing_now) {
         bus_pad[0] = savepages_pad();                    /* Start, to pass the title; nothing of the player's */
@@ -3773,23 +4054,71 @@ static float launcher_music_level = 1.0f;  /* down to 0 when it is switched off 
 static int launcher_cushion;               /* the usual cushion, kept while it is doubled (0: it is not) */
 static void launcher_music_fade(float k);
 static void launcher_music_stop(void);
+/* A sound effect of the launcher's own (Load game's two), from the ROM by the same driver: asked
+ * for at the next run, over the song; with the music switched off the driver is started for the
+ * effect alone and stopped again when it has sounded (`ms`: how long it lasts). */
+static int launcher_sfx_pending;           /* the game's sound ID, 0: none */
+static uint64_t launcher_sfx_until;        /* one is sounding until then (SDL_GetTicksNS) */
+static int launcher_song_on;               /* the song has been asked of the running driver */
+static void launcher_sfx(int id, int ms) {
+    launcher_sfx_pending = id;
+    launcher_sfx_until = SDL_GetTicksNS() + (uint64_t)ms * 1000000ull;
+}
+
+/* A quip from the party as the voiced scenes come on -- a pack just installed, or Scene voices switched on
+ * (PsiLok's idea): one of the pack's own (scenevox_quip), its words shown under the settings while it
+ * sounds. The game is held while a menu is up, and the launcher is silent without its music, so the sound
+ * goes straight to the device; with the launcher's music playing, through the voices' mixer. */
+static void voice_quip(void) {
+    const char *who, *text;
+    int frames = 0;
+    if (classic_mode() || !SDL_strcasecmp(setting("enhance.scene_voices"), "off")) return;
+    const int16_t *pcm = scenevox_quip(&who, &text, &frames);
+    if (!pcm || frames <= 0) return;
+    snprintf(quip_line, sizeof quip_line, "%s: \"%s\"", who, text);
+    quip_until = SDL_GetTicks() + (uint64_t)frames * 1000 / SOUND_RATE + 1800;
+    SDL_Log("quip: %s", quip_line);
+    if (!audio) return;
+    if (launcher_music) { scenevox_say(pcm, frames); return; }
+    float g = scenevox_gain() * (float)setting_int("audio.voices") / 100.0f;
+    int16_t *buf = malloc((size_t)frames * 4);
+    if (!buf) return;
+    for (int i = 0; i < frames * 2; i++) {
+        float v = (float)pcm[i] * g;
+        buf[i] = (int16_t)(v > 32767.0f ? 32767.0f : v < -32768.0f ? -32768.0f : v);
+    }
+    SDL_PutAudioStreamData(audio, buf, frames * 4);
+    free(buf);
+    quip_direct_until = SDL_GetTicks() + (uint64_t)frames * 1000 / SOUND_RATE;
+}
 
 static void launcher_music_run(void) {
     uint64_t now = SDL_GetTicksNS();
     int wanted = SDL_strcasecmp(setting("audio.launcher_music"), "off") != 0;
+    int pending = launcher_sfx_pending;
+    launcher_sfx_pending = 0;
     if (!launcher_music) {
-        if (!rom_ready || !audio || !wanted) return;
+        if (!rom_ready || !audio || (!wanted && !pending)) return;
         bus_init(rom_buf, rom_size);
-        frame_song_start(LAUNCHER_SONG);
+        frame_song_start(wanted ? LAUNCHER_SONG : pending);    /* (the effect alone: the driver's first request) */
+        if (!wanted) pending = 0;
+        launcher_song_on = wanted;
         launcher_music = 1;
         launcher_tick_at = now;
         launcher_music_level = 1.0f;
         launcher_cushion = audio_target;
         audio_target *= 2;
     }
-    if (!wanted) {                                   /* switched off (its note, M): out over a quarter of a second */
+    if (pending) frame_song_request(pending);
+    if (wanted && !launcher_song_on) {               /* switched on while the driver ran for an effect */
+        frame_song_request(LAUNCHER_SONG);
+        launcher_song_on = 1;
+    }
+    if (!wanted && !launcher_song_on && now < launcher_sfx_until) {
+        /* the music is off and an effect is sounding: the driver runs on for it */
+    } else if (!wanted) {                            /* switched off (its note, M): out over a quarter of a second */
         launcher_music_level -= 0.05f;
-        if (launcher_music_level <= 0.0f) { launcher_music_stop(); return; }
+        if (launcher_music_level <= 0.0f || !launcher_song_on) { launcher_music_stop(); return; }
         launcher_music_fade(launcher_music_level);
     } else if (launcher_music_level < 1.0f) {        /* and on again before it had gone */
         launcher_music_level = 1.0f;
@@ -3829,6 +4158,10 @@ static void launcher(void) {
     continue_find();
     menu_sel = launch_first();                       /* Continue, when there is a save: one press to play on */
     menu_opened = 0;
+    if (quip_pending) {                              /* a voice pack unpacked itself at the start: a word on it */
+        quip_pending = 0;
+        voice_quip();
+    }
     stars_init();
     logo_load();
     uint64_t t0 = SDL_GetTicks();
@@ -3837,7 +4170,7 @@ static void launcher(void) {
         if (classic_mode() != for_classic) {         /* the mode switched: Classic has the first page only */
             for_classic = classic_mode();
             continue_find();
-            if (menu_sel == L_CONTINUE && !cont.ok) menu_sel = L_START;
+            if ((menu_sel == L_CONTINUE || menu_sel == L_LOAD) && !cont.ok) menu_sel = L_START;
         }
         if (launcher_go) {
             int go = launcher_go;
@@ -3854,10 +4187,15 @@ static void launcher(void) {
         launcher_music_run();                        /* (after the picture: the first one takes a while to make) */
         SDL_Delay(launcher_music ? 12 : 16);         /* (with music: a little under a tick, so none comes late) */
     }
-    for (uint64_t f0 = SDL_GetTicks(); !test_menu_script;) {   /* into black, then the game */
-        float k = (float)(SDL_GetTicks() - f0) / 260.0f;
+    /* into black, then the game: a quarter of a second -- or, a save chosen in Load game, as long
+     * as its sound lasts (the sound whole, then down with the music over the last quarter second) */
+    float out_ms = 260.0f;
+    if (launcher_sfx_until > SDL_GetTicksNS())
+        out_ms = fmaxf(out_ms, (float)(launcher_sfx_until - SDL_GetTicksNS()) / 1e6f + 60.0f);
+    for (uint64_t f0 = SDL_GetTicks(); !test_menu_script || out_ms > 260.0f;) {   /* (a test's script: at once, but for that sound) */
+        float ms = (float)(SDL_GetTicks() - f0), k = ms / out_ms;
         if (k >= 1.0f) break;
-        launcher_music_fade(1.0f - k);               /* the music goes with the picture */
+        launcher_music_fade(fminf(1.0f, (out_ms - ms) / 260.0f));   /* the music goes with the picture */
         launcher_music_run();
         launcher_present(t0, k);
         SDL_Delay(launcher_music ? 12 : 16);
@@ -4082,14 +4420,17 @@ int main(int argc, char **argv) {
         quit(0);
 
     bus_init(rom_buf, rom_size);
-    if (launch_continue && !classic_mode()) save_setting_int("saves.page", cont.page + 1);   /* Continue: its page */
+    if (launch_continue && !classic_mode() && cont.page != AUTO_PAGE)
+        save_setting_int("saves.page", cont.page + 1);     /* Continue: its page (the auto save: the page last in use) */
     if (!classic_mode()) {                             /* the page of saves last in use */
         save_page = setting_int("saves.page") - 1;
         if (save_page < 0 || save_page >= SAVEPAGES_MAX) save_page = 0;
     }
     savepages_set_page(save_page);
     sram_load();
+    if (launch_continue && cont.page == AUTO_PAGE) auto_swap_in();   /* the auto save: in the cartridge's place till loaded */
     if (launch_continue) savepages_continue(cont.slot);   /* through the title to that save, unseen */
+    autosave_reset();
     SDL_Log("side panels: %d portraits from the ROM", panels_init());
     next_deadline = SDL_GetTicksNS();
     par_sdl_start();                                   /* the picture's helper threads (par.h) */

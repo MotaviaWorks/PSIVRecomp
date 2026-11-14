@@ -194,6 +194,12 @@ void frame_song_start(int id) {
     m68k_ram[SOUND_QUEUE] = (uint8_t)id;
 }
 
+void frame_song_request(int id) {
+    for (int i = 0; i < 4; i++)        /* Sound_Index, or a slot of its queue that is free */
+        if (!m68k_ram[SOUND_QUEUE + i]) { m68k_ram[SOUND_QUEUE + i] = (uint8_t)id; return; }
+    m68k_ram[SOUND_QUEUE] = (uint8_t)id;
+}
+
 void frame_song_tick(void) {
     driver_call(UPDATE_SOUND);
     frame_sound();

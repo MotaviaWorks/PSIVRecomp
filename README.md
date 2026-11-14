@@ -56,7 +56,13 @@ is committed in `res/fonts/` with its licence.
   the last one made, wherever it is in the twelve slots; the game is
   started and taken through its own title to that save unseen, about a
   quarter of a second, by `savepages_continue` in `runtime/savepages.c`:
-  the game's own loading, nothing skipped), Start game, the mode (Enhanced /
+  the game's own loading, nothing skipped), Load game (any of the saves,
+  taken the same way: a panel of the slots, a page of three at a time with
+  tabs for the pages, each slot with what it holds -- the party's faces
+  from your ROM, the leader and their level, the world, the meseta; two of
+  the game's own sounds with it, played from your ROM by its sound driver
+  as the launcher's music is: `$F3` as the panel opens, `$CC` as a save is
+  chosen, the fade to black waiting for it), Start game, the mode (Enhanced /
   Classic, a switch), Settings (the same seven pages as in the game), Quit --
   over a drifting field of stars: the logo on the left (PsiLok's own
   artwork, `res/launcher/logo.png`, built into the program by
@@ -217,16 +223,21 @@ original game, unchanged; **Enhanced** turns on the additions:
 - **Battle camera** (Battles page, Camera: on / off; needs battle depth):
   when an enemy attacks someone, the view turns to face them, and the party
   slides along instead of overlapping (`runtime/depth.c`).
-- **Voices** (Sound page: on / off): the party speaks in battle -- a shout
-  as they attack, a grunt when hit, a breath as they cast, a cry when they
-  fall, a cheer when they win (`runtime/battlevox.c`). The voice lines are made
-  with VoiceDesign, placeholders, `res/voices/<name>_<moment>_<n>.wav` for
-  all ten characters; files of your own in the home folder's `voices/` take
-  their place. The
-  same setting plays voiced story scenes from an optional pack in
+- **Battle voices** (Sound page: on / off): the party speaks in battle -- a
+  shout as they attack, a grunt when hit, a breath as they cast, a cry when
+  they fall, a cheer when they win (`runtime/battlevox.c`). The voice lines
+  are made with VoiceDesign, placeholders,
+  `res/voices/<name>_<moment>_<n>.wav` for all ten characters; files of your
+  own in the home folder's `voices/` take their place.
+- **Scene voices** (Sound page: on / off, a switch of its own, so the battle
+  voices can be off and the scenes spoken, or the other way round): voiced
+  story scenes from an optional pack in
   `voices/scenes` (`runtime/scenevox.c`: each line is found by the text on
   screen, and a flashback turns the scene to sepia); the pack is not part of
-  the port. **Voice pack** (Sound page) installs one: choose its `.zip` in the
+  the port. A pack may bring quips (`quips.txt`: a clip, who says it, the
+  words): when the pack is installed or Scene voices is switched on, one of
+  the party has a word to say about it, shown under the settings while it
+  sounds. **Voice pack** (Sound page) installs one: choose its `.zip` in the
   file picker (Android's too) and it is unpacked into `voices/scenes` and
   played at once; a pack's `.zip` left in the home folder installs itself at
   the start, once (`voices/scenes/pack.txt` remembers it). Only `.wav` and
@@ -353,8 +364,27 @@ original game, unchanged; **Enhanced** turns on the additions:
   `tools/emit.py`; `runtime/savepages.c`). The page last used is kept in
   `psiv.ini` (`saves.page`); at the title, a page with no save gives way
   to one that has. Classic mode keeps to the first page.
+- **Auto save** (on / off; `runtime/autosave.c`): the game saved for the
+  player as they go, in a save of its own beside the others
+  (`saves/psiv-auto.srm`, the cartridge's layout with its one save in the
+  first slot: it loads in an emulator too) -- a thirteenth save that the
+  game's own windows never list. The game's save is a copy of one block of
+  its RAM (`$FFF100-$FFFAFF`) with where the party stands noted in it, so
+  it is made without the game's menu: the same block, the same four words
+  noted in the copy, byte for byte what the game's Save writes at that
+  spot; nothing of the game's RAM is written. It is made only where the
+  game itself would let you save -- the party free on the field and
+  standing on a cell, no window, event, battle or vehicle, and not in a
+  dungeon -- once the party has come to another map (into a town, out of
+  one: after the game has placed them there) and every five minutes of
+  walking the world. A note says "Auto-saved". The launcher's Continue
+  takes whichever save was made last, yours or this one (`saves.last`: 13),
+  and Load game has a tab for it; to load it the port puts it in the
+  cartridge's place for the quarter second the game takes, then the page
+  of saves comes back, so the game's Save window lists your own saves as
+  ever. Off in Classic mode.
 
-- **Your music** (on / off): audio files of your own -- a remix, say -- play
+- **Music pack** (on / off; it was "Your music"): audio files of your own -- a remix, say -- play
   in place of the game's songs. Put WAVs (16/24-bit or float, any rate) in
   `music/` (git-ignored), named by the song's ID: `music/8F.wav` for Meet
   Them Head-On (`PSIV_MUSIC_LOG=1` prints each song's ID and name as it
@@ -463,6 +493,15 @@ original game, unchanged; **Enhanced** turns on the additions:
   what it sells for), and the keeper's words at the foot; yes / no comes up
   in the middle. **Something found** (a chest): the game's windows where it
   has them, in the new frames, over the field as it is (held, not dimmed).
+  **The Start button's menu** (the game's SYS window, another group): Save,
+  Message speed, Battle speed and Buttons in full down the left, and beside
+  them what the one under the cursor is about -- the three slots of the
+  page of saves in memory, each with what it holds, read from the battery
+  save itself (the party's portraits, the leader and their level, the
+  world, the meseta), which of the twelve they are and Left / Right for
+  the others; a speed as five steps from Fast to Slow; the six ways A, B
+  and C can be laid out as a table -- with the game's own words at the foot
+  ("Previous data will be erased. OK?", its yes and no beside them).
   **Talk**: the game's layout in the new frames. A window not laid out anew
   is drawn where the game has it, with the game's own words read back --
   its window font a tile a letter, a line of dialogue from the two tiles a
@@ -534,7 +573,7 @@ game's size.
   and the longest frame, how many ran over, and each part's share (the game,
   its lines, the sound, the port's picture, the upload, the window). Worth
   attaching to a report of slowness.
-- **Your music's files** are read on a thread of their own the first time
+- **The music pack's files** are read on a thread of their own the first time
   each song plays (four stay in memory): the game keeps running, and the
   song comes in when its file is ready, a few hundredths of a second later
   for a 16-bit WAV. Read on the game's thread, a four-minute file stopped

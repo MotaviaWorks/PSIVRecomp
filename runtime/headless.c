@@ -41,6 +41,9 @@
  *                        bytes of $200001-$203FFF, as saves/psiv.srm; or an
  *                        emulator's .srm: BizHawk, Gens, Kega Fusion)
  *     --sram-out FILE    write the battery save when the run ends
+ *     --autosave-at F:FILE  the port's own save (autosave.h) made at logical
+ *                        frame F, if the game could be saved then
+ *     --autosave FILE    auto save on: each one it makes is written there
  *     --where L,L,...    print the 68000 call chain at these logical frames
  *     --replay TRACE     replay a BizHawk reference trace (tools/bizhawk/record.lua):
  *                        its input and lag per logical frame, checking memory
@@ -91,6 +94,7 @@
 #include "depth.h"
 #include "hdtext.h"
 #include "panels.h"
+#include "autosave.h"
 #include "battleui.h"
 #include "fieldmenu.h"
 #include "algol.h"
@@ -267,6 +271,9 @@ void platform_fatal(const char *text) {
 }
 
 static const char *sram_out;           /* --sram-out */
+static uint64_t autosave_at;           /* --autosave-at F:FILE: the port's own save (autosave.h) made at logical frame F */
+static const char *autosave_path;
+static const char *autosave_file;      /* --autosave FILE: auto save on, each one written there */
 static const char *bot_movie;          /* --bot-movie: the bot's input, as a movie */
 
 static void report(void) {
@@ -742,6 +749,19 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
             if (where_at[i] == logical) print_where(logical);
         if (ramlog_n) ramlog_frame(logical);
         if (journal_at && logical == journal_at) print_journal();
+        if ((autosave_at && logical == autosave_at) || autosave_file) {
+            static uint8_t made[AUTOSAVE_SIZE];
+            int forced = autosave_at && logical == autosave_at;
+            int ok = forced ? autosave_compose(made) : autosave_frame(made);
+            const char *to = forced ? autosave_path : autosave_file;
+            if (ok) {
+                FILE *af = fopen(to, "wb");
+                if (af) { fwrite(made, 1, sizeof made, af); fclose(af); }
+                printf("auto save at logical %llu: %s\n", (unsigned long long)logical, to);
+            } else if (forced) {
+                printf("auto save at logical %llu: the game cannot be saved at this moment\n", (unsigned long long)logical);
+            }
+        }
         if (dump_at && logical >= dump_at && logical <= (dump_until ? dump_until : dump_at)) {
             char prefix[512];
             dump_prefix(prefix, sizeof prefix, "port");
@@ -1064,6 +1084,13 @@ int main(int argc, char **argv) {
             trace_pad = 1;
         } else if (!strcmp(argv[i], "--sram") && i + 1 < argc) {
             sram_in = argv[++i];
+        } else if (!strcmp(argv[i], "--autosave-at") && i + 1 < argc) {
+            char *e;
+            autosave_at = strtoull(argv[++i], &e, 10);
+            autosave_path = *e == ':' ? e + 1 : "autosave.srm";
+        } else if (!strcmp(argv[i], "--autosave") && i + 1 < argc) {
+            autosave_file = argv[++i];
+            autosave_set_enabled(1);
         } else if (!strcmp(argv[i], "--sram-out") && i + 1 < argc) {
             sram_out = argv[++i];
         } else if (!strcmp(argv[i], "--hot-from") && i + 1 < argc) {

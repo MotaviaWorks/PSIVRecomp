@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define MAX_PAGES 4096
 #define KEY_MAX   256
@@ -55,6 +56,9 @@ static const int16_t *next_p;         /* waits for the one fading out */
 static int next_n;
 
 void scenevox_set_enabled(int on) { enabled = on; if (!on) scenevox_stop(); }
+
+static void quips_load(void *(*read)(const char *name, size_t *len));
+static void quips_unload(void);
 
 int scenevox_load(const char *index, size_t len, void *(*read)(const char *name, size_t *len)) {
     if (!pages) pages = calloc(MAX_PAGES, sizeof *pages);
@@ -113,6 +117,8 @@ int scenevox_load(const char *index, size_t len, void *(*read)(const char *name,
      * page N, as if the scenes before it had played */
     const char *st = getenv("PSIV_VOX_START");
     if (st && *st && atoi(st) >= 0 && atoi(st) < npages) last_page = atoi(st);
+    quips_unload();
+    quips_load(read);
     return npages;
 }
 
@@ -286,6 +292,7 @@ int scenevox_pages(void) { return npages; }
 
 void scenevox_unload(void) {
     scenevox_stop();
+    quips_unload();
     for (int i = 0; i < nclips; i++) { free(clip_pcm[i]); clip_pcm[i] = NULL; }
     nclips = npages = first_page = 0;
     line_clip_now = pressed_page = -1;
@@ -293,6 +300,76 @@ void scenevox_unload(void) {
     line_frames = 0;
     boxless = 0;
 }
+
+/* ------------------------------------------------------------------ the party's quips
+ * A pack may bring a few short lines from the party (quips.txt: clip, a tab, who, a tab, the words): one is
+ * said, at random, as the voiced scenes come on -- the pack just installed, or Scene voices switched on. */
+#define MAX_QUIPS 32
+typedef struct { char who[24], text[120]; int16_t *pcm; int frames; } Quip;
+static Quip quips[MAX_QUIPS];
+static int nquips, last_quip = -1;
+
+static void quips_load(void *(*read)(const char *name, size_t *len)) {
+    size_t len = 0;
+    char *idx = read("quips.txt", &len);
+    if (!idx) return;
+    const char *p = idx, *end = idx + len;
+    while (p < end && nquips < MAX_QUIPS) {
+        const char *eol = memchr(p, '\n', (size_t)(end - p));
+        if (!eol) eol = end;
+        const char *t1 = memchr(p, '\t', (size_t)(eol - p));
+        const char *t2 = t1 ? memchr(t1 + 1, '\t', (size_t)(eol - t1 - 1)) : NULL;
+        if (t2 && p[0] != '#') {
+            char name[256];
+            Quip *q = &quips[nquips];
+            size_t nl = (size_t)(t1 - p), wl = (size_t)(t2 - t1 - 1), xl = (size_t)(eol - t2 - 1);
+            while (xl && (t2[xl] == '\r' || t2[xl] == ' ')) xl--;
+            if (nl && nl < sizeof name && wl && wl < sizeof q->who && xl && xl < sizeof q->text) {
+                memcpy(name, p, nl); name[nl] = 0;
+                memcpy(q->who, t1 + 1, wl); q->who[wl] = 0;
+                memcpy(q->text, t2 + 1, xl); q->text[xl] = 0;
+                if (name[0] != '/' && name[0] != '\\' && !strstr(name, "..") && !strchr(name, ':')) {   /* in the pack */
+                    size_t n = 0;
+                    void *d = read(name, &n);
+                    q->frames = 0;
+                    q->pcm = d ? sfx_decode_wav(d, (long)n, &q->frames) : NULL;
+                    free(d);
+                    if (q->pcm && q->frames > 0) nquips++;
+                    else { free(q->pcm); q->pcm = NULL; }
+                }
+            }
+        }
+        p = eol + 1;
+    }
+    free(idx);
+}
+
+static void quips_unload(void) {
+    for (int i = 0; i < nquips; i++) { free(quips[i].pcm); quips[i].pcm = NULL; }
+    nquips = 0;
+    last_quip = -1;
+}
+
+int scenevox_quips(void) { return nquips; }
+
+const int16_t *scenevox_quip(const char **who, const char **text, int *frames) {
+    static uint32_t seed;
+    if (!nquips) return NULL;
+    if (!seed) seed = (uint32_t)time(NULL) | 1u;
+    seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;          /* xorshift: its own, apart from rand() */
+    int k = (int)(seed % (uint32_t)nquips);
+    if (nquips > 1 && k == last_quip) k = (k + 1) % nquips;              /* never the same one twice running */
+    last_quip = k;
+    *who = quips[k].who; *text = quips[k].text; *frames = quips[k].frames;
+    return quips[k].pcm;
+}
+
+void scenevox_say(const int16_t *pcm, int frames) {
+    next_p = NULL;
+    play_p = pcm; play_n = frames; play_pos = 0; fade = 1.0f; fade_step = 0.0f;
+}
+
+float scenevox_gain(void) { return GAIN; }
 
 void scenevox_mix(float *samples, int frames) {
     for (int j = 0; j < frames; j++) {

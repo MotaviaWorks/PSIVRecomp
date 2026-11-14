@@ -35,6 +35,15 @@ void scenevox_mix(float *samples, int frames);
 int  scenevox_sounding(void);
 void scenevox_stop(void);
 
+/* The party's quips (the pack's quips.txt: clip, a tab, who, a tab, the words), said as the voiced scenes
+ * come on. scenevox_quip: one at random, never the same twice running -- who says it, the words, and its
+ * sound, 16-bit stereo at SOUND_RATE (NULL if the pack has none). scenevox_say plays such a sound through
+ * scenevox_mix; scenevox_gain is the level the mixer gives the voices, for a caller that plays it itself. */
+int  scenevox_quips(void);
+const int16_t *scenevox_quip(const char **who, const char **text, int *frames);
+void scenevox_say(const int16_t *pcm, int frames);
+float scenevox_gain(void);
+
 /* How far the screen is in a flashback's look (0..1, eased): pages marked
  * "memory" in the index (a third column) bring it in, others take it out. */
 float scenevox_memory(void);

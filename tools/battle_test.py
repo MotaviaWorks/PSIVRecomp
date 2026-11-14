@@ -8,7 +8,7 @@ a macro, running, a mix), then save in slot 1. Then:
 
   enhanced  the same input with the port's additions on (two sets: battle
             depth, fog, effects, modern text, battle menus, 16:9, synthesized
-            sound effects, your music; and the side panels with Algol): the
+            sound effects, the music pack; and the side panels with Algol): the
             game's RAM must come out the same as in Classic, and screenshots
             are taken in every battle
   reload    the save the bot wrote is loaded and Continued: the field must
