@@ -76,7 +76,9 @@ Controls
 | Touch | the on-screen pad; tap like a mouse click; the ≡ button = menu |
 | Android | Back = menu |
 
-The launcher has **Start game**, the switch between **Enhanced** (the port's
+The launcher has **Continue** and **Load game** once you have a save (Load
+game shows every save with the party's faces, and the auto save on a tab of
+its own), **Start game**, the switch between **Enhanced** (the port's
 additions) and **Classic** (the original game, unchanged), **Settings** and
 **Quit**. In the game, Settings are in the menu too (Esc, Select, Back or ≡), on seven pages: Game,
 Display, Sound, Battles, Controls, Cheats, and Buttons (what each button and key does, with your
@@ -84,7 +86,11 @@ gamepad's own names for them). Turn pages with the shoulder buttons,
 Tab, or a tap on a page's name; the line at the bottom says what the
 highlighted setting does. **Mode: Classic** (on the Game page) switches every
 addition off and gives you the original game. The Sound page has a slider
-each for the volume of everything, the music, the effects and the voices.
+each for the volume of everything, the music, the effects and the voices;
+Battle voices and Scene voices are switches of their own there, and Music
+pack plays a music pack (or files of your own) in place of the game's songs.
+In the field, Start opens the game's System menu (save, message and battle
+speed, buttons) in the new look.
 
 The menu's **Journal** says where the story stands and what to do next (with a
 hint if you're stuck), and keeps the story so far. The **Cheats** page (all off
@@ -107,6 +113,9 @@ Where things are kept
   `%APPDATA%\PSIV Recomp` (Windows) or `~/.local/share/psiv-recomp` (Linux) instead.
 - **Android:** `Android/data/com.psilok.psiv/files` on the device's storage,
   which you can reach over USB.
+- **Auto save** (Settings > Game, on by default): the game also saves for you
+  on the world map and in towns, never in a dungeon, into a save of its own
+  (`saves/psiv-auto.srm`). Your own saves are never touched.
 - Saves are the cartridge's own battery saves, made the way the game makes them.
   An emulator's `.srm` save of this game works too: put it in `saves/` as
   `psiv.srm`.
