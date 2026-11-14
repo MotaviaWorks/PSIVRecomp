@@ -110,6 +110,102 @@ static uint16_t nt(int r, int c) {
 
 static int is(uint16_t e, int tile, int flips) { return (e & 0x7FF) == tile && (e & 0x1800) == flips; }
 
+/* The damage and healing numbers: a little window the game draws in plane A over whoever was struck or
+ * healed (Fighter_OpenDamageWindow, Fighter_ShowDamage), from tiles of its own ($5E4-$5FF, high priority):
+ * a corner each side and three figures, two cells tall; it opens and closes from the middle (1 cell, 3, 5).
+ * Enemies' are in row 5, the party's in row 18, a vehicle's own at row 15. Left as they were they sat in
+ * the enemies' layer: behind the party they were over, in the fog, under a vehicle's dashboard. So they are
+ * read here, taken out of the picture and drawn with the menus (draw_popups), on top. */
+#define POP_TILE0 0x5E4
+#define POP_TILE1 0x5FF
+typedef struct {
+    int row, col, n;              /* its top row, first cell and width in cells now */
+    int x;                        /* its left edge on screen, game pixels: the cell's, with plane A's scroll */
+    int value, heal;              /* the number (-1: none shown yet), in the healing figures (yellow) */
+    int party;                    /* over the party (or the vehicle): not an enemy's */
+} Popup;
+#define MAX_POPUPS 10
+static Popup popups[MAX_POPUPS];
+static int npopups;
+static uint8_t pop_cell[64 * 32];         /* cells of the popups taken out */
+
+static int popup_tile(uint16_t e) { int t = e & 0x7FF; return (e & 0x8000) && t >= POP_TILE0 && t <= POP_TILE1; }
+
+/* plane A's horizontal scroll on line y (full screen, by cell or by line: as vdp.c reads it), -256..255:
+ * the game slides the enemies with it (a vehicle's shot), and their numbers go with them */
+static int plane_a_scroll(int y) {
+    uint32_t hs = (uint32_t)(vdp.reg[13] & 0x3F) << 10;
+    int hmode = vdp.reg[11] & 3;
+    uint32_t hrow = hmode == 3 ? (uint32_t)y : hmode == 2 ? (uint32_t)(y & ~7) : 0;
+    uint32_t ha = (hs + hrow * 4) & 0xFFFF;
+    int v = (vdp.vram[ha] << 8 | vdp.vram[ha + 1]) & 0x1FF;
+    return v >= 256 ? v - 512 : v;
+}
+
+/* a figure's top cell: 0-9, -1 a blank (no leading zeros), -2 anything else (the frame). The game's table
+ * (ROM $25EC on): the damage figures' tops, then the healing ones'; a 9 is the 0's top mirrored */
+static int popup_digit(uint16_t e, int *heal) {
+    static const uint16_t HIT[9] = {0x5E6, 0x5E7, 0x5E9, 0x5EB, 0x5EC, 0x5EE, 0x5EF, 0x5F0, 0x5F2};
+    static const uint16_t HEAL[9] = {0x5F3, 0x5F4, 0x5F6, 0x5F8, 0x5F9, 0x5FB, 0x5FC, 0x5FD, 0x5FF};
+    int t = e & 0x7FF, mirrored = (e & 0x0800) != 0;
+    if (t == 0x5E5) return -1;
+    if (mirrored) {
+        if (t == 0x5E6) return 9;
+        if (t == 0x5F3) { *heal = 1; return 9; }
+        return -2;
+    }
+    for (int i = 0; i < 9; i++) {
+        if (t == HIT[i]) return i;
+        if (t == HEAL[i]) { *heal = 1; return i; }
+    }
+    return -2;
+}
+
+static void read_popups(void) {
+    npopups = 0;
+    memset(pop_cell, 0, sizeof pop_cell);
+    for (int r = 0; r < 27; r++)
+        for (int c = 0; c < 40; c++) {
+            if (!popup_tile(nt(r, c)) || (r > 0 && popup_tile(nt(r - 1, c))) || (c > 0 && popup_tile(nt(r, c - 1)))) continue;
+            int n = 1;
+            while (c + n < 40 && popup_tile(nt(r, c + n))) n++;
+            if ((n != 1 && n != 3 && n != 5) || npopups >= MAX_POPUPS) continue;   /* not one as known: the game's own stays */
+            int first = n == 5 ? 1 : 0, figures = n == 1 ? 0 : 3, value = 0, seen = 0, heal = 0, ok = 1;
+            for (int i = 0; i < figures && ok; i++) {
+                int d = popup_digit(nt(r, c + first + i), &heal);
+                if (d == -2 || (d == -1 && seen)) ok = 0;
+                else if (d >= 0) { value = value * 10 + d; seen = 1; }
+            }
+            if (!ok) continue;
+            Popup *p = &popups[npopups++];
+            p->row = r; p->col = c; p->n = n;
+            p->x = c * 8 + plane_a_scroll(r * 8);
+            p->value = seen ? value : -1;
+            p->heal = heal;
+            p->party = vehicle ? r >= 12 : r >= 14;
+            for (int y = 0; y < 2; y++)
+                for (int x = 0; x < n; x++) pop_cell[(r + y) * 64 + c + x] = 1;
+        }
+    {   /* PSIV_BUI_LOG=1: the numbers as they come and go */
+        static int log_on = -1, last = -1;
+        if (log_on < 0) { const char *v = getenv("PSIV_BUI_LOG"); log_on = v && *v == '1'; }
+        int key = npopups;
+        for (int i = 0; i < npopups; i++) key = key * 31 + popups[i].col * 64 + popups[i].n * 8 + popups[i].value;
+        if (log_on && key != last)
+            for (int i = 0; i < npopups; i++)
+                printf("battleui: number %d%s at row %d col %d (x %d), %d cells, %s\n", popups[i].value,
+                       popups[i].heal ? " (heal)" : "", popups[i].row, popups[i].col, popups[i].x, popups[i].n,
+                       popups[i].party ? "party" : "enemy");
+        last = key;
+    }
+}
+
+int battleui_popup(int i, int *x, int *y, int *w, int *h) {
+    if (!active || i < 0 || i >= npopups) return 0;
+    *x = popups[i].x; *y = popups[i].row * 8; *w = popups[i].n * 8; *h = 16;
+    return 1;
+}
+
 /* window art in a vehicle's battle: its frames and checkboxes, and the font
  * anywhere but the dashboard's SP readout */
 static int veh_ui_tile(uint16_t e, int r, int c) {
@@ -169,14 +265,15 @@ void battleui_frame(void) {
 
     /* the game's windows as they are now, then out of the picture */
     read_windows();
+    read_popups();
     for (int r = 0; r < 32; r++)
         for (int c = 0; c < 64; c++) {
             uint16_t e = nt(r, c), o = 0xFFFF;
-            if (vehicle ? veh_ui_tile(e, r, c) : ui_tile(e)) {
+            if (pop_cell[r * 64 + c] || (vehicle ? veh_ui_tile(e, r, c) : ui_tile(e))) {
                 o = 0;
                 if (r >= CLEAN_ROW0 && r < CLEAN_ROW0 + CLEAN_ROWS && c < 40) {
                     uint16_t k = (uint16_t)r16(CLEAN_MAP + (unsigned)(r - CLEAN_ROW0) * 0x50u + (unsigned)c * 2u);
-                    if (!(vehicle ? veh_ui_tile(k, r, c) : ui_tile(k))) o = k;
+                    if (!(vehicle ? veh_ui_tile(k, r, c) : ui_tile(k)) && !popup_tile(k)) o = k;
                 }
             } else if (vehicle && r == V_SP_ROW && c >= V_SP_COL0 && c <= V_SP_COL1 && (e & 0x7FF) >= 0x680) {
                 /* the SP readout: the monitor's blank glass in its place (the dashboard is mirror-symmetric
@@ -478,7 +575,7 @@ static void party_frame(void) {
                 int row = PARTY_ROW0 + r, col = m->col0 + c;
                 if (!e || col < 0 || col >= 64) continue;
                 uint16_t cur = nt(row, col);
-                if ((cur & 0x7FF) && !ui_tile(cur)) {
+                if ((cur & 0x7FF) && !ui_tile(cur) && !pop_cell[row * 64 + col]) {
                     back_cells[row * 64 + col] = e;           /* behind what the game drew there */
                     continue;
                 }
@@ -1465,6 +1562,8 @@ static void draw_vehicle(int menu, int frame, float alpha) {
 }
 
 /* ------------------------------------------------------------------ the frame */
+static void draw_popups(void);
+
 void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) {
     static int frame, last_key = -1;
     nhits = 0;
@@ -1487,6 +1586,7 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     int r2 = (int)(r16(BATTLE_ROUTINE_2) & 0x7FFF), menu = menu_of(r2);
     if (vehicle) {                          /* no party: the cockpit's readout, its windows, its bar */
         draw_vehicle(menu == M_VEH_MAIN || menu == M_VEH_WEAPON || menu == M_TARGET_ENEMY ? menu : M_NONE, frame, 1.0f);
+        draw_popups();
         return;
     }
     int fighter = (int)r16(COMD_INPUT), acting = menu != M_NONE ? fighter_char(fighter) : -1;
@@ -1590,6 +1690,30 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     }
     if (bar_up || strip_in > 0.05f) draw_bar(bar_up ? menu : M_NONE, fighter, chosen, line, hud_in);
     target_hits(menu);
+    draw_popups();
+}
+
+/* the damage and healing numbers (read_popups), over everything: a small window where the game had its
+ * own, moving with whoever it is over (the enemies' layer or the party's; a vehicle's own stays put),
+ * the number in the menus' type -- white for damage, gold with a plus for healing. It opens and closes
+ * with the game's (a third, three fifths, whole) */
+static void draw_popups(void) {
+    for (int i = 0; i < npopups; i++) {
+        const Popup *p = &popups[i];
+        float gx = (float)p->x + (float)p->n * 4.0f, gy = (float)p->row * 8.0f + 8.0f, sx = gx, sy = gy;
+        if (!(vehicle && p->party)) {
+            depth_to_screen(p->party, gx + OX, gy, &sx, &sy);
+            sx -= OX;
+        }
+        char t[8] = "";
+        if (p->value >= 0) snprintf(t, sizeof t, p->heal ? "+%d" : "%d", p->value);
+        float cap = 7.4f, tw = t[0] ? ui_text_width(t, cap * S) / S : 0.0f;
+        float half = fmaxf(19.0f, tw / 2.0f + 8.5f) * (float)p->n / 5.0f, hh = 9.5f;
+        if (sy - hh < 1.0f) sy = 1.0f + hh;
+        win(sx - half, sy - hh, sx + half, sy + hh, 1.0f);
+        if (t[0] && p->n >= 3)
+            ui_text_center(&cv, SX(sx), SY(sy + cap / 2.0f), cap * S, t, p->heal ? 0xFFD27Au : WHITE, AL(255));
+    }
 }
 
 /* ------------------------------------------------------------------ clicks, as the pad */

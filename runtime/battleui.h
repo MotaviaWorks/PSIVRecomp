@@ -63,6 +63,10 @@ int  battleui_pan(int *member, int *dx);
 int  battleui_tile_member(int tile);
 uint8_t battleui_pan_pixel(int px, int py, int *member);
 
+/* The damage and healing numbers the menus took out of the picture to draw themselves: the i-th one's
+ * place in plane A, pixels (0 when there is no i-th). depth.c's sparks and shake start from them. */
+int  battleui_popup(int i, int *x, int *y, int *w, int *h);
+
 /* draw over a picture of the frame at `scale` times the game's resolution:
  * out holds the view as frame_run drew it, view_w x h game pixels */
 void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h);

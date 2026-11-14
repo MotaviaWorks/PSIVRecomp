@@ -677,6 +677,15 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             }
         }
     }
+    /* the numbers the modern menus took out of the picture (battleui.h): counted as if they were there,
+     * so a hit still sparks and shakes */
+    for (int i = 0, px, py, pw, ph; battleui_popup(i, &px, &py, &pw, &ph); i++)
+        for (int yy = 0; yy < ph; yy++)
+            for (int xx = 0; xx < pw; xx++) {
+                int vx = px + xx - vdp_view_x0, vy = py + yy;
+                if (vx < 0 || vx >= w || vy < 0 || vy >= h) continue;
+                popups++; pop_cnt[vx]++; pop_ysum[vx] += vy;
+            }
     /* widescreen: battle backgrounds are drawn exactly 320 pixels wide, so
      * where a line's margins are empty, mirror the background into them */
     if (wide) {
