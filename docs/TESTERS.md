@@ -4,9 +4,9 @@ PSIV Recomp: beta
 A native port of Phantasy Star IV for Windows, macOS, Linux and Android. The game's
 68000 code is translated into C and runs directly on your machine, with
 optional extras: widescreen, modern text and battle menus, battle depth and
-effects, a battle camera, living water and swaying trees, the party's voices
-in battle (made with VoiceDesign, placeholders for now), the port's own sound
-effects, a Journal, cheats, click/tap to walk.
+effects, a battle camera, living water and swaying trees, a Journal, cheats,
+click/tap to walk. Voices (the story scenes and the party in battle, made
+with VoiceDesign) and remixed music are optional packs, separate downloads.
 
 New, and wanting ears: Settings > Sound > Sound effects: Algol plays the
 game's own effects on the chip remastered -- clean, in stereo, with room
@@ -79,7 +79,9 @@ Controls
 
 The launcher has **Continue** and **Load game** once you have a save (Load
 game shows every save with the party's faces, and the auto save on a tab of
-its own), **Start game**, the switch between **Enhanced** (the port's
+its own), **Start game**, **Bonus Modes** (the Boss Arena: the story's boss
+fights again with the party you had then, each on the clock; Wave Mode: five
+battles in a row), the switch between **Enhanced** (the port's
 additions) and **Classic** (the original game, unchanged), **Settings** and
 **Quit**. In the game, Settings are in the menu too (Esc, Select, Back or ≡), on seven pages: Game,
 Display, Sound, Battles, Controls, Cheats, and Buttons (what each button and key does, with your
@@ -99,10 +101,19 @@ display, for a screen that shows tearing.
 **Mode: Classic** (on the Game page) switches every
 addition off and gives you the original game. The Sound page has a slider
 each for the volume of everything, the music, the effects and the voices;
-Battle voices and Scene voices are switches of their own there, and Music
+Battle voices and Scene voices are switches of their own there (both come
+with the optional voice pack: the game itself has no voices), and Music
 pack plays a music pack (or files of your own) in place of the game's songs.
 In the field, Start opens the game's System menu (save, message and battle
 speed, buttons) in the new look.
+
+New in battles (Battles page): a battle **opens** on a close-up of the
+enemies and the view draws back to the party; **Strike zoom**, an experiment,
+cuts in close when one of the party goes up to an enemy; Zio's stage has a
+new **backdrop**, a sea of fog drawn by the port. Each has a switch. And the
+menu (Esc) no longer stops the game in the story: its music plays on, and
+nothing you press reaches the game (Game page > This menu, for the old way;
+the Boss Arena and Wave Mode still stop under it).
 
 The menu's **Journal** says where the story stands and what to do next (with a
 hint if you're stuck), and keeps the story so far. The **Cheats** page (all off
@@ -152,8 +163,10 @@ Not in this beta
 - Save states: the game's own saves only. (Rewind goes back up to two minutes, ten
   seconds a press: Backspace, the left shoulder, or "Go back 10 seconds" in the menu.)
 - Algol, the chip remastered, and Proto Algol, the first Algol, are new (Settings > Sound > Music).
-- Voiced story scenes and remixed music: optional packs, separate downloads. To
-  install the voice pack, choose Settings > Sound > Voice pack and pick its
+- Voices and remixed music: optional packs, separate downloads. The voice
+  pack has the voiced story scenes and the party's voices in battle (those
+  were part of the game up to 0.5; from 0.6 they come with the pack). To
+  install it, choose Settings > Sound > Voice pack and pick its
   `.zip`, or put the `.zip` in the game's folder before starting.
 
 

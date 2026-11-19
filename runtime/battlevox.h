@@ -3,12 +3,13 @@
  * breath as they cast, grunt when a blow lands on them, groan as they fall,
  * and one of them breathes a little laugh when the battle is won.
  *
- * The voices are the port's own, made with Qwen3-TTS VoiceDesign (Apache-2.0)
- * from a written description of each character (tools/vo_gen.py), and ship in
- * the voices folder as <name>_<moment>_<n>.wav -- name chaz, alys, hahn, rune,
- * gryz, rika, demi, wren, raja, kyra, seth; moment attack, hurt, cast, ko,
- * win; n from 1. Files of the same names in the home folder's voices folder
- * take their place, so anyone can give a character their own voice.
+ * The voices are not part of the game: they come with the optional voice pack
+ * (made with VoiceDesign from a written description of each character), which
+ * installs them in the home folder's voices/scenes/battle as
+ * <name>_<moment>_<n>.wav -- name chaz, alys, hahn, rune, gryz, rika, demi,
+ * wren, raja, kyra, seth; moment attack, hurt, cast, ko, win; n from 1. Files
+ * of the same names in the home folder's voices folder take their place, so
+ * anyone can give a character their own voice. With none, there are none.
  *
  * The moments come from the game's RAM, as for the rumble (rumble.c): the
  * acting fighter ($FF4142, fighter + 1, while the battle plays out) and their

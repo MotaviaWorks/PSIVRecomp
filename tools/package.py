@@ -95,7 +95,6 @@ def mac_app(build, app, ver):
     os.chmod(os.path.join(macos, 'psiv'), 0o755)
     for f in ('NotoSans-Regular.ttf', 'OFL.txt'):
         shutil.copyfile(os.path.join(ROOT, 'res', 'fonts', f), os.path.join(resources, 'fonts', f))
-    shutil.copytree(os.path.join(ROOT, 'res', 'voices'), os.path.join(resources, 'voices'))   # before signing
     if os.path.isdir(os.path.join(ROOT, 'res', 'sounds')):   # the modern sounds' library (runtime/sfx.h)
         shutil.copytree(os.path.join(ROOT, 'res', 'sounds'), os.path.join(resources, 'sounds'))
     short = re.match(r'[0-9.]+', ver).group(0)          # 0.1.1-alpha+abc -> 0.1.1
@@ -138,9 +137,8 @@ def stage(kind, build, folder, sdl_license, ver=''):
     readme = open(os.path.join(ROOT, 'docs', 'TESTERS.md'), encoding='utf-8').read()
     with open(os.path.join(folder, 'README.txt'), 'w', encoding='utf-8', newline=nl) as f:
         f.write(readme)
-    # the party's battle voices (the port's own: runtime/battlevox.h)
-    if kind != 'macos':                                  # (the app has them inside: mac_app)
-        shutil.copytree(os.path.join(ROOT, 'res', 'voices'), os.path.join(folder, 'voices'))
+    # (no voices: the party's battle voices come with the optional voice pack, as the scenes' do)
+    if kind != 'macos':                                  # (the app has its resources inside: mac_app)
         if os.path.isdir(os.path.join(ROOT, 'res', 'sounds')):   # the modern sounds' library (runtime/sfx.h)
             shutil.copytree(os.path.join(ROOT, 'res', 'sounds'), os.path.join(folder, 'sounds'))
     licenses(os.path.join(folder, 'LICENSES'), sdl_license)

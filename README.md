@@ -260,10 +260,12 @@ The additions:
   320 wide with a black notch under it).
 - **Battle voices** (Sound page: on / off): the party speaks in battle -- a
   shout as they attack, a grunt when hit, a breath as they cast, a cry when
-  they fall, a cheer when they win (`runtime/battlevox.c`). The voice lines
-  are made with VoiceDesign, placeholders,
-  `res/voices/<name>_<moment>_<n>.wav` for all ten characters; files of your
-  own in the home folder's `voices/` take their place.
+  they fall, a cheer when they win (`runtime/battlevox.c`). The voices are
+  not part of the game: they come with the optional voice pack (made with
+  VoiceDesign), which installs them as
+  `voices/scenes/battle/<name>_<moment>_<n>.wav` in the home folder; files of
+  your own in the home folder's `voices/` take their place. Without either
+  the battles have no voices.
 - **Scene voices** (Sound page: on / off, a switch of its own, so the battle
   voices can be off and the scenes spoken, or the other way round): voiced
   story scenes from an optional pack in

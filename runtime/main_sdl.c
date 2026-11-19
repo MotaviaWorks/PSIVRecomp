@@ -166,9 +166,34 @@ static void *scene_clip(const char *name, size_t *len) {
     return copy;
 }
 
+/* The party's battle voices (battlevox.h). They are not part of the game: they come with the optional voice
+ * pack, which puts them in the home folder's voices/scenes/battle. Files of your own in the home folder's voices
+ * folder come first; the voices an earlier version shipped beside the program still count. */
+static void load_battle_voices(void) {
+    static const char *const SUB[3] = {"voices/", "voices/scenes/battle/", "voices/"};
+    const char *where[3] = {home, home, base_dir};
+    int yours = 0;
+    battlevox_stop();
+    for (int c = 0; c < VOX_CHARS; c++)
+        for (int m = 0; m < VOX_MOMENTS; m++)
+            for (int k = 0; k < VOX_TAKES; k++)
+                for (int w = 0; w < 3; w++) {
+                    char path[1300];
+                    snprintf(path, sizeof path, "%s%s%s_%s_%d.wav", where[w], SUB[w], battlevox_char_name(c),
+                             battlevox_moment_name(m), k + 1);
+                    size_t n = 0;
+                    void *d = SDL_LoadFile(path, &n);
+                    if (!d) continue;
+                    int ok = battlevox_add(c, m, k, d, n);
+                    SDL_free(d);
+                    if (ok) { yours += w == 0; break; }
+                }
+    SDL_Log("voices: %d takes (%d of yours)", battlevox_count(), yours);
+}
+
 /* ------------------------------------------------------------------ the voice pack
- * The voiced scenes' pack (scenevox.h) is a .zip of voices/scenes -- its index,
- * scenes.txt, and the clips it names -- unpacked into the home folder: chosen
+ * The pack (scenevox.h) is a .zip of voices/scenes -- its index,
+ * scenes.txt, the clips it names, and the party's battle voices in battle/ -- unpacked into the home folder: chosen
  * in Settings > Sound > Voice pack, or dropped into the home folder (installed
  * at the start; voices/scenes/pack.txt remembers the .zip, so it is unpacked
  * once). Only .wav and .txt files under the folder holding scenes.txt are
@@ -252,6 +277,7 @@ static int voicepack_install(const char *path, char *err, size_t errn) {
     }
     SDL_Log("voice pack: %d files from %s", j->files, path);
     free(j);
+    load_battle_voices();                                 /* (the pack's, just unpacked) */
     int pages = load_scene_pack();
     if (pages <= 0) { snprintf(err, errn, "The voice pack was unpacked, but its index names no pages."); return 0; }
     return pages;
@@ -306,32 +332,12 @@ static void *sound_file_read(const char *path, long *size) {
 }
 static void sound_file_done(void *d) { SDL_free(d); }
 
-/* the party's battle voices (battlevox.h): yours in the home folder's
- * voices folder first, else the port's beside the program (or the APK's
- * assets), else a development build's res/voices */
+/* the voices at the start: a voice pack's .zip just dropped in (unpacked, and loaded with its battle voices), or
+ * what is installed -- the battle voices, and the scenes' index (voices/scenes/scenes.txt) */
 static void load_voices(void) {
-    int yours = 0;
-    for (int c = 0; c < VOX_CHARS; c++)
-        for (int m = 0; m < VOX_MOMENTS; m++)
-            for (int k = 0; k < VOX_TAKES; k++) {
-                char name[64], path[1200];
-                snprintf(name, sizeof name, "voices/%s_%s_%d.wav", battlevox_char_name(c), battlevox_moment_name(m), k + 1);
-                const char *where[3] = {home, base_dir, home};
-                const char *sub_[3] = {"", "", "res/"};
-                for (int w = 0; w < 3; w++) {
-                    snprintf(path, sizeof path, "%s%s%s", where[w], sub_[w], name);
-                    size_t n = 0;
-                    void *d = SDL_LoadFile(path, &n);
-                    if (!d) continue;
-                    int ok = battlevox_add(c, m, k, d, n);
-                    SDL_free(d);
-                    if (ok) { yours += w == 0; break; }
-                }
-            }
-    SDL_Log("voices: %d takes (%d of yours)", battlevox_count(), yours);
-    /* a voiced-scenes pack, if there is one: a .zip just dropped in, or the
-     * one installed (voices/scenes/scenes.txt) */
-    if (!voicepack_nearby()) load_scene_pack();
+    if (voicepack_nearby()) return;
+    load_battle_voices();
+    load_scene_pack();
 }
 
 static void find_home(void) {
@@ -424,7 +430,7 @@ static Setting settings[] = {
     {"cheat.money", "off", "cheat: meseta kept at 999,999: on / off"},
     {"cheat.exp", "1", "cheat: experience from battles: 1 normal, 2 double, 4 quadruple"},
     {"cheat.weak", "off", "cheat: enemies have 1 HP: on / off"},
-    {"enhance.voices", "on", "the party's voices in battle: shouts as they attack, grunts when hit, a breath as they cast: on / off"},
+    {"enhance.voices", "on", "the party's voices in battle, from the optional voice pack once it is installed (or files of your own in the voices folder): shouts as they attack, grunts when hit, a breath as they cast: on / off"},
     {"enhance.scene_voices", "on", "the voiced story scenes, from the optional voice pack once it is installed: on / off"},
     {"enhance.battle_camera", "on", "when an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping (needs battle depth): on / off"},
     {"enhance.battle_backdrops", "on", "backdrops the port draws itself in place of the game's battle background, where it has one (Zio's stage: a sea of blue fog flowing from his feet, to every edge of the view; with battle depth, fog, effects or widescreen on): on / off"},
@@ -1139,9 +1145,10 @@ static void voicepack_choose(void) {
     if (!dialog_path[0]) return;                             /* cancelled */
     int pages = voicepack_install(dialog_path, msg, sizeof msg);
     if (pages > 0) {
-        snprintf(msg, sizeof msg, "The voice pack is installed: %d page%s of the story voiced.\n\nScene voices, on "
-                 "this page, turns them on and off (they're off in Classic mode). The .zip you chose isn't needed "
-                 "any more.", pages, pages == 1 ? "" : "s");
+        snprintf(msg, sizeof msg, "The voice pack is installed: %d page%s of the story voiced%s.\n\nScene voices "
+                 "and Battle voices, on this page, turn them on and off (they're off in Classic mode). The .zip you "
+                 "chose isn't needed any more.", pages, pages == 1 ? "" : "s",
+                 battlevox_count() > 0 ? ", and the party's voices in battle" : "");
         message(SDL_MESSAGEBOX_INFORMATION, msg, window);
         voice_quip();
     } else {
@@ -1977,13 +1984,14 @@ static const MenuItem SOUND_ITEMS[] = {
      "the first Algol, the same songs on new instruments of its own.",
      apply_enhancements},
     {"Battle voices", "enhance.voices", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
-     "The party shout as they attack, grunt when hit, draw breath as they cast. Your own in the voices folder.",
+     "The party shout as they attack, grunt when hit, draw breath as they cast, once the voice pack below is "
+     "installed. Your own go in the voices folder.",
      apply_enhancements},
     {"Scene voices", "enhance.scene_voices", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "The story scenes spoken aloud, once the voice pack below is installed. Off: the scenes are read, as ever.",
      apply_scene_voices},
     {"Voice pack", NULL, {0}, {0}, 0, 0, 0, 0,
-     "The optional voice pack for the story scenes: choose its .zip to install it, or a newer one. A pack's .zip "
+     "The optional voice pack, for the story scenes and the battles: choose its .zip to install it, or a newer one. A pack's .zip "
      "left in the game's folder installs itself at the start.", NULL, voicepack_choose, voicepack_label},
     {"Music pack", "enhance.custom_music", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "A music pack, or audio files of your own, in the music folder: they play in place of the game's songs.",
