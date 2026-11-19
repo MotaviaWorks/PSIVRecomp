@@ -166,6 +166,11 @@ static int inflate_raw(Inflate *s) {
     return 1;
 }
 
+size_t unzip_inflate(const uint8_t *in, size_t n, uint8_t *out, size_t cap) {
+    Inflate st = {in, in + n, 0, 0, 0, out, 0, cap};
+    return inflate_raw(&st) ? st.len : 0;
+}
+
 /* ------------------------------------------------------------------ the archive */
 static int rom_like(const uint8_t *name, size_t n) {
     static const char *ext[] = {".md", ".bin", ".gen", ".smd", ".68k"};

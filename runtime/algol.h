@@ -1,5 +1,6 @@
 /*
- * Algol (M7, an option): a modern sound chip for the game's music.
+ * Proto Algol (M7, an option; it was Algol until the new Algol, algol2.h, took
+ * the name): a modern sound chip for the game's music, on instruments of its own.
  *
  * The music driver (SMPS, on the 68000) writes the YM2612 and the PSG, and
  * the Z80 plays its drum samples. The port keeps those chips running for the
@@ -22,12 +23,17 @@
 
 void algol_set_enabled(int on);
 int  algol_enabled(void);
+/* which plays when it is on: 1 Proto Algol (this file's), 2 Algol (algol2.h: the game's own
+ * instruments, clean) */
+void algol_set_version(int v);
+int  algol_version(void);
 void algol_reset(void);
 
 /* the chips' writes, as sound.c makes them */
 void algol_ym_write(int part, uint8_t reg, uint8_t value);    /* part 0/1 = the YM2612's two halves */
 void algol_psg_write(uint8_t value);
 void algol_dac_hit(int sample, int pitch, int volume, int pan); /* the Z80 told to play drum sample 1-17 */
+void algol_dac_stop(void);                                     /* ... and to stop it (a rest: Algol follows it) */
 void algol_driver_tick(void);                                  /* after each run of the music driver */
 
 /* channels an effect holds right now, as ym_generate_mask() takes them (bit

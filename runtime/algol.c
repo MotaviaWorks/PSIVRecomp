@@ -1,5 +1,6 @@
 /*
- * Algol, a modern sound chip for the game's music: see algol.h.
+ * Proto Algol, a modern sound chip for the game's music: see algol.h. (Version 2, the
+ * new Algol, is algol2.c: the registers go to both, and algol_set_version picks.)
  *
  *   decoder   the chips' writes -> per channel: key on/off, pitch (MIDI, from
  *             F-number and block times the main carrier's multiple), the
@@ -18,6 +19,7 @@
  * (PSIV_ALGOL_LOG=1 prints each patch as it first plays).
  */
 #include "algol.h"
+#include "algol2.h"
 #include "m68k.h"
 #include "snesbank.h"
 #include "sound.h"
@@ -33,12 +35,21 @@
 #define TWO_PI  6.28318531f
 
 static int enabled;
+static int version = 1;                    /* 1: Proto Algol; 2: Algol (algol2.h); the registers go to both all along */
 static void silence(void);
 void algol_set_enabled(int on) {
-    if (on && !enabled) silence();         /* the chips' registers are tracked all along */
+    if (on && !enabled) { silence(); algol2_silence(); }   /* the chips' registers are tracked all along */
     enabled = on;
 }
 int  algol_enabled(void) { return enabled; }
+void algol_set_version(int v) {
+    v = v == 2 ? 2 : 1;
+    if (v == version) return;
+    version = v;
+    silence();
+    algol2_silence();
+}
+int  algol_version(void) { return version; }
 
 static float note_hz(float n) { return 440.0f * exp2f((n - 69.0f) / 12.0f); }
 static float clampf(float x, float a, float b) { return x < a ? a : x > b ? b : x; }
@@ -593,6 +604,7 @@ static void fm_note_on(int ch) {
 }
 
 void algol_ym_write(int part, uint8_t reg, uint8_t val) {
+    algol2_ym_write(part, reg, val);
     ym[part][reg] = val;
     if (part == 0 && reg == 0x2B) dac_on = val >> 7;
     if (!enabled) {                                          /* only the registers */
@@ -653,6 +665,7 @@ static void psg_update(int ch) {
 }
 
 void algol_psg_write(uint8_t val) {
+    algol2_psg_write(val);
     if (val & 0x80) psg_latch = val >> 4 & 7;
     int ch = psg_latch >> 1;
     if (psg_latch & 1) psg_att[ch] = val & 15;
@@ -908,9 +921,14 @@ static void ride_run(float *l, float *r, float *room) {
     *room += s * 0.12f;
 }
 
+void algol_dac_stop(void) {
+    if (enabled && version == 2) algol2_dac_stop();
+}
+
 void algol_dac_hit(int sample, int pitch, int volume, int pan) {
     if (!enabled || sample < 1 || sample > 17) return;
     if (fx_fm >> 5 & 1) return;                             /* an effect holds the DAC */
+    if (version == 2) { algol2_dac_hit(sample, pitch, volume, pan); return; }
     /* the game's two drum tracks can ask for the same sample in one tick */
     if (now - last_hit[sample] < 0.004 * SR && last_hit[sample] > 0.0) return;
     last_hit[sample] = now;
@@ -1242,6 +1260,7 @@ static void silence(void) {
 
 /* the console reset: the chips start over too */
 void algol_reset(void) {
+    algol2_reset();
     silence();
     memset(ym, 0, sizeof ym);
     memset(fm_key, 0, sizeof fm_key);
@@ -1326,6 +1345,7 @@ static void meter_print(void) {
 }
 
 void algol_render(float *left, float *right) {
+    if (version == 2) { algol2_render(left, right, fx_fm, fx_psg); return; }
     if (!ready) silence();
     if (meter_on < 0) {
         meter_on = getenv("PSIV_ALGOL_METER") != NULL;

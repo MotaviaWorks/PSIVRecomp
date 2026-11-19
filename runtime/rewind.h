@@ -36,6 +36,11 @@ float rewind_volume(void);
  * lately) */
 int rewind_note_seconds(void);
 
+/* The console as it was at its first frame, put back after this frame: as
+ * good as pressing Reset (the battery save stays as it is). The Boss Arena
+ * starts each fight over from it. The rewind's states go. */
+void rewind_restart(void);
+
 /* tests (headless): keep a state now; put back the one kept at `game_frame`
  * at once, without the fade (1 if there was one) */
 void rewind_keep_now(void);

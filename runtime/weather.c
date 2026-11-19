@@ -696,6 +696,13 @@ static void wx_sound_init(void) {
     for (int i = 0; i < 4; i++) thunder_pcm[i] = sfxsynth_render("thunder", i, &thunder_frames[i]);
 }
 
+void weather_frame(void) {
+    uint16_t mode = (uint16_t)(m68k_ram[0xEF00] << 8 | m68k_ram[0xEF01]);     /* Game_Mode_Index */
+    if (mode == 0x14) return;                                                 /* GameMode_Battle */
+    if (picked || rain_target > 0.0f) weather_battle_end();
+    thunder_due_variant = -1;                                                 /* (a clap still due: not after the battle) */
+}
+
 int weather_sound_on(void) {
     return sound_on && sound_ready && (rain_gain > 0.0005f || rain_target > 0.0f || voices[0].v >= 0
                                        || voices[1].v >= 0 || thunder_due_variant >= 0);

@@ -45,7 +45,11 @@ void cheats_set(int c, int v) {
 
 int cheats_get(int c) { return c >= 0 && c < CHEATS ? on[c] : 0; }
 
+static int suspended;
+void cheats_suspend(int s) { suspended = s; }
+
 void cheats_frame(void) {
+    if (suspended) return;
     int battle = r16(GAME_MODE) / 4 == 5;
     for (int id = 0; id < 11; id++) {
         unsigned s = CHAR_STATS + (unsigned)id * 0x80;

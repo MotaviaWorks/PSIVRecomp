@@ -24,5 +24,6 @@ enum { CHEAT_HP, CHEAT_TP, CHEAT_NO_BATTLES, CHEAT_MONEY, CHEAT_EXP, CHEAT_WEAK,
 void cheats_set(int cheat, int value);   /* 0 off; for CHEAT_EXP the multiplier (1, 2, 4) */
 int  cheats_get(int cheat);
 void cheats_frame(void);                 /* once a frame, before it runs */
+void cheats_suspend(int on);             /* 1: none of them works for now, whatever is set (the Boss Arena) */
 
 #endif

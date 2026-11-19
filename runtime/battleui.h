@@ -39,6 +39,10 @@
 #include <stdint.h>
 
 void battleui_set_enabled(int on);
+/* the item list: the pack one row a kind of item, with how many (display only) */
+void battleui_set_group_items(int on);
+/* as fieldmenu_quiet_cursor: 1 = drop this cursor tick (the port is walking the cursor) */
+int  battleui_quiet_cursor(void);
 int  battleui_enabled(void);
 
 /* once per frame, before its lines are drawn (frame.c): decides whether the
@@ -76,6 +80,9 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h);
  * pad: the game's own cursor is walked there a press at a time, then C. A
  * right click is B (back). 1 if the click was taken. */
 int  battleui_click(float fx, float fy, int right);
+/* The mouse resting on an entry (the same pixels): the game's cursor goes there, a press at a
+ * time, and nothing is chosen -- the entry is lit and its line shown. 1 if it is over one. */
+int  battleui_hover(float fx, float fy);
 /* the pad the game sees this frame: `user` what the player holds (any of it
  * stops a click's presses), `pad` what would go to the game otherwise */
 uint8_t battleui_pad(uint8_t user, uint8_t pad);

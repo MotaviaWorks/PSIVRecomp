@@ -127,7 +127,9 @@ The app opens on the launcher: Start game, Enhanced or Classic, Settings,
 Quit (arrows or the stick, Enter or C; Left / Right flips the mode).
 Hold Tab to fast-forward, F10 pause, F11 fullscreen, F12 screenshot
 (`screenshots/`). **Esc** (or the pad's Back/Select) opens the system menu:
-resume, go back 10 seconds, the journal, settings, quit. Settings are on
+resume, go back 10 seconds, the journal, settings, return to menu (the
+launcher again, after a Yes; the game starts over from what is chosen
+there), quit. Settings are on
 seven pages -- Game, Display, Sound, Battles, Controls, Cheats, Buttons --
 turned with Tab / Page Up / Page Down, the shoulder
 buttons, or a click or tap on the page's name; the line under the list says
@@ -199,7 +201,21 @@ them (`runtime/mixbus.h`); `psiv_headless --levels M:E:V` renders with them
 ### Enhancements
 
 Settings in the Esc menu (saved to `psiv.ini`). **Mode: Classic** is the
-original game, unchanged; **Enhanced** turns on the additions:
+original game, unchanged; **Enhanced** turns on the additions.
+
+**Previews.** Smoothing, Water and Trees (Display) and Depth, Fog, Camera,
+Weather and Effects (Battles) show what they do: a short clip with the
+setting off beside one as chosen. The game makes them once, from the
+player's own ROM, the way the Boss Arena gathers its bosses' pictures: it
+runs itself windowless (`psiv --headless --preview-scene battle|field ...
+--clip FILE`, the headless front end built in) one clip at a time in the
+background at a low priority, and keeps them in `previews/` (13 clips,
+about 25 MB; `runtime/clip.h`: RGB565, each frame against the last,
+deflated). The battle is the Boss Arena's tenth party on Uzo's grass,
+Motavia, fighting a random battle; the field is Uzo's coast. Not on Android
+yet (it can't start a second program).
+
+The additions:
 
 - **Battle depth** (F9: off / subtle / strong): battles drawn as layers at
   different depths under a gently moving camera that leans in on attacks.
@@ -262,9 +278,23 @@ original game, unchanged; **Enhanced** turns on the additions:
   experience, enemies at 1 HP. They work on the game's RAM between frames,
   never on its code (`runtime/cheats.c`; `psiv_headless --cheat NAME`).
 
-- **Music** (original chip / Algol): *Algol* is the port's own modern sound
-  chip (`runtime/algol.c`). The game's music driver still runs and still
-  writes the YM2612 and the PSG; Algol decodes those writes into notes
+- **Music** (original chip / Algol / Proto Algol): *Algol* is the chip,
+  remastered (`runtime/algol2.c`). The game's music driver still runs and
+  still writes the YM2612 and the PSG; Algol plays those writes on the
+  YM2612 again, in floating point -- each FM patch's four operators, its
+  algorithm and feedback, the chip's envelope generator rate for rate, so
+  every instrument the composer made sounds and moves as it does on the
+  console -- without the chip's 9-bit output and the step in its DAC. The
+  PSG's squares are drawn band-limited, and the drums are the game's own
+  samples from your ROM, played at the driver's own rates. Then some studio
+  polish: each part doubled a few cents apart and spread across the stereo
+  field (the bass in the middle, with a sub under it), and a reverb.
+  `psiv_headless --algol` renders with it; `PSIV_ALGOL2_DRY=1` leaves the
+  polish out, and the clean chip then measures within about a decibel of the
+  original on the soundtrack's songs.
+
+  *Proto Algol* is the first Algol (`runtime/algol.c`): it decodes those
+  writes into notes
   (pitch, instrument, loudness, pan) and plays them on new instruments --
   unison saw leads, brass, strings, a bass with a sub, a driven guitar,
   plucks, FM bells and keys, an organ, soft square leads -- each of the
@@ -284,7 +314,7 @@ original game, unchanged; **Enhanced** turns on the additions:
   `python tools/algol_sections.py 8F`, which lists a song bar by bar).
   `algol.ini` in the working folder overrides the instrument of any patch
   (`PSIV_ALGOL_LOG=1` lists them) and the drums of any song (`song 8F =
-  rock` or `= standard`); `psiv_headless --algol` renders with it.
+  rock` or `= standard`); `psiv_headless --proto-algol` renders with it.
 
 - **SNES instrument banks -- paused** (2026-11-06): not in `psiv.ini` for
   now; `PSIV_MUSIC_BANK=ROM` turns it on for development and
@@ -333,6 +363,33 @@ original game, unchanged; **Enhanced** turns on the additions:
   at a time and pressing C; a right click is B (back).
   `psiv_headless --click F:X,Y[,R]` clicks frame pixel (X, Y) at logical
   frame F (R: the right button).
+
+- **World map** (Game page: off / explored / everything; off unless chosen;
+  `runtime/worldmap.c`): a map of Motavia, Dezolis and Rykros while you walk
+  them. A small one sits in the corner of the picture; **M**, R3 (the right
+  stick pressed in) or a click or tap on the small one opens the whole map
+  over the game, which runs on under it: the music plays, a walk across the
+  world goes on (the party's ring moves), and your keys and buttons are the
+  map's until it is put away. A battle, a window or an event puts it away
+  by itself. Beside the world's name it says whether random battles are
+  on or off; E, L3 or a click on that switches them there too. Drag it or steer it with the arrows
+  or the d-pad, zoom with the wheel, + / -, the shoulder buttons or a pinch
+  (whole steps, so the pixels stay sharp: from the whole world down to about
+  the game's own size), and the towns, caves and towers are named. Click a
+  spot (or Enter / C on the cross in the middle) and the party walks there
+  over the game's own collision, however far: a battle on the way and they
+  walk on after it; onto a place's way in (the dot over its name) and they go in; your own d-pad or
+  buttons take over at once. *Explored* shows only what the party has seen,
+  the rest hatched dark, and walks only over what it shows; it is kept in
+  `saves/explored.bin` (one record for the install, noted even while the map
+  is off, and cleared when a new game begins). Nothing of the game ships for
+  it: the planets' layouts are read from your ROM, where the game keeps each
+  in sixteen slabs and loads four at a time (Rykros' from RAM), the art from
+  the chunk table, the tiles and the palette of the game as it runs. What
+  the story changes on a planet shows once the party has been near it. On
+  foot only: from a vehicle the map shows, but a click doesn't walk.
+  `psiv_headless --worldmap L:PREFIX[:MODE]` saves its pictures and lists the
+  places it names; `--worldmap-go L:X:Y` sends the party to a map pixel.
 
 - **Diagonal walking** (Controls page: on / off): with two directions held
   the party walks diagonally, a cell across and a cell up or down in one
@@ -404,26 +461,71 @@ original game, unchanged; **Enhanced** turns on the additions:
   does. Over Algol or the original chip alike. `psiv_headless --custom-music
   DIR` renders with it.
 
-- **Sound effects** (modern / your samples / original): *modern* is the port's
-  own set, synthesized at startup (`runtime/sfxsynth.c`), so nothing is
-  shipped: blade hits (a short swing, a slice, a ringing edge, a thump; hits
-  in quick succession overlap), the slasher's throw (the spin flying off and
-  coming back, timed to its hits, with Doppler), a menu-cursor tick and a
-  two-note chime for choices, and the battle set: the 21 effects battles ask
-  for most -- claws, staves, Wren's gun, misses; enemies' blows, swipes,
-  bites and grinding attacks, and their destruction; Zan's wind, Foi's fire,
-  Tsu's lightning, Gra's warp (a pulse the game repeats every 8 frames),
-  Brose's surge, fire breath; casts, buffs, Moonshade's glimmer, and the
-  healing bells of Res, its cast and Recovery -- several variants each,
-  picked at random. Each keeps its original's length, so it fits the
-  animation it was timed to, and sits 1 dB under the original's loudness
-  (`tools/sfx_census.py` counts which effects the test bot's battles ask
-  for and what asks; `tools/sfx_study.py` sets an original and its
-  replacement side by side as spectrograms, with their loudness).
-  *Your samples* maps sound IDs to your own WAVs in `sfx/sfx.ini` (a file, or
-  a folder played at random); IDs it doesn't map stay modern. Samples stay out
-  of git. `psiv_headless --sfx-dump DIR` writes every synthesized sound to
-  WAV files; `--sfx-synth` / `--sfx DIR` play them in headless runs.
+- **Sound effects** (original / algol) says what plays the game's own
+  effects; **Modern sounds** (on / off) whether the port's modern sounds take
+  the place of the ones that have one. (One setting until 0.6 -- modern / your
+  samples / original; a psiv.ini from then keeps what it had.) *Algol* is the
+  game's own effects on the chip remastered -- all of them, battle and field
+  alike. Nothing is replaced: the driver plays each effect as it always did,
+  note for note, and the channels it holds are played by Algol's clean FM and
+  PSG instead of the chips (`algol2_render_split`, `sound.c`), whatever plays
+  the music (the chip, Algol, Proto Algol or a music pack). Each voice gets a
+  polish by its effect's kind (`XPOLISH` in `runtime/algol2.c`: menus small
+  and close; weapons and blows in a room, with a low sine under the heavy
+  ones; casts and healing the widest, in a hall; fire, wind and thunder wide,
+  in the hall, with weight; doors and machines in the room): a detuned double
+  spread in stereo, the PSG's noise wide, and two reverbs of the effects' own.
+  Without the polish (`PSIV_ALGOL2_DRY=1`) the 65 effects that sound match the
+  chip's within 0.6 dB, envelope for envelope; with it they are as loud as the
+  chip's on average (-1.5 to +1.1 dB). `psiv_headless --sfx-algol` plays them
+  in headless runs; `PSIV_SFX_POLISH="cents,spread,room,hall,sub"` gives every
+  kind the same polish, for trying things.
+  The *modern sounds* are a library of new sounds that comes with the game
+  (`res/sounds` in the repo, `sounds` beside the program): `XX_1.wav` to
+  `XX_4.wav` for sound ID XX, one picked at random each time, their levels in
+  `sounds.ini` (`XX = gain dB, overlap, gap`), and what they are made from in
+  `CREDITS.txt` -- public-domain (CC0) recordings, layered and cut to each
+  original's length. It is being built: an effect it has no sound for yet is
+  the game's own, so until it has some the row changes nothing.
+  (The first modern set -- 32 effects synthesized at startup by
+  `runtime/sfxsynth.c` -- was retired from the game on 2026-11-16: thin beside
+  the chip remastered. `psiv_headless --sfx-synth` and `--sfx-dump DIR` still
+  render it, and a `synth:NAME` line in your `sfx.ini` still plays one;
+  `tools/sfx_census.py` counts which effects the test bot's battles ask for,
+  `tools/sfx_study.py` sets an original and a replacement side by side as
+  spectrograms, with their loudness.)
+  With Modern sounds on, `sfx/sfx.ini` maps sound IDs to your own WAVs (a file,
+  or a folder played at random) ahead of the port's; an effect neither has is
+  the game's own, on the chip or on Algol. Your samples stay out
+  of git. Headless: `--sfx DIR` (yours), `--sfx-library DIR` (a library).
+
+- **Smoothing** (Display; Off / Soft / Scale2x, `video.filter` = nearest /
+  linear / scale2x): Off keeps every pixel sharp, Soft blends them where the
+  picture is scaled, and **Scale2x** rounds off the stair-steps without
+  blurring anything: the Scale2x / Scale3x pixel-art filter
+  (`runtime/scalex.c`, written from the rule's description), at twice, three
+  times (Scale3x) or four times (Scale2x twice) the game's size, whichever
+  the window calls for. Every frame of the game's picture goes through it.
+  A battle with Depth on has no finished picture at the game's size to
+  filter (its layers are put together at the display's scale, each through
+  its own camera), so there each layer goes through the filter on its own
+  first and the cameras read the enlarged layers (`depth_set_filter`,
+  `runtime/depth.c`). The party's portraits the port draws itself (the
+  battle windows, the side panels, the menus) follow the setting too
+  (`ui_set_image_look`, `runtime/uikit.c`): blended for Soft, from a copy
+  enlarged through the filter for Scale2x. For Soft, the graphics card does the blending for a
+  frame it scales itself; a frame the port composes at two to four times the
+  game's size (modern text or menus up, the field's water, a battle's depth)
+  is softened to match before the port's text and menus are drawn over it
+  (`runtime/smooth.c`), so the picture no longer turns sharp whenever a text
+  box comes up. The port's own text, menus and panels stay crisp either way.
+
+- **V-Sync** (Display; off / on, `video.vsync`): on, each picture waits for
+  the display's refresh, so it never tears. The game still keeps its own
+  time (59.92 pictures a second): on a 60 Hz display about one picture in
+  twenty seconds stays for two refreshes. It is left off while fast
+  forwarding and on a display slower than the game; `psiv.log` says
+  `v-sync: on` when it takes.
 
 - **16:9 widescreen** (on / off; 400 pixels wide, 424 with the 4:3 TV
   shape): the field and battles show more to the left and right. The game

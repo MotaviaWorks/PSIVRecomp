@@ -30,6 +30,10 @@
  *     --no-pan           battles: no camera pan to the one attacked (battleui.h)
  *     --field-menu       the field menu redrawn (fieldmenu.h; needs --text FONT)
  *     --cheat NAME[=V]   a cheat (cheats.h): hp, tp, nobattles, money, exp=2|4, weak
+ *     --arena N          the Boss Arena (arena.h): boss N (story order) with its story party, from a
+ *                        save made for it (Continued with the usual presses unless --press is given);
+ *                        stops when the fight is won or lost
+ *     --arena-scan N:FILE  the same fight only staged: its picture recorded (arenapic.h) into FILE
  *     --voices DIR       the party's battle voices from DIR/<name>_<moment>_<n>.wav (battlevox.h)
  *     --scene-voices DIR a voiced-scenes pack: DIR/scenes.txt and its clips (scenevox.h)
  *     --auto-text        auto-advance voiced scenes (scenevox.h)
@@ -56,7 +60,8 @@
  *                        frame.h): sound ID (hex) for --frames ticks, to --wav
  *     --music ID:F       jukebox: at frame F stop all sound, then request sound ID
  *                        (hex, e.g. 84) the way the game does, via Sound_Index ($FF500A)
- *     --algol            the music on Algol, the port's modern sound chip (algol.h)
+ *     --algol            the music on Algol: the game's own instruments, clean (algol2.h)
+ *     --proto-algol      ... on Proto Algol, the first, with instruments of its own (algol.h)
  *     --algol-bank ROM   with the instruments of a SNES game you own (snesbank.h)
  *     --custom-music DIR your own music files in place of the game's songs (music.h)
  *     --levels M:E:V     Settings > Sound's levels, percent: the music, the sound
@@ -85,6 +90,21 @@
  *                        stop; V: board a vehicle first (1 Land Rover, 2 Ice
  *                        Digger, 3 Hydrofoil)
  *     --bot-movie FILE   write the bot's input as a movie (--movie, movie.lua)
+ *     --preview-scene S  a settings preview's scene (clip.h), with the party of the Boss
+ *                        Arena's tenth fight: battle (a rainy fight on Uzo's grass, Motavia:
+ *                        for Depth, Fog, Camera, Weather, Effects) or field (Uzo's coast:
+ *                        Water, Trees, Smoothing); the settings as given (--depth L:1 ...)
+ *     --clip FILE        with --preview-scene: its clip recorded into FILE, then stop
+ *     --nice             run at a low priority (the game makes its previews this way)
+ *     --worldmap L:PREFIX[:MODE]  the world map (worldmap.h; MODE 1 explored, 2 all of it: the
+ *                        default) kept each frame; at logical frame L its pictures -- PREFIX-world.png
+ *                        (the whole world at 1/4), -near.png (round the party at 1/2), -full.png
+ *                        (at full size) -- and the places it names
+ *     --worldmap-go L:X:Y  at logical frame L the party sets out for map pixel (X, Y), as a click on
+ *                        the map would send it (with --movie or --preview-scene: the pad is the walk's)
+ *
+ * Built into the game as well: `psiv --headless [options]` (main_sdl.c), so the
+ * game can make its settings previews without a program of its own beside it.
  *
  * Prints game-mode changes and, at the end, a RAM checksum. Built with
  * PSIV_TRACE it also prints the hottest code blocks.
@@ -109,6 +129,8 @@
 #include "scenevox.h"
 #include "journal.h"
 #include "cheats.h"
+#include "arena.h"
+#include "arenapic.h"
 #include "widemap.h"
 #include "rumble.h"
 #include "sfx.h"
@@ -119,10 +141,28 @@
 #include "sound.h"
 #include "testbot.h"
 #include "vdp.h"
+#include "clip.h"
+#include "worldmap.h"
 
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32                        /* --nice (not windows.h: its macros) */
+__declspec(dllimport) void *__stdcall GetCurrentProcess(void);
+__declspec(dllimport) int __stdcall SetPriorityClass(void *process, unsigned long priority_class);
+#define IDLE_PRIORITY_CLASS 0x40
+#else
+#include <unistd.h>
+#endif
+
+#ifdef PSIV_IN_APP                   /* in the game (headless_app.c): its own names for the front end's hooks */
+#define main headless_main
+#define platform_frame headless_platform_frame
+#define platform_audio headless_platform_audio
+#define platform_fatal headless_platform_fatal
+#endif
 
 #define GAME_MODE 0xEF00u
 
@@ -145,6 +185,15 @@ static int nmovie;
 static uint64_t movie_end;           /* last logical frame the movie touches */
 static uint64_t shot_every;
 static const char *shot_dir;
+/* --preview-scene / --clip: logical frames clip_from..clip_to, every clip_step, the top clip_h rows */
+static uint64_t clip_from, clip_to, clip_step = 4;
+static int clip_h;
+static const char *clip_path;
+/* --worldmap, --worldmap-go */
+static int wm_on, wm_go_x, wm_go_y;
+static uint64_t wm_at, wm_go_at;
+static char wm_prefix[400];
+static double wm_worst;
 static int trace_pad;                /* --trace-pad: print movie input and the game's joypad bytes */
 static uint64_t frame_limit = 600;
 static int music_id = -1;
@@ -625,6 +674,7 @@ static int nlayer_dumps;
 
 /* --ramlog ADDR[.b|.w|.l],...: print these RAM values (hex, $FFxxxx) on each
  * logical frame where one of them changes */
+static const char *arena_pic_out_path = "arena.bin";   /* --arena-scan's file */
 static uint32_t ramlog_addr[32], ramlog_last[32];
 static char ramlog_size[32];
 static int ramlog_n, ramlog_primed;
@@ -748,6 +798,31 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
         for (int i = 0; i < nwhere; i++)
             if (where_at[i] == logical) print_where(logical);
         if (ramlog_n) ramlog_frame(logical);
+        {
+            static int arena_was = ARENA_OFF;
+            int as = arena_state();
+            if (as != arena_was) {
+                static const char *const AS[] = {"off", "loading", "fighting", "won", "lost", "capturing", "captured"};
+                printf("arena %llu: %s\n", (unsigned long long)logical, AS[as]);
+                arena_was = as;
+                if (as == ARENA_CAPTURED) {
+                    uint8_t *pk;
+                    size_t pn;
+                    if (arenapic_capture_pack(&pk, &pn)) {
+                        FILE *pf = fopen(arena_pic_out_path, "wb");
+                        if (pf) { fwrite(pk, 1, pn, pf); fclose(pf); }
+                        printf("arena picture: %s, %u bytes\n", arena_pic_out_path, (unsigned)pn);
+                        free(pk);
+                    }
+                    report();
+                    exit(0);
+                }
+                if (as == ARENA_WON || as == ARENA_LOST) {
+                    report();
+                    exit(as == ARENA_WON ? 0 : 3);
+                }
+            }
+        }
         if (journal_at && logical == journal_at) print_journal();
         if ((autosave_at && logical == autosave_at) || autosave_file) {
             static uint8_t made[AUTOSAVE_SIZE];
@@ -861,6 +936,83 @@ void platform_frame(const uint32_t *pixels, int width, int height) {
             printf("shot: logical %llu frame %llu sample %u\n", (unsigned long long)logical, (unsigned long long)f,
                    (unsigned)wav_samples);
     }
+    if (clip_path && bylogical && fresh && logical >= clip_from && logical <= clip_to
+        && (logical - clip_from) % clip_step == 0) {     /* --clip: a settings preview */
+        int cw = sw, ch = clip_h && clip_h < sh ? clip_h : sh;
+        if (clip_rec_frames() == 0 && !clip_rec_begin(cw, ch, (int)(60 / clip_step))) {
+            fprintf(stderr, "--clip: out of memory\n");
+            exit(1);
+        }
+        if (depth_active) clip_rec_frame(depth_buf, sw);
+        else clip_rec_frame(pixels, VDP_MAX_W);
+        if (logical + clip_step > clip_to) {
+            int n = clip_rec_frames();
+            if (!clip_rec_save(clip_path)) {
+                fprintf(stderr, "--clip: could not write %s\n", clip_path);
+                exit(1);
+            }
+            printf("clip: %s, %d frames of %dx%d\n", clip_path, n, cw, ch);
+            report();
+            exit(0);
+        }
+    }
+    if (wm_on && fresh) {                                  /* --worldmap: kept as the game runs */
+        clock_t t0 = clock();
+        worldmap_frame();
+        double ms = (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC;
+        if (ms > wm_worst) wm_worst = ms;
+        if (wm_go_at && logical == wm_go_at)
+            printf("logical %llu: worldmap go %d,%d: %s\n", (unsigned long long)logical, wm_go_x, wm_go_y,
+                   worldmap_go(wm_go_x, wm_go_y) ? "walking" : "no way");
+        int was = worldmap_going(&(int){0}, &(int){0});
+        worldmap_journey(0);
+        if (wm_go_at && logical > wm_go_at && (logical % 120 == 0 || (was && !worldmap_going(&(int){0}, &(int){0})))) {
+            int x = 0, y = 0, n = 0, a, b;
+            worldmap_party(&x, &y);
+            while (worldmap_route(n, &a, &b)) n++;
+            printf("logical %llu: party at %d,%d (cell %d,%d); %s, %d cells to go\n", (unsigned long long)logical, x, y,
+                   x >> 4, y >> 4, worldmap_going(&a, &b) ? "walking" : "not walking", n);
+        }
+        if (wm_at && logical == wm_at) {
+            int W, H, x = 0, y = 0;
+            worldmap_size(&W, &H);
+            worldmap_party(&x, &y);
+            printf("worldmap: %s, %dx%d, ready %d shown %d, party at %d,%d; the slowest frame %.2f ms\n", worldmap_name(), W, H,
+                   worldmap_ready(), worldmap_shown(), x, y, wm_worst);
+            WorldmapPlace pl[64];
+            int np = worldmap_places(pl, 64);
+            if (getenv("PSIV_WORLDMAP_CODES"))             /* the collision codes round each place */
+                for (int i = 0; i < np; i++) {
+                    printf("  %s (cell %d,%d):", pl[i].name, pl[i].x >> 4, pl[i].y >> 4);
+                    for (int j = -4; j <= 4; j++) {
+                        printf(" |");
+                        for (int k = -4; k <= 4; k++) printf("%X", worldmap_cell_code((pl[i].x >> 4) + k, (pl[i].y >> 4) + j) & 15);
+                    }
+                    puts("");
+                }
+            for (int i = 0; i < np; i++) printf("  %s at %d,%d\n", pl[i].name, pl[i].x, pl[i].y);
+            char p[512];
+            int ww = W / 4 > 0 ? W / 4 : 1, hh = H / 4 > 0 ? H / 4 : 1;
+            uint32_t *buf = malloc((size_t)(ww > 640 ? ww : 640) * (size_t)(hh > 360 ? hh : 360) * 4);
+            t0 = clock();
+            worldmap_render(buf, ww, ww, hh, 0, 0, 2, 1, 0);
+            printf("  the whole world drawn in %.2f ms\n", (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC);
+            snprintf(p, sizeof p, "%s-world.png", wm_prefix);
+            save_png_stride(p, buf, ww, hh, ww);
+            worldmap_render(buf, 640, 640, 360, x / 2 - 320, y / 2 - 180, 1, 1, 3);
+            snprintf(p, sizeof p, "%s-near.png", wm_prefix);
+            save_png_stride(p, buf, 640, 360, 640);
+            t0 = clock();
+            worldmap_render(buf, 640, 640, 360, x - 320, y - 180, 0, 1, 3);
+            printf("  640x360 at full size drawn in %.2f ms\n", (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC);
+            snprintf(p, sizeof p, "%s-full.png", wm_prefix);
+            save_png_stride(p, buf, 640, 360, 640);
+            worldmap_render(buf, 640, 640, 360, x - 106, y - 60, 0, 3, 3);
+            snprintf(p, sizeof p, "%s-x3.png", wm_prefix);
+            save_png_stride(p, buf, 640, 360, 640);
+            free(buf);
+        }
+    }
     if ((movie || testbot_on()) && fresh) {
         uint8_t keys = 0;
         for (int i = 0; i < nmovie; i++)
@@ -965,6 +1117,70 @@ static uint8_t parse_keys(const char *s) {
     return k;
 }
 
+static void movie_add(uint64_t at, const char *keys, uint64_t len) {
+    static int cap;
+    if (nmovie == cap) {
+        cap = cap ? cap * 2 : 256;
+        movie = realloc(movie, (size_t)cap * sizeof *movie);
+    }
+    Press *p = &movie[nmovie++];
+    p->frame = at;
+    p->keys = strcmp(keys, "-") ? parse_keys(keys) : 0;
+    p->len = len;
+    if (p->frame + p->len > movie_end) movie_end = p->frame + p->len;
+}
+
+/* --preview-scene: the Boss Arena's tenth fight's party (its save, Continued), taken to Uzo on
+ * Motavia: a random battle on its grass, fought by pressing on (Attack), the window recorded
+ * holding the camera turning to the one attacked, hits, and the rain's lightning; or a walk
+ * along its coast, random battles off. 1, or 0 for a scene not known. */
+static int preview_scene(const char *name) {
+    static const struct { uint64_t f; const char *k; uint64_t n; } CONT[] = {{290, "S", 4}, {460, "S", 4}, {560, "C", 2}, {620, "C", 2}};
+    int battle = !strcmp(name, "battle");
+    if (!battle && strcmp(name, "field")) return 0;
+    for (int k = 0; k < 4; k++) {                         /* Continue: by frame and by logical frame alike */
+        presses[npress].frame = CONT[k].f;
+        presses[npress].keys = parse_keys(CONT[k].k);
+        presses[npress].len = CONT[k].n;
+        npress++;
+        movie_add(CONT[k].f, CONT[k].k, CONT[k].n);
+    }
+    teleports[nteleport].frame = 700;
+    teleports[nteleport].map = 0;
+    teleports[nteleport].x = battle ? 0x22 : 0x1C;        /* Uzo: its grass; its west shore */
+    teleports[nteleport].y = battle ? 0x170 : 0x16C;
+    teleports[nteleport].face = teleports[nteleport].align = 0;
+    nteleport++;
+    if (battle) {
+        static const struct { uint32_t a; uint8_t v; } P[] = {{0xEC21, 0x14}, {0xECFC, 0xFF}, {0xECEE, 0x02}};
+        for (int k = 0; k < 3; k++) {                     /* a random battle, as RunRandomBattles starts one */
+            pokes[npoke].from = pokes[npoke].to = 760;
+            pokes[npoke].addr = P[k].a;
+            pokes[npoke].val = P[k].v;
+            npoke++;
+        }
+        for (uint64_t f = 900; f <= 3400; f += 18) movie_add(f, "C", 2);
+        clip_from = 1092;
+        clip_to = 1340;
+        clip_h = 164;                                     /* the battle, above its menus */
+    } else {
+        pokes[npoke].from = 720;                          /* Random_Battles_Flag: none */
+        pokes[npoke].to = 1000;
+        pokes[npoke].addr = 0xECE7;
+        pokes[npoke].val = 0;
+        npoke++;
+        movie_add(770, "D", 48);
+        movie_add(830, "R", 40);
+        movie_add(885, "U", 40);
+        clip_from = 712;
+        clip_to = 960;
+        clip_h = 0;
+    }
+    clip_step = 4;
+    frame_limit = clip_to + 200;
+    return 1;
+}
+
 /* "L KEYS [N]" / "+D KEYS [N]" lines; KEYS "-" = nothing pressed */
 static int load_movie(const char *path) {
     FILE *f = fopen(path, "r");
@@ -1031,6 +1247,8 @@ static void *scene_clip(const char *name, size_t *len) {
 int main(int argc, char **argv) {
     const char *rom_path = "rom/psiv.bin";
     const char *sram_in = NULL;
+    int arena_pick = -1, preview_party = 0;
+    const char *arena_pic_out = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--rom") && i + 1 < argc) rom_path = argv[++i];
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frame_limit = strtoull(argv[++i], NULL, 10);
@@ -1074,6 +1292,32 @@ int main(int argc, char **argv) {
             if (*e == ':') battles = (int)strtol(e + 1, &e, 10);
             if (*e == ':') vehicle = atoi(e + 1);
             testbot_start(seed, walk, battles, vehicle);
+        } else if (!strcmp(argv[i], "--preview-scene") && i + 1 < argc) {
+            if (!preview_scene(argv[++i])) { fprintf(stderr, "--preview-scene: battle or field\n"); return 2; }
+            arena_pick = 9;
+            preview_party = 1;
+        } else if (!strcmp(argv[i], "--worldmap") && i + 1 < argc) {
+            char *e;
+            wm_at = strtoull(argv[++i], &e, 10);
+            int n = 0;
+            if (*e == ':') { e++; n = (int)strcspn(e, ":"); }
+            snprintf(wm_prefix, sizeof wm_prefix, "%.*s", n, e);
+            if (!n) snprintf(wm_prefix, sizeof wm_prefix, "worldmap");
+            worldmap_set_mode(e[n] == ':' ? atoi(e + n + 1) : 2);
+            wm_on = 1;
+        } else if (!strcmp(argv[i], "--worldmap-go") && i + 1 < argc) {
+            char *e;
+            wm_go_at = strtoull(argv[++i], &e, 10);
+            if (*e == ':') wm_go_x = (int)strtol(e + 1, &e, 10);
+            if (*e == ':') wm_go_y = (int)strtol(e + 1, &e, 10);
+        } else if (!strcmp(argv[i], "--clip") && i + 1 < argc) {
+            clip_path = argv[++i];
+        } else if (!strcmp(argv[i], "--nice")) {
+#ifdef _WIN32
+            SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS);
+#else
+            if (nice(10) == -1) { /* (as it is, then) */ }
+#endif
         } else if (!strcmp(argv[i], "--bot-movie") && i + 1 < argc) {
             bot_movie = argv[++i];
         } else if (!strcmp(argv[i], "--shot-every") && i + 1 < argc) {
@@ -1082,6 +1326,14 @@ int main(int argc, char **argv) {
             shot_dir = *e == ':' ? e + 1 : ".";
         } else if (!strcmp(argv[i], "--trace-pad")) {
             trace_pad = 1;
+        } else if (!strcmp(argv[i], "--arena") && i + 1 < argc) {
+            arena_pick = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--arena-scan") && i + 1 < argc) {   /* N:FILE: stage it, record its picture */
+            char *e;
+            arena_pick = (int)strtol(argv[++i], &e, 10);
+            arena_pic_out = *e == ':' ? e + 1 : "arena.bin";
+            arena_set_scan(1);
+            arena_pic_out_path = arena_pic_out;
         } else if (!strcmp(argv[i], "--sram") && i + 1 < argc) {
             sram_in = argv[++i];
         } else if (!strcmp(argv[i], "--autosave-at") && i + 1 < argc) {
@@ -1107,7 +1359,11 @@ int main(int argc, char **argv) {
             if (depth_scale < 1) depth_scale = 1;
             if (depth_scale > 4) depth_scale = 4;
         } else if (!strcmp(argv[i], "--algol")) {
-            algol_set_enabled(1);                          /* the music on the modern chip */
+            algol_set_enabled(1);                          /* the music on Algol: the game's own instruments, clean */
+            algol_set_version(2);
+        } else if (!strcmp(argv[i], "--proto-algol")) {
+            algol_set_enabled(1);                          /* ... on Proto Algol, the first */
+            algol_set_version(1);
         } else if (!strcmp(argv[i], "--teleport") && i + 1 < argc && nteleport < 16) {
             char *e;                                       /* F:MAP:X:Y[:FACE[:ALIGN]], hex after F */
             teleports[nteleport].frame = strtoull(argv[++i], &e, 10);
@@ -1203,15 +1459,21 @@ int main(int argc, char **argv) {
             int n = sfx_synth_load();                      /* the port's own sound effects */
             sfx_set_mode(SFX_MODERN);
             printf("sound effects: %d synthesized\n", n);
+        } else if (!strcmp(argv[i], "--sfx-algol")) {
+            sfx_set_algol(1);                              /* the game's own effects, on Algol's clean chip */
+            printf("sound effects: on Algol\n");
         } else if (!strcmp(argv[i], "--sfx-dump") && i + 1 < argc) {
             const char *dir = argv[++i];                   /* every synthesized effect as a WAV */
             printf("sound effects: %d written to %s\n", sfx_synth_dump(dir), dir);
             return 0;
         } else if (!strcmp(argv[i], "--sfx") && i + 1 < argc) {
-            sfx_synth_load();                              /* what sfx.ini doesn't map stays modern */
-            int n = sfx_load(argv[++i]);                   /* your sound effects (DIR/sfx.ini) */
+            int n = sfx_load(argv[++i]);                   /* your sound effects (DIR/sfx.ini); the rest the game's */
             sfx_set_mode(SFX_CUSTOM);
             printf("sound effects: %d replaced from %s\n", n, argv[i]);
+        } else if (!strcmp(argv[i], "--sfx-library") && i + 1 < argc) {
+            int n = sfx_library_load(argv[++i], NULL, NULL);   /* the modern sounds' library (DIR/XX_N.wav, sounds.ini) */
+            sfx_set_mode(SFX_CUSTOM);
+            printf("sound effects: %d in the library %s\n", n, argv[i]);
         } else if (!strcmp(argv[i], "--fx") && i + 1 < argc) {
             depth_set_fx(atoi(argv[++i]));                 /* battle effects level (with --depth) */
         } else if (!strcmp(argv[i], "--text") && i + 1 < argc) {
@@ -1320,6 +1582,24 @@ int main(int argc, char **argv) {
         fclose(sf);
         int format = bus_sram_import(buf, got);
         printf("loaded save %s (%u bytes, %s layout)\n", sram_in, (unsigned)got, bus_sram_format_name(format));
+    }
+
+    if (arena_pick >= 0) {                             /* the Boss Arena: the boss's own save, Continued */
+        const ArenaBoss *ab = arena_boss(arena_pick);
+        if (!ab) { fprintf(stderr, "--arena: 0 to %d\n", arena_count() - 1); return 2; }
+        static uint8_t cart[ARENA_CART_SIZE];
+        arena_make_cart(arena_pick, cart);
+        bus_sram_import(cart, sizeof cart);
+        if (!preview_party) arena_begin(arena_pick);   /* (a preview: its party only, never its fight) */
+        printf("arena: %s (event battle $%02X), %d in the party\n", ab->name, ab->event, ab->n);
+        static const struct { uint64_t f; const char *k; uint64_t n; } CONT[] = {{290, "S", 4}, {460, "S", 4}, {560, "C", 2}, {620, "C", 2}};
+        if (!npress)
+            for (int k = 0; k < 4; k++) {
+                presses[npress].frame = CONT[k].f;
+                presses[npress].keys = parse_keys(CONT[k].k);
+                presses[npress].len = CONT[k].n;
+                npress++;
+            }
     }
 
     if (song_only >= 0) {                              /* the driver alone: no game, no picture */

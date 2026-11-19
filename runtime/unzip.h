@@ -28,4 +28,7 @@ int unzip_each(const uint8_t *zip, size_t n, uint8_t *buf, size_t cap,
                int (*fn)(const char *name, size_t nlen, const uint8_t *data, size_t size, void *ud), void *ud,
                char *err, size_t errn);
 
+/* raw deflate (RFC 1951) data: its size unpacked into out (at most cap bytes), or 0 */
+size_t unzip_inflate(const uint8_t *in, size_t n, uint8_t *out, size_t cap);
+
 #endif

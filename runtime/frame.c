@@ -30,6 +30,8 @@
 #include "battlevox.h"
 #include "scenevox.h"
 #include "cheats.h"
+#include "arena.h"
+#include "wave.h"
 #include "widemap.h"
 #include "titleart.h"
 #include "perf.h"
@@ -77,6 +79,8 @@ static void frame_sound(void);
 
 void frame_run(void) {
     cheats_frame();                    /* Settings > Cheats (all off unless chosen) */
+    arena_frame();                     /* the Boss Arena: a fight set up, then followed (none: returns at once) */
+    wave_frame();                      /* Wave Mode: a run walked and fought (none: returns at once) */
     int h = vdp_height(), mw = vdp_width();
     int m = frame_wide_margin > VDP_WIDE_MAX ? VDP_WIDE_MAX : frame_wide_margin;
     int wide = m > 0 && mw == 320 && wide_allowed();
@@ -118,6 +122,13 @@ void frame_run(void) {
     /* replaced sound effects: the game's requests wait in the sound queue
      * ($FF500A-$FF500D) for the driver, which runs in VInt; a replaced one
      * starts its sample and is taken out of the queue */
+    /* a menu's cursor walked by the port (a click, a step through grouped items): one tick a step, not one
+     * a row passed ($F2, SFXID_MovingCursor) */
+    for (int i = 0; i < 4; i++) {
+        uint8_t id = m68k_ram[SOUND_QUEUE + i];
+        if ((id == 0xF2 && (fieldmenu_quiet_cursor() || battleui_quiet_cursor())) || (id == 0xF3 && fieldmenu_quiet_choice()))
+            m68k_ram[SOUND_QUEUE + i] = 0;
+    }
     if (sfx_enabled())
         for (int i = 0; i < 4; i++) {
             uint8_t id = m68k_ram[SOUND_QUEUE + i];
@@ -152,6 +163,7 @@ static void frame_sound(void) {
      * mixbus.h): mixed apart and added in turned down, or at 1 straight into
      * the mix as always. Turned all the way down they still play on, unheard */
     float ge = mixbus_effects(), gv = mixbus_voices();
+    weather_frame();                                       /* (out of a battle: the weather ends) */
     int weather_heard = weather_sound_on();
     if (sfx_enabled() || weather_heard) {
         float *to = ge == 1.0f ? mix : part;
@@ -168,7 +180,7 @@ static void frame_sound(void) {
         scenevox_mix(to, n);
         if (to == part) for (int i = 0; i < n * 2; i++) mix[i] += part[i] * gv;
     }
-    mixbus_set_limiter(sfx_enabled() || algol_enabled() || music_enabled() || weather_heard || voices);
+    mixbus_set_limiter(sfx_enabled() || sfx_algol() || algol_enabled() || music_enabled() || weather_heard || voices);
     mixbus_finish(mix, out, n);
     perf_end(PERF_SOUND);
     platform_audio(out, n);
@@ -191,6 +203,13 @@ void frame_song_start(int id) {
     sound_busreq_write(0x100);         /* as MainGameProgram: the Z80 stopped and out of reset, */
     sound_reset_write(0x100);          /* or the driver waits for ever for it to stop */
     driver_call(INIT_SOUND_DRIVER);
+    /* The Z80's drum player waits a quarter of a second as it starts, then clears its mailbox --
+     * in the game long before any song. Here the song comes at once, and its "drums on" would be
+     * cleared with the rest (no drums all song): the Z80 gets that time first, unheard. */
+    for (int i = 0; i < 20; i++) {
+        const float *unheard;
+        (void)sound_end_frame(&unheard);
+    }
     m68k_ram[SOUND_QUEUE] = (uint8_t)id;
 }
 

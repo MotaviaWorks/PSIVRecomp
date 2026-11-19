@@ -41,6 +41,11 @@ void        depth_set_fx(int level);
 int         depth_get_fx(void);
 const char *depth_fx_name(int level);
 
+/* Scale2x (Smoothing: Scale2x; scalex.h): on, each of a battle's layers goes through the filter
+ * before the cameras put them together, so the composed picture has the same rounded stair-steps
+ * as the rest of the game. Off (as it starts): the layers as the game drew them. */
+void depth_set_filter(int on);
+
 /* Call once per displayed frame, with that frame's layers. In a battle with
  * the effect on (or still easing out), composes the frame at `scale` times
  * the game's resolution into out (out_stride pixels per row, 0xAARRGGBB) and

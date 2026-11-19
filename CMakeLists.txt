@@ -105,10 +105,10 @@ else()
 endif()
 
 # Hardware: bus, VDP, sound, frame loop (object files, so the code<->hardware calls link either way)
-set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/sound.c runtime/algol.c runtime/snesbank.c runtime/music.c runtime/fpview.c runtime/walkto.c runtime/frame.c runtime/depth.c runtime/sfx.c runtime/sfxsynth.c runtime/hdtext.c
-               runtime/romart.c runtime/uikit.c runtime/panels.c runtime/battleui.c runtime/fieldmenu.c runtime/battledesc.c runtime/rumble.c runtime/widemap.c runtime/mixbus.c
-               runtime/weather.c runtime/fieldfx.c runtime/battlevox.c runtime/scenevox.c runtime/cheats.c runtime/journal.c runtime/rewind.c runtime/titleart.c runtime/perf.c runtime/par.c runtime/savepages.c runtime/autosave.c runtime/coro.c ${CORO_ASM})
-set(TEST_SOURCES runtime/headless.c runtime/sha256.c runtime/testbot.c)
+set(HW_SOURCES runtime/bus.c runtime/vdp.c runtime/sound.c runtime/algol.c runtime/algol2.c runtime/snesbank.c runtime/music.c runtime/fpview.c runtime/walkto.c runtime/frame.c runtime/depth.c runtime/sfx.c runtime/sfxsynth.c runtime/hdtext.c runtime/smooth.c runtime/scalex.c
+               runtime/romart.c runtime/uikit.c runtime/panels.c runtime/battleui.c runtime/fieldmenu.c runtime/battledesc.c runtime/rumble.c runtime/widemap.c runtime/worldmap.c runtime/mixbus.c
+               runtime/weather.c runtime/fieldfx.c runtime/battlevox.c runtime/scenevox.c runtime/cheats.c runtime/arena.c runtime/arenapic.c runtime/clip.c runtime/wave.c runtime/journal.c runtime/rewind.c runtime/titleart.c runtime/perf.c runtime/par.c runtime/savepages.c runtime/autosave.c runtime/coro.c ${CORO_ASM})
+set(TEST_SOURCES runtime/headless.c runtime/sha256.c runtime/testbot.c runtime/unzip.c)
 
 # Headless front end: scripted input, PNG screenshots
 if(PSIV_TOOLS)
@@ -128,9 +128,13 @@ endif()
 find_package(SDL3 CONFIG)
 if(SDL3_FOUND)
   set(GAME_SOURCES runtime/main_sdl.c runtime/par_sdl.c runtime/touch.c runtime/unzip.c runtime/sha256.c ${HW_SOURCES})
+  if(NOT ANDROID)                       # psiv --headless: the settings' previews made (Android can't start a second program)
+    list(APPEND GAME_SOURCES runtime/headless_app.c runtime/testbot.c)
+  endif()
   if(ANDROID)
     # SDLActivity loads libSDL3.so, then libmain.so and calls its SDL_main
     add_library(psiv SHARED ${GAME_SOURCES})
+    target_compile_definitions(psiv PRIVATE PSIV_NO_HEADLESS)
     set_target_properties(psiv PROPERTIES OUTPUT_NAME main)
     target_link_options(psiv PRIVATE -Wl,-z,max-page-size=16384)   # 16 KB pages (Android 15+)
   else()

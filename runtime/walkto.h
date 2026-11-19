@@ -9,7 +9,9 @@
  * open, examine); clicking a wall or water goes as near as it can. While a
  * window or an event's text is up, a click is C (next) and a right click B.
  * The player's own keys or buttons take over at once; a window, a battle, a
- * vehicle or another map ends the walk too.
+ * vehicle or another map ends the walk too. In a vehicle a click drives it there,
+ * over the ground that vehicle can take (the game's own tables): the Land Rover
+ * plain ground and sand, the Ice Digger ice blocks as well, the Hydrofoil water.
  */
 #ifndef PSIV_WALKTO_H
 #define PSIV_WALKTO_H
@@ -31,6 +33,13 @@ int  walkto_click_button(int right);
 /* Walk to map cell (cx, cy) (16x16, the leader's feet), or to object slot
  * `slot` of Field_Objects_Memory (>= 0: to its side, then face it and press C). */
 int  walkto_go(int cx, int cy, int slot);
+
+/* Wave Mode: walks even with the option off (walkto_force), its dots (walkto_pick: a cell
+ * `want` steps' walk away, the farthest from the cells given), and where the leader stands
+ * (1: standing still there) */
+void walkto_force(int on);
+int  walkto_pick(int want, const int *ax, const int *ay, int na, int *cx, int *cy);
+int  walkto_leader_cell(int *cx, int *cy);
 void walkto_cancel(void);
 
 /* The field's map, for its effects (fieldfx.c): the walked layer's size in
@@ -38,6 +47,10 @@ void walkto_cancel(void);
  * the picture shows it, not the step ahead in RAM), and a cell's collision
  * code (8 solid, 9 water, ...). 0: not on the field. */
 int  walkto_field_map(int *w_cells, int *h_cells, int *cam_x, int *cam_y);
+/* the vehicle the party rides (1 Land Rover, 2 Ice Digger, 3 Hydrofoil; 0 on foot), and whether it can go
+ * onto a block whose highest collision code is `code` (the game's TileColl*Ptrs; another map: never) */
+int  walkto_riding(void);
+int  walkto_vehicle_ok(int vehicle, int code);
 int  walkto_cell_code(int cx, int cy);
 int  walkto_active(void);
 

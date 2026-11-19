@@ -303,7 +303,7 @@ original chip sound.
   `Sound_Index`), so the port knows which song is playing, and a mixer that
   can mute chip channels and play the replacement in sync.
 
-### Algol, a modern sound chip (PsiLok, 2026-11-04) -- v1 done (`runtime/algol.c`)
+### Algol, a modern sound chip (PsiLok, 2026-11-04) -- v1 done (`runtime/algol.c`; now *Proto Algol*: the name went to v2, the chip remastered, `runtime/algol2.c`, 2026-11-14)
 The second level above. The chips still run for the game (it reads their
 status); every write also goes to Algol, which keeps its own copy of the
 registers and decodes notes: key on/off from YM $28, pitch from F-number and
@@ -465,6 +465,103 @@ first person, from the game's own tiles, and their battles fought there.
   instead of standing; turning in place (the game can't: a turn is a step);
   a minimap; ceilings from map art; a cheaper render mode.
 
+### A second screen: dual-screen Android handhelds (PsiLok, 2026-11-15) -- bookmarked, not started
+"I do want to experiment a dual screen android model, specifically the AYN Thor ... I can see this project
+benefit owners." He does not own one.
+- **The Thor:** top 6" Full HD 120 Hz (Android's primary display: the game stays there), bottom 3.92" touch,
+  1240 x 1080, 60 Hz, a separate display; Android 13.
+- **How:** SDL gives an Android app one window, so the bottom screen is a small piece of the port's own
+  Android code: a `Presentation` on the secondary display with a surface the port fills from the CPU (its
+  menus and map are composed there already), taps coming back as clicks.
+- **What it could show:** in the field the world map, always open, tap to walk; in battle the party's cards
+  and the enemies' names; in towns and dungeons the Journal's next step and the party's status.
+- **Testing without one:** (1) a second window on Hermes / the PC standing in for it; (2) the Odin on its
+  dock: the monitor is a secondary display to Android, the same mechanism; (3) a Thor owner from the Discord.
+  The AYANEO Pocket DS and the Retroid add-on treat the bottom screen as primary: a swap option, later.
+
+### Smoothing and V-Sync (GitHub issues 3 and 5, 2026-11-15) -- done (`runtime/smooth.c`; `vsync_update` in `main_sdl.c`)
+- **Issue 3** ("bilinear filtering turns off between some conversations"): with Smoothing on, a plain frame
+  went to the graphics card at the game's size and was blended as it was scaled; a composed frame (modern
+  text or menus, water, battle depth) went there already at 2 to 4 times the size, as sharp blocks, so the
+  blend hardly showed. `smooth_soften` now averages the composed picture over one game pixel's width and
+  height (odd scale: that many taps; even: one more, the ends at half weight, so nothing shifts) before the
+  port's text, menus and panels are drawn. On pixels that hold still, a text-box frame and a plain frame
+  now differ by at most one colour level at window scales 2, 3 and 4 (they differed by 35 on average).
+  Cost at 4 times: about 0.8 ms a frame on eight cores, 3.8 ms on one.
+- **Issue 5** (V-Sync): `video.vsync`, off by default. The game's own 59.92 Hz pacing stays; the wait for
+  the display is kept out of the frame time `detail_watch` measures. Off while fast forwarding, while the
+  title goes by unseen, and on a display under 59 Hz. Not tried on a real display yet (Hermes runs the app
+  off-screen): only that the renderer accepts it and the log says so.
+- **Issue 4** (pixel-art filters: 2xSaI, xBRZ, hq2x, hq3x, Scale2x): **Scale2x / Scale3x done**
+  (`runtime/scalex.c`, from scratch; PsiLok: "Go with option 1 ... we'll follow up with xBRZ / hq2x after").
+  A third Smoothing choice (`video.filter = scale2x`). The game's frame is enlarged through the filter to
+  the composing scale (2: Scale2x, 3: Scale3x, 4: Scale2x twice) in place of plain blocks, on every frame,
+  so the picture does not change when a text box comes up; the card's blend (linear) covers what is left
+  to the window's size. Water and trees are drawn over it as before. The Display page's preview shows it
+  (the clip's frame through Scale3x). Cost on Hermes at 4 times, a text-box frame: 2.6 ms of composing (2.2 as plain
+  blocks). A plain frame, which went to the card as it was, is now composed too (not timed on its own).
+  - **Battles with Depth (2026-11-15, PsiLok: "build the per-layer version"):** there is no game-size
+    picture of such a battle to filter, so each of its six layers (and the sprites on the party, and the
+    pan's picture of the others) goes through `scalex_upscale8` as palette numbers, 0 = nothing there, by
+    the composing scale; `build_map_fine` gives the cameras maps into the enlarged layers and makes the
+    game-size maps from them. One composer for both: with the filter off it reads the game's own layers
+    through the same pointers. Checked on Hermes in a Boss Arena fight: Off and Soft are identical to the
+    build before, file for file, on ten frames (mid-attack ones among them); with Scale2x the sprites are
+    where they were (the best match of the game's pixels is at no shift). Cost at 4 times: 0.7 ms a frame
+    more on eight cores; on one core 4 times no longer fits a frame and the picture detail steps to 3.
+  - **The port's own portraits (2026-11-15, PsiLok: "can the portraits in the battle menu also get the same
+    treatment"):** `ui_image` follows Smoothing (`ui_set_image_look`): Soft blends the four pixels round each
+    point; Scale2x reads a copy enlarged through the filter (2, 3 or 4 times, by how much the portrait is
+    being enlarged; kept per portrait and factor). Every `ui_image` caller gets it: battle windows, side
+    panels, the menus' and the launcher's portraits. A portrait shown at less than twice its 48 pixels (the
+    small ones while a member chooses, at a 3x window) has nothing to filter and is unchanged. Off is still
+    identical to the build before, file for file.
+  - **Not filtered yet:** first-person dungeons (paused anyway).
+  - **For a filter that blends colours** (xBRZ, hq2x): it cannot work on palette numbers. `fine_make` is
+    the one place a layer is enlarged: such a filter would get the layer as colours with an empty value,
+    and the composer would read colours instead of numbers (the storm's tint is applied by palette today).
+  - **Next:** xBRZ and hq2x / hq3x. Both exist as free code (the port is GPLv3, so the licences fit), but
+    bringing it in is a download that needs PsiLok's word; xBRZ is C++. 2xSaI would go the same way.
+
+### World map (PsiLok, 2026-11-15) -- v1 done (`runtime/worldmap.c`; the UI in `main_sdl.c`)
+"Would it be possible to build a map feature for the world maps?" His picks: both a corner
+minimap and the whole map on a button; names for towns and dungeons, click to walk there,
+explored areas only, zoom and pan; off by default.
+- **Where the map is:** a planet is 128 x 128 chunks, kept in the ROM as sixteen uncompressed
+  slabs of eight rows a layer (pointer tables loc_107DC2 / loc_10BE02, Motavia FG / BG;
+  loc_115584 / loc_1175C4, Dezolis). RAM holds four at a time (slab s at (s & 3) * $400, the
+  camera's and the three below: loc_53A26, RefreshMapLayout), patched as they are copied for
+  what the story changed (loc_53BB6: Zio's Fort, the spaceports, the Machine Center, the
+  Edge ...). The map is the ROM's slabs with RAM's laid over whenever the party is there.
+  Dezolis' slabs 8-15 are slab 7 again: its map is the upper 128 x 64. Rykros (map 2) is an
+  ordinary map, 64 x 64 chunks, whole in RAM.
+- **The picture:** each chunk from the chunk table and VRAM as palette indices with the
+  priority bit, plane A over plane B as the VDP mixes them, colours from CRAM. Kept at 1/2 to
+  1/16 (RGB565, a 16x16 block per pair of chunks met, so the sea costs nothing; ~10 MB);
+  full size and larger drawn on demand. Made again a slab's rows a frame (under 1 ms) when
+  the table or the palette changes and 90 frames after the field settles. The sea is
+  animated by turning a few palette entries round, so "the palette is steady" compares the
+  colours whatever their order.
+- **Places:** the worlds' "map transition data 2" entries, by name, in `PLACES`. An entry's
+  cell is the leader's object at the way in's top left; the cells that lead in (collision
+  code 1) are a block from the cell below: 4x4 at most for a city (range 1), 2x2 a town (2),
+  two a cave or tower (9), one (3). A place is named only while such a cell is there, so
+  nothing the story hasn't built yet is given away; the hidden cave on Motavia is left out.
+- **Walking there:** a search over the whole world's collision (65,536 cells), then walkto.h
+  six cells at a time -- a waypoint the screen shows, since walkto reads the slabs in RAM --
+  set again three cells before each. A battle holds it; the d-pad, A, B or Start end it.
+  Explored: only over cells the map shows.
+- **Explored:** a byte a 16x16 cell, an ellipse round the leader each frame the field shows
+  a world; `saves/explored.bin`, one for the install. A new game clears it: the story's
+  flags ($FFF100, 64 bytes) have exactly 11 bits set when the game opens in Piata.
+- **Not paused** (PsiLok, 2026-11-15: "I'd like to have the music continue"): the whole map no
+  longer holds the game. The frame loop runs on with the player's pad kept from the game (and
+  until it is let go after the map closes); the map's own events are taken first. A battle, a
+  window or an event closes it (worldmap_shown). The party's ring is a texture of its own, so
+  a still map is never redrawn.
+- **Next:** a record per save slot; the vehicles (their own collision tables); towns and
+  dungeons; the map kept for a planet the party isn't on.
+
 ### Click to walk (PsiLok, 2026-11-04) -- v1 done (`runtime/walkto.c`)
 "Mouse click to direct the player to the location." The click becomes a map
 cell (the game's view: the walked layer's camera + the pixel, the frame's
@@ -594,3 +691,84 @@ Shadowrun, Star Fox, Super Turrican 1-2. Lufia II was the test.
   mid-frame.
 - Integer scaling, CRT-style filters, fullscreen.
 - Remappable controls and modern gamepad support.
+
+## The sound effects on Algol (PsiLok, 2026-11-16: "I want to attempt making new versions of the sound effects") -- built, awaiting his ears
+His choices: the direction "chip remastered" (keep each sound the game's own: cleaner, fuller, in stereo, with
+reverb -- as Algol did for the music); what bothered him in the Modern set: "thin or synthetic"; all 67 effects,
+the field's too; a new choice in Settings beside the others.
+- **How:** nothing is replaced. The driver plays every effect as before; the channels its effect tracks hold
+  ($FF5220 on, already read for the music's sake) are played by Algol's FM / PSG instead of the chips, in a mix
+  of their own. So it covers every effect at once, cut-offs, repeats and the conveyor belt's loop included, and
+  the game cannot tell (the same Boss Arena fight ends on the same frame either way).
+- **Which effect is on a channel:** PlaySFX leaves the effect's voice table at the track's +$20; `sound.c` reads
+  the driver's table (SFXPtrs, by way of $D1A6C) once and matches. That picks the polish (five kinds).
+- **Measured, not heard** (Hermes ~/psiv-lab/sfxr): dry against the chip, 65 effects, level within 0.6 dB,
+  envelope 0.95+ (40 ms), spectrum 0.84+; polished, loudness -1.5 to +1.1 dB of the chip's. With the option off
+  every render is byte for byte what it was.
+- **Found on the way:** two copies a few cents apart only beat on a low voice (so a low voice gets one), are still
+  in step at a short sound's start (so the two are 1.1 dB lower), and a held low tone builds up on a reverb's
+  resonance (the sends lose their lows at 220 Hz).
+- **Next:** his notes from the listening page (H:\PSIV Project\sfx-algol\index.html) -> the XPOLISH table; maybe a
+  kind per effect where one sits wrong; whether Algol should be the default in place of Modern.
+- **Two settings since the same day** (PsiLok: "this can be the 'second' option ... Modern sounds can be a check
+  box with 'Use modern sounds that are available'"): Sound effects = Original / Algol (what plays the game's
+  own), Modern sounds = On / Off (the port's in place of the game's where there is one; your own from
+  sfx/sfx.ini first). An old psiv.ini's modern / custom becomes On, its original Off. In the code Algol is a
+  switch (`sfx_set_algol`), not a mode: a replaced effect never reaches the driver, the rest play on the chip
+  or on Algol. He also wants a **new sound library for the Modern sounds** (the synthesized set is "thin or
+  synthetic"): how it is made, and whether it ships with the game or as a pack, is his to say.
+- **The new Modern library, his choices (2026-11-16):** made from free CC0 samples, layered; bundled with the game
+  (so every source must be CC0, with its page and author on record: `res/sounds/CREDITS.txt`); the new library
+  only -- the synthesized set no longer loads in the game; all 65 effects. Built so far: the loader
+  (`sfx_library_load`: `sounds/XX_1..4.wav` + `sounds.ini`, beside the program / in the APK's assets / a
+  development tree's `res/sounds`), `--sfx-library DIR` in headless, package.py copies `res/sounds` when it is
+  there (the APK's assets still to do). No sounds yet: each download waits for his OK.
+- **Downloaded and shortlisted (2026-11-16, on his yes):** 49 CC0 packs from OpenGameArt (`tools/sfxlib/sources.json`;
+  one left out: its page says CC0, its own licence file CC BY-SA), 1,638 sounds measured (`inventory.py`), and for
+  63 effects up to eight candidates each, cut to the original's length and loudness (`briefs.py`,
+  `candidates.py`). They were chosen by file name and measurement, not by ear: the audition page
+  (`audition.py`) is for him to tick the ones to keep; `build.py` turns his picks into `res/sounds` with
+  `sounds.ini` and `CREDITS.txt`.
+
+## Bug: "Storm sounds persist after battle" (QueeQueg, Discord #bug-reports, 2026-11-17) -- fixed 2026-11-18, not released
+The rain's loop ended only in `weather_battle_end()`, and only `depth_compose()` called it. With Widescreen at
+"side panels" the field is composed on another path (as are the first-person dungeons and a paused picture), so
+after a battle in the rain `depth_compose()` was never reached and the rain played on until the next battle. In
+0.5.0-beta too. Now the frame loop tells the weather every frame (`weather_frame()`): out of a battle it ends,
+whatever draws the screen; a thunderclap still due is dropped. Shown on Hermes in the real app (side panels, a
+forced storm by Zema, music and voices at 0): without the fix the sound stays at -23 dB for the 35 s after the
+battle; with it, silence within two seconds. `PSIV_WEATHER=storm` (rain, snow...) forces the weather in the
+app, as `--weather` does in headless.
+
+## GitHub issue 9 (pepodmc3): group items, buy several, a Vehicles entry -- grouping prototyped 2026-11-18
+- **Grouping, built (uncommitted):** the modern camp menu's Items screen shows one row per kind of item with its
+  count ("Dimate x11"); `enhance.group_items` (on by default; Settings > Game > Group items). Display only: the
+  pack is the game's (40 slots, one item each); a row stands for the first slot holding that item, so Use / Look
+  / Discard act on one of them. Up / Down (and the wheel) go a kind at a time, Left / Right eight kinds: the port
+  walks the game's own cursor there (the mouse's drive, with no C at the end). Tested on Hermes from saves 21, 30
+  and 40: navigation, a click, Use (x11 -> x10), and off showing the game's list as before.
+- **The battle's item menu too (2026-11-18, on his word):** what the fighter wears stays a row each (using a worn
+  weapon is not using one from the pack), the pack one row a kind with "xN"; Up / Down a row, Left / Right a page
+  of four; the same setting. Tested in the Boss Arena (D-Elm-Lars): Chaz's list 9 pages -> 4, the arrows, and
+  Dimate chosen from its row ("Dimate -- On whom?").
+- **Columns are pages, as in the game (2026-11-18, his note "each column acts as a page in the battle item
+  menu"):** the game's own lists, battle and camp, wrap Up / Down inside a column and send Right / Left to the
+  top of the next / previous column, doing nothing past the ends; the grouped rows now do the same
+  (`page_step`, columns of four in battle, eight in camp). Checked against the game's own lists with grouping
+  off.
+- **His notes, same day:** the battle list's heading says "column 2/4", not "page"; one cursor tick a step
+  (the port's walks through a kind's slots, or to a clicked row, ticked at every press: the extra $F2 requests
+  are taken out of the sound queue, frame.c, camp and battle; 18 ticks -> 6 for six presses past Dimate x11);
+  the camp menu's wheel rolls from a column's bottom to the next column's top, grouped or not.
+- **Vehicle shortcuts (2026-11-18, his "Would it be possible to make vehicle shortcuts in the camp menu?"):** a
+  "Vehicles" box under the commands on the menu's first screen lists the vehicles in the pack; one that can be
+  boarded where the party stands is white, the rest grey -- the game's own test (ItemAction_LandRover etc.: a
+  planet's world map, Field_Map_Index < $10, and the tile's Vehicle_Boarding_Flags at $FFEC7F, set as the menu
+  opens). Choosing one plays the game's own way there as the pad (Items, the vehicle's slot, Use; each step
+  waits for its window to settle: a C pressed while Use / Look / Discard was still opening was lost), the first
+  screen held on show meanwhile, no cursor ticks and one choice sound. Keys: Down from Macros into the box, Up
+  from its top back out, C boards; the mouse: a click. Tested on Hermes: saves 10-44 scanned (white / grey as
+  the game would allow), save 13 boarded the Land Rover by keys, save 40 the Ice Digger and the Hydrofoil by
+  clicks (PSIV_FIELDMENU_LOG names the vehicle).
+- **Not yet:** the macros' item list and the shop's sell list are still one row per item;
+  buying several at once. Classic stays the game's own.

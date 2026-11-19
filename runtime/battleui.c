@@ -314,7 +314,9 @@ void battleui_frame(void) {
 }
 
 /* ------------------------------------------------------------------ battle state */
-enum { M_NONE, M_MAIN, M_COMMAND, M_TECH, M_SKILL, M_ITEM, M_TARGET_ENEMY, M_TARGET_ALLY, M_VEH_MAIN, M_VEH_WEAPON };
+enum { M_NONE, M_MAIN, M_COMMAND, M_TECH, M_SKILL, M_ITEM, M_TARGET_ENEMY, M_TARGET_ALLY, M_VEH_MAIN, M_VEH_WEAPON,
+       M_MACRO };                 /* (the Macro option's letters: the game's own window redrawn, for the mouse only) */
+#define MACRO_INDEX 0x41D6u       /* Battle_Macro_Index: the letter under the cursor, 0-7 (Battle_MacroWindows, $30) */
 
 static int menu_of(int r2) {
     switch (r2) {
@@ -1096,6 +1098,12 @@ static void draw_hud(int acting, int target_id, int show_commands, int frame, fl
  * played as the pad: the game's own cursor is walked to it a press at a time
  * (each press let go before the next: the menus act on new presses), then C. */
 typedef struct { float x0, y0, x1, y1; int menu, index, confirm; } Hit;
+/* a click (or a step through grouped items) played as the pad: see battleui_pad */
+static struct {
+    int on, menu, fighter, target, confirm;
+    int hold, rest, presses, waited, ticks;
+    uint8_t press;
+} drive;
 #define MAX_HITS 64
 static Hit hits[MAX_HITS];
 static int nhits;
@@ -1182,6 +1190,8 @@ typedef struct { char name[24]; char cost[12]; int usable; const char *desc; } E
 
 /* a list in pages of four: the pages side by side, as many as fit. What the
  * entry under the cursor does goes to the bar (list_line). */
+static const int *list_slot;     /* (grouped items) the game's slot each row shown stands for; NULL: the same */
+#define SLOT(i) (list_slot ? list_slot[i] : (i))
 static void draw_list(int menu, const char *title, const char *info, const Entry *e, int count, int cur, float alpha) {
     int pages = (count + 3) / 4;
     if (pages < 1) pages = 1;
@@ -1225,8 +1235,8 @@ static void draw_list(int menu, const char *title, const char *info, const Entry
         int before = first > 0, after = first + cols < pages;
         ui_triangle(&cv, SX(x1 - 17.0f), SY(head - 2.8f), 5.0f * S, 3, before ? WHITE : FAINT, AL(255 * alpha));
         ui_triangle(&cv, SX(x1 - 8.5f), SY(head - 2.8f), 5.0f * S, 2, after ? WHITE : FAINT, AL(255 * alpha));
-        if (before) hit_add(x1 - 22.0f, y0 + 2.0f, x1 - 12.75f, y0 + 17.0f, menu, (first - 1) * 4, 0);
-        if (after) hit_add(x1 - 12.75f, y0 + 2.0f, x1 - 2.0f, y0 + 17.0f, menu, (first + cols) * 4, 0);
+        if (before) hit_add(x1 - 22.0f, y0 + 2.0f, x1 - 12.75f, y0 + 17.0f, menu, SLOT((first - 1) * 4), 0);
+        if (after) hit_add(x1 - 12.75f, y0 + 2.0f, x1 - 2.0f, y0 + 17.0f, menu, SLOT((first + cols) * 4), 0);
         ix = x1 - 24.0f;
     }
     if (info && *info) text_right(ix, head, info, SOFT, alpha);
@@ -1237,7 +1247,7 @@ static void draw_list(int menu, const char *title, const char *info, const Entry
             int on = i == cur;
             if (on) bar(ex, ex + colw, base, BAR, alpha);
             if (i >= count || !e[i].name[0]) continue;
-            hit_add(ex, base - 8.6f, ex + colw, base + 2.8f, menu, i, 1);
+            hit_add(ex, base - 8.6f, ex + colw, base + 2.8f, menu, SLOT(i), 1);
             text(ex + 5.0f, base, e[i].name, on ? NAVY : e[i].usable ? WHITE : FAINT, alpha);
             if (e[i].cost[0]) text_right(ex + colw - 5.0f, base, e[i].cost, on ? NAVY : e[i].usable ? SOFT : FAINT, alpha);
         }
@@ -1283,6 +1293,34 @@ static void draw_skills(int fighter, float alpha) {
     draw_list(M_SKILL, "Skills", "uses left", entries, n, (int)r16(SKILL_INDEX + (unsigned)fighter * 2) & 7, alpha);
 }
 
+/* the row an arrow leads to in rows laid out in columns of `per`, each column a page as the game's own
+ * lists have it: Up / Down wrap inside the column, Right / Left go to the next / previous column's top (and
+ * do nothing past the ends) */
+static int page_step(int row, int n, int per, uint8_t key) {
+    if (n < 1) return 0;
+    if (row < 0) row = 0;
+    if (row >= n) row = n - 1;
+    int top = row / per * per, len = n - top < per ? n - top : per;
+    if (key & PAD_DOWN) return top + (row - top + 1) % len;
+    if (key & PAD_UP) return top + (row - top - 1 + len) % len;
+    if (key & PAD_RIGHT) return top + per < n ? top + per : row;
+    if (key & PAD_LEFT) return top > 0 ? top - per : row;
+    return row;
+}
+
+/* ---- the items grouped (GitHub issue 9): what the fighter wears a row each, the pack a row a kind */
+static int group_items = 1;
+void battleui_set_group_items(int on) { group_items = on != 0; }
+typedef struct { int n, fighter, valid, slot[ITEM_SLOTS], count[ITEM_SLOTS]; } Groups;
+static Groups groups;             /* the list as last drawn: the pad steps over its rows */
+static int group_row(int slot) {  /* the row a slot of the game's list is shown in */
+    unsigned it = slot >= 0 && slot < ITEM_SLOTS ? r8(ITEM_LIST + (unsigned)slot) : 0;
+    for (int g = 0; g < groups.n; g++)
+        if (groups.slot[g] == slot || (groups.count[g] > 1 && r8(ITEM_LIST + (unsigned)groups.slot[g]) == it && slot > groups.slot[g]))
+            return g;
+    return 0;
+}
+
 static void draw_items(int fighter, int id, float alpha) {
     int n = 0, equipped = 0;
     if (id >= 0)                                     /* the list starts with what they wear (stats +$4C) */
@@ -1299,8 +1337,35 @@ static void draw_items(int fighter, int id, float alpha) {
         n = i + 1;
     }
     int cur = (int)r16(ITEM_INDEX + (unsigned)fighter * 2);
+    groups.valid = 0;
+    if (group_items) {
+        /* the rows: each worn item on its own, then one a kind of the pack's (in the order it first holds them) */
+        static Entry rows[ITEM_SLOTS];
+        groups.n = 0;
+        for (int i = 0; i < n; i++) {
+            unsigned it = r8(ITEM_LIST + (unsigned)i);
+            if (!it) continue;
+            int g = groups.n;
+            if (i >= equipped)
+                for (int k = 0; k < groups.n; k++)
+                    if (groups.slot[k] >= equipped && r8(ITEM_LIST + (unsigned)groups.slot[k]) == it) { g = k; break; }
+            if (g == groups.n) { rows[g] = entries[i]; groups.slot[g] = i; groups.count[g] = 0; groups.n++; }
+            groups.count[g]++;
+        }
+        for (int g = 0; g < groups.n; g++)
+            if (groups.count[g] > 1) snprintf(rows[g].cost, sizeof rows[g].cost, "\xC3\x97%d", groups.count[g]);   /* x3 */
+        groups.fighter = fighter;
+        groups.valid = 1;
+        int row = drive.on && !drive.confirm && drive.menu == M_ITEM ? group_row(drive.target) : group_row(cur);
+        char info[24];
+        snprintf(info, sizeof info, "column %d/%d", row / 4 + 1, (groups.n + 3) / 4 > 0 ? (groups.n + 3) / 4 : 1);
+        list_slot = groups.slot;
+        draw_list(M_ITEM, "Items", info, rows, groups.n, row, alpha);
+        list_slot = NULL;
+        return;
+    }
     char info[24];
-    snprintf(info, sizeof info, "page %d/%d", cur / 4 + 1, (n + 3) / 4 > 0 ? (n + 3) / 4 : 1);
+    snprintf(info, sizeof info, "column %d/%d", cur / 4 + 1, (n + 3) / 4 > 0 ? (n + 3) / 4 : 1);
     draw_list(M_ITEM, "Items", info, entries, n, cur, alpha);
 }
 
@@ -1346,9 +1411,18 @@ static void draw_window(const Win *w, int names, float alpha) {
     y0 += dy;
     y1 += dy;
     win(x0, y0, x1, y1, alpha);
+    /* the Macro option's letters, A to H down a narrow window: each one the mouse can pick */
+    int letters = (r16(BATTLE_ROUTINE_2) & 0x7FFF) == 0x30 && w->w <= 7 && w->h >= 10;
     for (int r = 0; r < w->h - 2; r++) {
         float base = (float)(w->y + 1 + r) * 8.0f + 6.9f + dy;
         if (r == w->cursor) bar(x0 + 3.5f, x1 - 3.5f, base, BAR, alpha);
+        if (letters) {
+            uint32_t only = 0;
+            int count = 0;
+            for (int k = 0; k < w->w - 2; k++) if (w->ch[r][k]) { only = w->ch[r][k]; count++; }
+            if (count == 1 && only >= 'A' && only <= 'H')
+                hit_add(x0, base - 11.0f, x1, base + 5.0f, M_MACRO, (int)(only - 'A'), 1);
+        }
         /* runs of text split at gaps of two cells or more; a run of digits
          * is right-aligned to its last cell so columns of numbers line up */
         int c = 0, cols = w->w - 2;
@@ -1717,11 +1791,6 @@ static void draw_popups(void) {
 }
 
 /* ------------------------------------------------------------------ clicks, as the pad */
-static struct {
-    int on, menu, fighter, target, confirm;
-    int hold, rest, presses, waited;
-    uint8_t press;
-} drive;
 static int pulse_b;
 
 int battleui_click(float fx, float fy, int right) {
@@ -1732,10 +1801,32 @@ int battleui_click(float fx, float fy, int right) {
         if (fx < h->x0 || fx >= h->x1 || fy < h->y0 || fy >= h->y1) continue;
         memset(&drive, 0, sizeof drive);
         drive.on = 1;
+        drive.ticks = 1;
         drive.menu = h->menu;
         drive.fighter = (int)r16(COMD_INPUT);
         drive.target = h->index;
         drive.confirm = h->confirm;
+        return 1;
+    }
+    return 0;
+}
+
+/* the mouse over an entry: the game's cursor walked there as a click's is, without the C -- so
+ * the entry lights and its line shows, as with the pad. Not a page's arrow (resting on one would
+ * turn pages), and never in place of a click's presses under way. */
+int battleui_hover(float fx, float fy) {
+    if (!active || pulse_b > 0 || (drive.on && drive.confirm)) return 0;
+    for (int i = nhits - 1; i >= 0; i--) {
+        const Hit *h = &hits[i];
+        if (fx < h->x0 || fx >= h->x1 || fy < h->y0 || fy >= h->y1) continue;
+        if (!h->confirm) return 0;
+        if (drive.on && drive.menu == h->menu && drive.target == h->index) return 1;   /* on its way already */
+        memset(&drive, 0, sizeof drive);
+        drive.on = 1;
+        drive.ticks = 1;
+        drive.menu = h->menu;
+        drive.fighter = (int)r16(COMD_INPUT);
+        drive.target = h->index;
         return 1;
     }
     return 0;
@@ -1753,6 +1844,9 @@ static uint8_t drive_step(void) {
     case M_VEH_WEAPON:                                  /* a vehicle's two weapons: up / down */
         cur = (int)r16(COMD_INDEX) & 1;
         return cur < t ? PAD_DOWN : cur > t ? PAD_UP : 0;
+    case M_MACRO:                                       /* the letters: up / down */
+        cur = (int)r16(MACRO_INDEX) & 7;
+        return cur < t ? PAD_DOWN : cur > t ? PAD_UP : 0;
     case M_COMMAND:                                     /* left / right */
         cur = (int)r16(COMD_INDEX + f) % 5;
         return cur < t ? PAD_RIGHT : cur > t ? PAD_LEFT : 0;
@@ -1766,6 +1860,12 @@ static uint8_t drive_step(void) {
     }
 }
 
+int battleui_quiet_cursor(void) {
+    if (!active || !drive.on) return 0;
+    if (drive.ticks > 0) { drive.ticks--; return 0; }
+    return 1;
+}
+
 uint8_t battleui_pad(uint8_t user, uint8_t pad) {
     /* the battle's three choices lie across the bar: Left and Right move
      * among them as Up and Down do in the game's own window */
@@ -1776,12 +1876,39 @@ uint8_t battleui_pad(uint8_t user, uint8_t pad) {
         if (user) pulse_b = 0;
         else return --pulse_b > 0 ? PAD_B : 0;
     }
+    /* grouped items: the arrows go as in the game's own pages of four (page_step); held, they repeat.
+     * The game never sees them: its cursor is walked to the row's slot, nothing chosen */
+    {
+        static uint8_t was;
+        static int held;
+        uint8_t arrows = PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT, fresh = user & (uint8_t)~was;
+        was = user;
+        int on_items = active && group_items && groups.valid && groups.n > 0
+                       && menu_of((int)(r16(BATTLE_ROUTINE_2) & 0x7FFF)) == M_ITEM && (int)r16(COMD_INPUT) == groups.fighter;
+        if (on_items && (user & arrows)) {
+            held = (fresh & arrows) ? 0 : held + 1;
+            if ((fresh & arrows) || (held >= 18 && held % 5 == 0)) {
+                int from = drive.on && !drive.confirm && drive.menu == M_ITEM ? drive.target
+                         : (int)r16(ITEM_INDEX + (unsigned)groups.fighter * 2);
+                uint8_t key = user & PAD_DOWN ? PAD_DOWN : user & PAD_UP ? PAD_UP : user & PAD_RIGHT ? PAD_RIGHT : PAD_LEFT;
+                int row = page_step(group_row(from), groups.n, 4, key);
+                memset(&drive, 0, sizeof drive);
+                drive.on = 1;
+                drive.ticks = 1;
+                drive.menu = M_ITEM;
+                drive.fighter = groups.fighter;
+                drive.target = groups.slot[row];
+            }
+            user &= (uint8_t)~arrows;
+            pad &= (uint8_t)~arrows;
+        }
+    }
     if (!drive.on) return pad;
     if (user || !active) { drive.on = 0; return pad; }  /* the player takes over */
     if (drive.hold > 0) { drive.hold--; return drive.press; }
     if (drive.rest > 0) { drive.rest--; return 0; }     /* let go: the menus act on new presses */
     if (drive.press == PAD_C) { drive.on = 0; return 0; }   /* chosen */
-    int menu = menu_of((int)(r16(BATTLE_ROUTINE_2) & 0x7FFF));
+    int menu = (r16(BATTLE_ROUTINE_2) & 0x7FFF) == 0x30 ? M_MACRO : menu_of((int)(r16(BATTLE_ROUTINE_2) & 0x7FFF));
     if (menu != drive.menu || (int)r16(COMD_INPUT) != drive.fighter) {
         if (++drive.waited > 40) drive.on = 0;          /* a page turning, a window opening: wait */
         return 0;

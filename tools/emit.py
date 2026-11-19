@@ -54,6 +54,10 @@ HOOKS = [
     ("loc_43848", 0, "move.b\t($FFFFEF03).w, d0", "psiv_savepage_pick"),
     ("loc_593D4", 0, "move.w\t#$2, d0", "psiv_savepage_list"),
     ("TransferToSRAM", 0, "lea\t($FFFFF002).w, a0", "psiv_savepage_store"),
+    # Wave Mode (runtime/wave.c): Battle_SetupEnemyData has chosen a formation
+    # (d0, in the table at a0) and is about to unpack it; a run's battle puts
+    # its own there. Random battles only; with no run on it returns at once.
+    ("loc_7EF0", 0, "lea\t($FFFF0000).l, a1", "psiv_battle_formation"),
 ]
 
 # Immediates the runtime supplies instead: (label, byte offset, instruction it

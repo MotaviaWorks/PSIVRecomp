@@ -48,6 +48,8 @@ typedef struct {
 } State;
 static State states[KEEP];
 static int nstates;                     /* oldest first */
+static State boot;                      /* the first frame's, kept for good (rewind_restart) */
+static int have_boot, to_boot;
 
 enum { IDLE, OUT, HELD, IN };
 static int phase, held, target = -1, note_frames, note_secs;
@@ -93,6 +95,21 @@ static void machine_load(const uint8_t *in) {
 }
 
 /* a state, while the game waits at its frame (its stack pointer in game_sp) */
+static int make_state(State *s) {
+    uint8_t *sp = (uint8_t *)game_sp;
+    size_t slen = (size_t)(stack.base + stack.size - sp), mlen = machine_save(NULL);
+    uint8_t *data = malloc(slen + mlen);
+    if (!data) return 0;
+    memcpy(data, sp, slen);
+    machine_save(data + slen);
+    s->frame = game_frame;
+    s->sp = sp;
+    s->stack_len = slen;
+    s->machine_len = mlen;
+    s->data = data;
+    return 1;
+}
+
 static void keep_state(void) {
     uint8_t *sp = (uint8_t *)game_sp;
     size_t slen = (size_t)(stack.base + stack.size - sp), mlen = machine_save(NULL);
@@ -156,8 +173,31 @@ int rewind_request(void) {
     return 1;
 }
 
+void rewind_restart(void) { to_boot = 1; }
+
+/* the first frame's state back, the rewind's all gone */
+static void put_back_boot(void) {
+    memcpy(boot.sp, boot.data, boot.stack_len);
+    game_sp = boot.sp;
+    machine_load(boot.data + boot.stack_len);
+    game_frame = boot.frame;
+    for (int j = 0; j < nstates; j++) free(states[j].data);
+    nstates = 0;
+    phase = IDLE;
+    white = 0.0f;
+    target = -1;
+    note_frames = 0;
+    next_keep = game_frame + EVERY;
+    if (rewind_on_restore) rewind_on_restore(game_frame);
+}
+
 /* ------------------------------------------------------------------ each frame */
 static void after_frame(void) {
+    if (!have_boot) have_boot = make_state(&boot);
+    if (to_boot) {
+        to_boot = 0;
+        if (have_boot) { put_back_boot(); return; }
+    }
     if (note_frames > 0) note_frames--;
     switch (phase) {
     case OUT:

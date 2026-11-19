@@ -27,7 +27,7 @@ def render(song, seconds, tmp):
         f.write(f'song {song} = rock\n')
     env = dict(os.environ, PSIV_CHANNELS='3FF', PSIV_ALGOL_LOG='2')
     frames = int(seconds * 60) + 40
-    out = subprocess.run([exe, '--rom', os.path.join(ROOT, 'rom', 'psiv.bin'), '--algol', '--frames', str(frames),
+    out = subprocess.run([exe, '--rom', os.path.join(ROOT, 'rom', 'psiv.bin'), '--proto-algol', '--frames', str(frames),
                           '--music', f'{song}:30', '--wav', os.path.join(tmp, 'band.wav'),
                           '--ymlog', os.path.join(tmp, 'ym.log')],
                          cwd=tmp, env=env, capture_output=True, text=True)

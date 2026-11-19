@@ -37,9 +37,9 @@ typedef struct {
     uint8_t id;
 } Voice;
 
-static Bank custom[256], synth[256];     /* your samples; the port's own */
+static Bank custom[256], synth[256], library[256];   /* your samples; the synthesized set; the library */
 static Voice voices[MAX_VOICES];
-static int mode, n_custom, n_synth;
+static int mode, n_custom, n_synth, n_library;
 static uint32_t rng = 0x2545F491u;
 
 static uint32_t next_rand(void) { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; }
@@ -229,7 +229,76 @@ int sfx_load(const char *dir) {
     return n_custom;
 }
 
-/* the modern set: which recipe replaces which of the game's sounds */
+/* ------------------------------------------------------------------ the library */
+static void *plain_read(const char *path, long *size) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    void *buf = n > 0 ? malloc((size_t)n) : NULL;
+    if (buf && fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); buf = NULL; }
+    fclose(f);
+    *size = n;
+    return buf;
+}
+
+int sfx_library_count(void) { return n_library; }
+
+int sfx_library_load(const char *dir, void *(*read)(const char *path, long *size), void (*done)(void *)) {
+    if (!read) { read = plain_read; done = free; }
+    char path[1300];
+    for (int id = 0xB5; id <= 0xF7; id++) {
+        Bank *b = &library[id];
+        if (b->nfiles) continue;                         /* (found in an earlier folder) */
+        for (int k = 1; k <= 4; k++) {
+            snprintf(path, sizeof path, "%s/%02X_%d.wav", dir, id, k);
+            long size = 0;
+            void *buf = read(path, &size);
+            if (!buf) break;
+            int frames = 0;
+            int16_t *pcm = sfx_decode_wav(buf, size, &frames);
+            done(buf);
+            if (!pcm) { fprintf(stderr, "sfx: cannot read %s (WAV PCM or float expected)\n", path); continue; }
+            b->pcm[b->nfiles] = pcm;
+            b->frames[b->nfiles] = frames;
+            b->nfiles++;
+        }
+        if (!b->nfiles) continue;
+        b->gain = 1.0f;
+        b->overlap = 1;
+        b->last = -1;
+        n_library++;
+    }
+    /* sounds.ini: "XX = gain dB[, how many may overlap[, seconds before it may start again]]" */
+    snprintf(path, sizeof path, "%s/sounds.ini", dir);
+    long size = 0;
+    char *text = read(path, &size);
+    if (text) {
+        for (long p = 0; p < size;) {
+            long e = p;
+            while (e < size && text[e] != '\n') e++;
+            char line[200];
+            long n = e - p < (long)sizeof line - 1 ? e - p : (long)sizeof line - 1;
+            memcpy(line, text + p, (size_t)n);
+            line[n] = 0;
+            p = e + 1;
+            char *c = strchr(line, ';');
+            if (c) *c = 0;
+            unsigned id = 0, overlap = 1;
+            float gain_db = 0.0f, gap = 0.0f;
+            int got = sscanf(line, " %x = %f , %u , %f", &id, &gain_db, &overlap, &gap);
+            if (got < 2 || id > 255 || !library[id].nfiles) continue;
+            library[id].gain = powf(10.0f, gain_db / 20.0f);
+            if (got >= 3 && overlap >= 1) library[id].overlap = (int)overlap;
+            if (got >= 4 && gap > 0.0f) library[id].min_gap = gap;
+        }
+        done(text);
+    }
+    return n_library;
+}
+
+/* the synthesized set: which recipe replaces which of the game's sounds */
 static const struct { uint8_t id; const char *recipe; float gain_db; } MODERN[] = {
     {0xF5, "slash", 0.0f},          /* SFXID_Sword: every blade hit (swords, daggers, the slasher's hits) */
     {0xB7, "slasher", 0.0f},        /* SFXID_Slasher: Alys's throw */
@@ -299,12 +368,16 @@ int sfx_synth_dump(const char *dir) {
 }
 
 void sfx_set_mode(int m) { mode = m; }
+static int on_algol;
+void sfx_set_algol(int on) { on_algol = on != 0; }
+int sfx_algol(void) { return on_algol; }
 int sfx_mode(void) { return mode; }
-int sfx_enabled(void) { return mode == SFX_CUSTOM ? n_custom + n_synth > 0 : mode == SFX_MODERN ? n_synth > 0 : 0; }
+int sfx_enabled(void) { return mode == SFX_CUSTOM ? n_custom + n_library > 0 : mode == SFX_MODERN ? n_synth > 0 : 0; }
 
 static Bank *bank_for(uint8_t id) {
-    if (mode == SFX_CUSTOM && custom[id].nfiles) return &custom[id];
-    if (mode != SFX_ORIGINAL && synth[id].nfiles) return &synth[id];
+    if (mode == SFX_CUSTOM && custom[id].nfiles) return &custom[id];       /* yours first */
+    if (mode == SFX_CUSTOM && library[id].nfiles) return &library[id];     /* then the library's */
+    if (mode == SFX_MODERN && synth[id].nfiles) return &synth[id];         /* (the synthesized set: headless only) */
     return NULL;
 }
 

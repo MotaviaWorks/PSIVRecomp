@@ -28,6 +28,7 @@
 #include "m68k.h"
 #include "weather.h"
 #include "par.h"
+#include "scalex.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -494,60 +495,145 @@ static uint8_t fog_col1[VDP_MAX_W * MAX_SCALE], fog_col2[VDP_MAX_W * MAX_SCALE];
 static uint16_t fog_profile[VDP_MAX_H * MAX_SCALE];
 static uint8_t mimg[VDP_MAX_H][VDP_MAX_W];                /* the camera pan: the others, whole, at their places */
 
+/* Scale2x (depth_set_filter; scalex.h; GitHub issue 4). The filter rounds off the stair-steps of a
+ * picture at the game's size, and there is no such picture of a battle: its layers are put together
+ * at the display's scale, each through its own camera. So each layer goes through the filter first,
+ * on its own (as palette numbers, 0 = nothing there: a sprite's outline is rounded against whatever
+ * shows behind it), and the cameras read the enlarged layers. A layer is enlarged by the composing
+ * scale itself, so at rest a pixel of the output is a pixel of the enlarged layer.
+ *
+ * The planes: the six layers, the sprites on the party (near_px) and the pan's picture of the others
+ * (mimg), and one that stays empty, read in place of a layer with nothing on it. */
+enum { FINE_NEAR = NLAYERS, FINE_MIMG, FINE_ZERO, NFINE };
+#define FINE_W (VDP_MAX_W * MAX_SCALE)
+#define FINE_H (VDP_MAX_H * MAX_SCALE)
+static int fine_want;
+static uint8_t *fine_buf;
+void depth_set_filter(int on) { fine_want = on != 0; }
+static uint8_t *fine_plane(int n) { return fine_buf + (size_t)n * FINE_W * FINE_H; }
+static int fine_ready(void) {
+    if (!fine_buf) fine_buf = calloc(NFINE, (size_t)FINE_W * FINE_H);
+    return fine_buf != NULL;
+}
+/* a layer through the filter, f times its size (rows of w * f): where `only` is given, just its
+ * pixels. The values kept are the colour (and, keep_hi, the sprite's priority) with bit 6 set, so
+ * the same colour at two priorities is one colour to the filter and nothing opaque is 0 */
+static const uint8_t *fine_make(int plane, uint8_t (*src)[VDP_MAX_W], uint8_t (*only)[VDP_MAX_W], int keep_hi,
+                                int w, int h, int f) {
+    static uint8_t norm[VDP_MAX_H][VDP_MAX_W];
+    uint8_t keep = keep_hi ? 0xBF : 0x3F, any = 0;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            uint8_t c = only && !only[y][x] ? 0 : src[y][x];
+            norm[y][x] = c ? (uint8_t)((c & keep) | 0x40) : 0;
+            any |= norm[y][x];
+        }
+    if (!any) return fine_plane(FINE_ZERO);
+    scalex_upscale8(&norm[0][0], VDP_MAX_W, w, h, fine_plane(plane), w * f, f);
+    return fine_plane(plane);
+}
+/* the maps into the enlarged layers (build_map's, f times as fine), and the game-size maps made
+ * from them, so the two never disagree about which game pixel an output pixel shows */
+static int16_t colf_bg[VDP_MAX_W * MAX_SCALE], colf_en[VDP_MAX_W * MAX_SCALE], colf_pa[VDP_MAX_W * MAX_SCALE];
+static int16_t rowf_bg[VDP_MAX_H * MAX_SCALE], rowf_en[VDP_MAX_H * MAX_SCALE], rowf_pa[VDP_MAX_H * MAX_SCALE];
+static void build_map_fine(int16_t *fine, int16_t *map, int n, int scale, int f, int size, float center,
+                           float factor, float zoom, float cam, int mirror) {
+    float s = 1.0f + factor * (zoom - 1.0f);
+    int fsize = size * f;
+    for (int i = 0; i < n; i++) {
+        float q = ((float)i + 0.5f) / (float)scale;
+        int p = (int)floorf((center + (q - center) / s + factor * cam) * (float)f);
+        if (mirror) {
+            if (p < 0) p = -p - 1;
+            if (p >= fsize) p = 2 * fsize - p - 1;
+            if (p < 0) p = 0;
+            if (p >= fsize) p = fsize - 1;
+        } else if (p < 0 || p >= fsize) {
+            p = -1;
+        }
+        fine[i] = (int16_t)p;
+        map[i] = (int16_t)(p < 0 ? -1 : p / f);
+    }
+}
+
 /* The picture's main pass, a row of the output at a time: for each pixel the
  * nearest thing there, through each layer's own camera. What a row shows
  * depends only on the source rows its layers fall on and on its fog, so a
  * row with the same ones as the row above (most rows, the picture being
  * several times the game's size) is a copy of it. Rows are drawn in pieces
- * on several cores (par.h): a piece writes only its own rows. */
+ * on several cores (par.h): a piece writes only its own rows.
+ *
+ * The layers are read through pointers and maps of their own: the game's
+ * layers and the game-size maps, or, with Scale2x, the enlarged layers and
+ * the fine maps. What stays at the game's size either way (which party
+ * pixels were put back, the light) is read through the game-size maps. */
 typedef struct {
     uint32_t *out;
     int out_stride, scale, ow;
     const uint32_t *pal, *tpal;
     int panning, t_out, a_out, lit, fog_on, tint_r, tint_g, tint_b;
+    const uint8_t *L[NLAYERS], *mi;                  /* the layers and the pan's picture, rows of ls */
+    int ls, ui_div;                                  /* (ui_div: output pixels to a pixel of the windows' layer) */
+    const int16_t *cb, *ce, *cp, *rb, *re, *rp;      /* the maps into them */
 } Rows;
 
 static void compose_rows(void *ctx, int y0, int y1) {
     const Rows *q = ctx;
     uint32_t *out = q->out;
     const uint32_t *pal = q->pal, *tpal = q->tpal;
-    int out_stride = q->out_stride, scale = q->scale, ow = q->ow;
+    int out_stride = q->out_stride, ow = q->ow;
     int panning = q->panning, t_out = q->t_out, a_out = q->a_out, lit = q->lit, fog_on = q->fog_on;
     int tint_r = q->tint_r, tint_g = q->tint_g, tint_b = q->tint_b;
+    int ls = q->ls, ui_div = q->ui_div;
+    const int16_t *cb = q->cb, *ce = q->ce, *cp = q->cp, *rb = q->rb, *re = q->re, *rp = q->rp;
     for (int Y = y0; Y < y1; Y++) {
-        int vu = Y / scale, ve = row_en[Y], vp = row_pa[Y], vb = row_bg[Y];
+        int vu = Y / ui_div, ve = row_en[Y], vp = row_pa[Y];
+        int fe = re[Y], fp = rp[Y], fb = rb[Y];
         uint8_t *fr = front[Y];
         uint32_t *dst = out + (size_t)Y * (size_t)out_stride;
         const uint8_t *nrow1 = noise[fog_row1[Y]], *nrow2 = noise[fog_row2[Y]];
         int prof = fog_on ? fog_profile[Y] : 0;
-        if (Y > y0 && vu == (Y - 1) / scale && ve == row_en[Y - 1] && vp == row_pa[Y - 1] && vb == row_bg[Y - 1]
+        if (Y > y0 && vu == (Y - 1) / ui_div && fe == re[Y - 1] && fp == rp[Y - 1] && fb == rb[Y - 1]
             && prof == (fog_on ? fog_profile[Y - 1] : 0)
             && (!prof || (fog_row1[Y] == fog_row1[Y - 1] && fog_row2[Y] == fog_row2[Y - 1]))) {
             memcpy(dst, dst - out_stride, (size_t)ow * sizeof *dst);      /* the row above, again */
             memcpy(fr, front[Y - 1], (size_t)ow);
             continue;
         }
+        /* this row of each layer (the enemies' camera carries four of them) */
+        const uint8_t *l_ui = q->L[L_UI] + (size_t)vu * (size_t)ls;
+        const uint8_t *l_bg = q->L[L_BG] + (size_t)fb * (size_t)ls;
+        const uint8_t *l_po = NULL, *l_ac = NULL, *l_en = NULL, *l_pa = NULL, *l_mi = NULL;
+        if (ve >= 0) {
+            l_po = q->L[L_POINTER] + (size_t)fe * (size_t)ls;
+            l_ac = q->L[L_ACTION] + (size_t)fe * (size_t)ls;
+            l_en = q->L[L_ENEMY] + (size_t)fe * (size_t)ls;
+        }
+        if (vp >= 0) {
+            l_pa = q->L[L_PARTY] + (size_t)fp * (size_t)ls;
+            l_mi = q->mi + (size_t)fp * (size_t)ls;
+        }
         for (int X = 0; X < ow; X++) {
             int u = -1, c;
             /* in front of the fog: cursor over an enemy, windows, party */
-            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_POINTER][ve][u]) != 0) {
+            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = l_po[ce[X]]) != 0) {
                 dst[X] = pal[c & 0x3F];
                 fr[X] = 3;
                 continue;
             }
-            if ((c = layer[L_UI][vu][X / scale]) != 0) { dst[X] = pal[c & 0x3F]; fr[X] = 3; continue; }
+            if ((c = l_ui[X / ui_div]) != 0) { dst[X] = pal[c & 0x3F]; fr[X] = 3; continue; }
             int pu = 0;                                       /* the party here, and if put back (under action) */
             c = 0;
             if (vp >= 0) {
                 if (!panning) {
-                    if ((u = col_pa[X]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0) pu = party_under[vp][u];
+                    if ((u = col_pa[X]) >= 0 && (c = l_pa[cp[X]]) != 0) pu = party_under[vp][u];
                 } else {
                     int XT = X - t_out, XO = X - a_out;
-                    if (XT >= 0 && XT < ow && (u = col_pa[XT]) >= 0 && (c = layer[L_PARTY][vp][u]) != 0) pu = party_under[vp][u];
-                    if (!c && XO >= 0 && XO < ow && (u = col_pa[XO]) >= 0 && (c = mimg[vp][u]) != 0) pu = 1;
+                    if (XT >= 0 && XT < ow && (u = col_pa[XT]) >= 0 && (c = l_pa[cp[XT]]) != 0) pu = party_under[vp][u];
+                    if (!c && XO >= 0 && XO < ow && (u = col_pa[XO]) >= 0 && (c = l_mi[cp[XO]]) != 0) pu = 1;
                 }
             }
-            if (c && !(pu && ve >= 0 && col_en[X] >= 0 && layer[L_ACTION][ve][col_en[X]])) {
+            if (c && !(pu && ve >= 0 && col_en[X] >= 0 && l_ac[ce[X]])) {
                 uint32_t pc = tpal[c & 0x3F];
                 if (lit && ve >= 0 && col_en[X] >= 0) {                /* the party catches some of the light */
                     const uint8_t *lp = light_px[ve][col_en[X]];
@@ -561,9 +647,9 @@ static void compose_rows(void *ctx, int y0, int y1) {
             /* behind it: action, enemies, background */
             uint32_t far;
             uint8_t what = WX_FRONT_ENEMY;
-            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = layer[L_ACTION][ve][u]) != 0) far = tpal[c & 0x3F];
-            else if (ve >= 0 && u >= 0 && (c = layer[L_ENEMY][ve][u]) != 0) far = tpal[c & 0x3F];
-            else { far = tpal[layer[L_BG][vb][col_bg[X]] & 0x3F]; what = WX_FRONT_BG; }
+            if (ve >= 0 && (u = col_en[X]) >= 0 && (c = l_ac[ce[X]]) != 0) far = tpal[c & 0x3F];
+            else if (ve >= 0 && u >= 0 && (c = l_en[ce[X]]) != 0) far = tpal[c & 0x3F];
+            else { far = tpal[l_bg[cb[X]] & 0x3F]; what = WX_FRONT_BG; }
             if (fog_on && prof) {
                 int d = (nrow1[fog_col1[X]] * 5 + nrow2[fog_col2[X]] * 3) >> 3;   /* 0..255 */
                 d = (d - 80) * 2;                                                 /* contrast: wisps */
@@ -875,12 +961,22 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
 
     /* source coordinate for every output column and row, per layer */
     int ow = w * scale, oh = h * scale;
-    build_map(col_bg, ow, scale, w, w / 2.0f, F_BG, zoom, cam_bg, 1);
-    build_map(row_bg, oh, scale, h, h * 0.45f, F_BG, zoom, cam_y, 1);
-    build_map(col_en, ow, scale, w, w / 2.0f, F_ENEMY, zoom, cam_en, 0);
-    build_map(row_en, oh, scale, h, h / 2.0f, F_ENEMY, zoom, cam_y, 0);
-    build_map(col_pa, ow, scale, w, w / 2.0f, F_PARTY, zoom, cam_x, 0);
-    build_map(row_pa, oh, scale, h, (float)PARTY_FEET_Y, F_PARTY, zoom, 0.0f, 0);   /* no vertical move */
+    int fine = fine_want && scale >= 2 && fine_ready() ? scale : 0;   /* Scale2x: the layers enlarged this much */
+    if (fine) {
+        build_map_fine(colf_bg, col_bg, ow, scale, fine, w, w / 2.0f, F_BG, zoom, cam_bg, 1);
+        build_map_fine(rowf_bg, row_bg, oh, scale, fine, h, h * 0.45f, F_BG, zoom, cam_y, 1);
+        build_map_fine(colf_en, col_en, ow, scale, fine, w, w / 2.0f, F_ENEMY, zoom, cam_en, 0);
+        build_map_fine(rowf_en, row_en, oh, scale, fine, h, h / 2.0f, F_ENEMY, zoom, cam_y, 0);
+        build_map_fine(colf_pa, col_pa, ow, scale, fine, w, w / 2.0f, F_PARTY, zoom, cam_x, 0);
+        build_map_fine(rowf_pa, row_pa, oh, scale, fine, h, (float)PARTY_FEET_Y, F_PARTY, zoom, 0.0f, 0);
+    } else {
+        build_map(col_bg, ow, scale, w, w / 2.0f, F_BG, zoom, cam_bg, 1);
+        build_map(row_bg, oh, scale, h, h * 0.45f, F_BG, zoom, cam_y, 1);
+        build_map(col_en, ow, scale, w, w / 2.0f, F_ENEMY, zoom, cam_en, 0);
+        build_map(row_en, oh, scale, h, h / 2.0f, F_ENEMY, zoom, cam_y, 0);
+        build_map(col_pa, ow, scale, w, w / 2.0f, F_PARTY, zoom, cam_x, 0);
+        build_map(row_pa, oh, scale, h, (float)PARTY_FEET_Y, F_PARTY, zoom, 0.0f, 0);   /* no vertical move */
+    }
 
     /* fog: tinted from the background's average colour (eased, so flashes
      * don't make it flicker), densest along the floor, two drifting octaves */
@@ -969,6 +1065,23 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         tint_r = (int)(fc >> 16 & 255); tint_g = (int)(fc >> 8 & 255); tint_b = (int)(fc & 255);
     }
     Rows rows = {out, out_stride, scale, ow, pal, tpal, panning, t_out, a_out, lit, fog_on, tint_r, tint_g, tint_b};
+    const uint8_t *near_fine = NULL;                          /* (Scale2x: the sprites on the party, enlarged) */
+    if (fine) {                                               /* every layer through the filter, now they are sorted */
+        for (int n = 0; n < NLAYERS; n++) rows.L[n] = fine_make(n, layer[n], NULL, 0, w, h, fine);
+        rows.mi = panning ? fine_make(FINE_MIMG, mimg, NULL, 0, w, h, fine) : fine_plane(FINE_ZERO);
+        if (any_near) near_fine = fine_make(FINE_NEAR, near_px, near_obj, 1, w, h, fine);
+        rows.ls = w * fine;
+        rows.ui_div = 1;
+        rows.cb = colf_bg; rows.ce = colf_en; rows.cp = colf_pa;
+        rows.rb = rowf_bg; rows.re = rowf_en; rows.rp = rowf_pa;
+    } else {                                                  /* the game's own layers, as they are */
+        for (int n = 0; n < NLAYERS; n++) rows.L[n] = &layer[n][0][0];
+        rows.mi = &mimg[0][0];
+        rows.ls = VDP_MAX_W;
+        rows.ui_div = scale;
+        rows.cb = col_bg; rows.ce = col_en; rows.cp = col_pa;
+        rows.rb = row_bg; rows.re = row_en; rows.rp = row_pa;
+    }
     par_rows(compose_rows, &rows, oh);
     /* the sprites on the party, each object through the enemies' camera and
      * moved to where the party's puts it: in front of the fog and what is
@@ -990,8 +1103,22 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             uint32_t *dst = out + (size_t)Y * (size_t)out_stride;
             for (int X = X0; X < X1; X++) {
                 int sx = X - obj_dx[r], u;
-                if (sx < 0 || sx >= ow || (u = col_en[sx]) < 0 || near_obj[ve][u] != r + 1) continue;
-                uint8_t c = near_px[ve][u], f = front[Y][X];
+                if (sx < 0 || sx >= ow || (u = col_en[sx]) < 0) continue;
+                uint8_t c, f = front[Y][X];
+                if (!near_fine) {
+                    if (near_obj[ve][u] != r + 1) continue;
+                    c = near_px[ve][u];
+                } else {                                      /* Scale2x: the enlarged sprite's pixel here */
+                    c = near_fine[(size_t)rowf_en[sy] * (size_t)ow + (size_t)colf_en[sx]];
+                    if (!c) continue;                         /* (a corner the filter rounded away) */
+                    int o = near_obj[ve][u];
+                    if (o != r + 1) {                         /* ... or one it filled in: this object's if beside it */
+                        if (o) continue;
+                        if (!((u > 0 && near_obj[ve][u - 1] == r + 1) || (u < w - 1 && near_obj[ve][u + 1] == r + 1)
+                              || (ve > 0 && near_obj[ve - 1][u] == r + 1) || (ve < h - 1 && near_obj[ve + 1][u] == r + 1)))
+                            continue;
+                    }
+                }
                 if ((c & 0x80) ? f == 3 : (f == 1 || f == 3)) continue;
                 dst[X] = tpal[c & 0x3F];
                 front[Y][X] = WX_FRONT_PARTY;                 /* with the party, for the weather */

@@ -21,6 +21,7 @@
 #include "m68k.h"
 #include "vdp.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -39,13 +40,40 @@ static unsigned r8(unsigned a) { return m68k_ram[a & 0xFFFF]; }
 static unsigned r16(unsigned a) { return (unsigned)(m68k_ram[a & 0xFFFF] << 8 | m68k_ram[(a + 1) & 0xFFFF]); }
 static int wrapi(int v, int n) { v %= n; return v < 0 ? v + n : v; }
 
-static int enabled = 1;
-void walkto_set_enabled(int on) { enabled = on; if (!on) walkto_cancel(); }
+static int enabled = 1, forced;
+void walkto_set_enabled(int on) { enabled = on; if (!on && !forced) walkto_cancel(); }
+void walkto_force(int on) { forced = on; if (!on && !enabled) walkto_cancel(); }   /* Wave Mode's walks */
+#define ON (enabled || forced)
 int  walkto_enabled(void) { return enabled; }
 
 /* the field, ready for the party to walk: no window, event, vehicle or battle */
 static int field_free(void) {
     return r16(GAME_MODE) == MODE_FIELD && r16(GAME_ROUTINE) != 0x0C && !r16(VEHICLE) && r16(WIN_END) <= 0x6040;
+}
+
+/* the vehicle the party rides (Vehicle_Index): 1 Land Rover, 2 Ice Digger, 3 Hydrofoil; 0 on foot */
+static int riding(void) {
+    unsigned v = r16(VEHICLE);
+    return v >= 1 && v <= 3 ? (int)v : 0;
+}
+/* ... the field ready for it to be driven: as field_free, in a vehicle */
+static int field_drivable(void) {
+    return r16(GAME_MODE) == MODE_FIELD && r16(GAME_ROUTINE) != 0x0C && riding() && r16(WIN_END) <= 0x6040;
+}
+static int drive;                                       /* the walk is a vehicle's: its kind (riding()) */
+int walkto_riding(void) { return riding(); }
+int walkto_vehicle_ok(int vehicle, int code) {
+    return code == 0 || code == 0xA || (vehicle == 2 && code == 0xB) || (vehicle == 3 && code == 9);
+}
+
+/* a cell's collision code against the way: 1 = it can't go there. On foot (TileCollNormalPtrs) solid, water,
+ * sand, ice and a counter stop the party, and another map is only a destination; a vehicle goes over its own
+ * ground only (TileColl*Ptrs: all solid but plain ground and sand; the Ice Digger's ice blocks, the
+ * Hydrofoil's water) and never onto another map */
+static int blocked(int code, int target) {
+    if (drive) return !walkto_vehicle_ok(drive, code);   /* (a block's highest code) */
+    if (code >= 8 && code <= 0xC) return 1;
+    return code == 1 && !target;
 }
 
 /* ------------------------------------------------------------------ the map */
@@ -142,10 +170,84 @@ static int16_t path_x[WIN * WIN], path_y[WIN * WIN];   /* map cells, from where 
 
 static unsigned slot_addr(int slot) { return LEADER + (unsigned)slot * 0x40; }
 
+/* a vehicle's grid (UpdateVehicleCollision): it covers the block of its feet cell, the one right of it and the
+ * two above, steps two cells at a time, and the highest code of the block it moves into goes through its table */
+static int block_code(int cx, int cy) {
+    int m = 0;
+    for (int dy = -1; dy <= 0; dy++)
+        for (int dx = 0; dx <= 1; dx++) {
+            int c = cell_code(cx + dx, cy + dy);
+            if (c > m) m = c;
+        }
+    return m;
+}
+static int walk_log(void) {                             /* PSIV_WALK_LOG=1 */
+    static int on = -1;
+    if (on < 0) on = getenv("PSIV_WALK_LOG") != NULL;
+    return on;
+}
+static int plan_drive(int pcx, int pcy) {
+    int lim = world ? 48 : WIN;
+    win_w = map_w < lim ? map_w : lim;
+    win_h = map_h < lim ? map_h : lim;
+    org_x = pcx - win_w / 2;
+    org_y = pcy - win_h / 2;
+    int tx = -1, ty = -1, sx, sy;
+    if (!to_win(tcx, tcy, &tx, &ty)) tx = ty = -1;
+    to_win(pcx, pcy, &sx, &sy);
+    memset(seen, 0, (size_t)(win_w * win_h));
+    int head = 0, tail = 0, start = sy * win_w + sx;
+    seen[start] = 5;
+    steps[start] = 0;
+    queue[tail++] = start;
+    int best = -1, best_score = 1 << 30;
+    while (head < tail) {
+        int i = queue[head++], x = i % win_w, y = i / win_w;
+        if (tx >= 0) {                                   /* the block nearest the clicked cell */
+            int ddx = tx < x ? x - tx : tx > x + 1 ? tx - x - 1 : 0, ddy = ty < y - 1 ? y - 1 - ty : ty > y ? ty - y : 0;
+            int score = (ddx + ddy) * 4096 + steps[i];
+            if (score < best_score) { best_score = score; best = i; }
+        }
+        for (int d = 0; d < 4; d++) {
+            int nx = x + 2 * DX[d], ny = y + 2 * DY[d];
+            if (nx < 1 || ny < 1 || nx >= win_w - 1 || ny >= win_h) continue;
+            int j = ny * win_w + nx;
+            if (seen[j] || blocked(block_code(org_x + nx, org_y + ny), 0)) continue;
+            seen[j] = (uint8_t)(d + 1);
+            steps[j] = (uint16_t)(steps[i] + 1);
+            queue[tail++] = j;
+        }
+    }
+    if (best < 0) return 0;
+    int n = steps[best] + 1;
+    for (int i = best, k = n - 1; k >= 0; k--) {
+        int x = i % win_w, y = i / win_w;
+        path_x[k] = (int16_t)wrapi(org_x + x, map_w);
+        path_y[k] = (int16_t)wrapi(org_y + y, map_h);
+        if (k) { int d = seen[i] - 1; i = (y - 2 * DY[d]) * win_w + (x - 2 * DX[d]); }
+    }
+    ncells = n;
+    here = 0;
+    if (walk_log()) {
+        fprintf(stderr, "walk: drive %d from cell %d,%d to %d,%d: cell %d,%d, %d steps:", drive, pcx, pcy, tcx, tcy,
+                path_x[n - 1], path_y[n - 1], n - 1);
+        for (int k = 1; k < n && k < 12; k++) fprintf(stderr, " %d,%d", path_x[k], path_y[k]);
+        fprintf(stderr, "\nwalk:   blocks around (the vehicle's grid, its own [ ]):\n");
+        for (int dy = -6; dy <= 6; dy += 2) {
+            fprintf(stderr, "walk:   ");
+            for (int dx = -10; dx <= 10; dx += 2)
+                fprintf(stderr, dx == 0 && dy == 0 ? "[%X]" : " %X ", block_code(pcx + dx, pcy + dy));
+            fprintf(stderr, "\n");
+        }
+    }
+    return 1;
+}
+
 /* a path from cell (pcx, pcy): to the target cell, or the reachable cell
  * nearest it; to the side of the target object. 0: nowhere to go */
 static int plan(int pcx, int pcy) {
     map_read();
+    if (drive) return plan_drive(pcx, pcy);
     int lim = world ? 48 : WIN;
     win_w = map_w < lim ? map_w : lim;
     win_h = map_h < lim ? map_h : lim;
@@ -182,11 +284,24 @@ static int plan(int pcx, int pcy) {
             if (nx < 0 || ny < 0 || nx >= win_w || ny >= win_h) continue;
             int j = ny * win_w + nx, code = cell_code(org_x + nx, org_y + ny);
             if (seen[j] || occupied[j]) continue;
-            if (code >= 8 && code <= 0xC) continue;      /* solid, water, sand, ice, a counter */
-            if (code == 1 && !(nx == tx && ny == ty)) continue;   /* another map: only if clicked */
+            if (blocked(code, nx == tx && ny == ty)) continue;     /* (see blocked) */
             seen[j] = (uint8_t)(d + 1);
             steps[j] = (uint16_t)(steps[i] + 1);
             queue[tail++] = j;
+        }
+    }
+    {   /* PSIV_WALK_LOG=1: each search -- where from, where to, the cell chosen, how far; the codes around */
+        static int on = -1;
+        if (on < 0) on = getenv("PSIV_WALK_LOG") != NULL;
+        if (on) {
+            fprintf(stderr, "walk: %s from cell %d,%d to %d,%d: ", drive ? "drive" : "walk", pcx, pcy, tcx, tcy);
+            if (best < 0 || best_score >= (1 << 30)) fprintf(stderr, "nowhere\n");
+            else fprintf(stderr, "cell %d,%d, %d steps\n", wrapi(org_x + best % win_w, map_w), wrapi(org_y + best / win_w, map_h), steps[best]);
+            for (int dy = -4; dy <= 4; dy++) {
+                fprintf(stderr, "walk:   ");
+                for (int dx = -10; dx <= 10; dx++) fprintf(stderr, dx == 0 && dy == 0 ? "[%X]" : "%X", cell_code(pcx + dx, pcy + dy));
+                fprintf(stderr, "\n");
+            }
         }
     }
     if (best < 0 || best_score >= (1 << 30)) return 0;
@@ -202,6 +317,65 @@ static int plan(int pcx, int pcy) {
     ncells = n;
     here = 0;
     return 1;
+}
+
+/* a cell `want` steps' walk from the leader (or as far as the walk goes, if less), the
+ * one farthest from the cells to keep away from (where the party came in, the dots
+ * before): Wave Mode's next dot. 0: no field, or nowhere to go */
+static void leader_cell(int *cx, int *cy, int *moving);
+int walkto_pick(int want, const int *ax, const int *ay, int na, int *cx, int *cy) {
+    if (r16(GAME_MODE) != MODE_FIELD) return 0;
+    map_read();
+    int pcx, pcy, moving;
+    leader_cell(&pcx, &pcy, &moving);
+    int lim = world ? 48 : WIN;
+    win_w = map_w < lim ? map_w : lim;
+    win_h = map_h < lim ? map_h : lim;
+    org_x = pcx - win_w / 2;
+    org_y = pcy - win_h / 2;
+    mark_objects();
+    int sx, sy;
+    to_win(pcx, pcy, &sx, &sy);
+    memset(seen, 0, (size_t)(win_w * win_h));
+    int head = 0, tail = 0, start = sy * win_w + sx;
+    seen[start] = 5;
+    steps[start] = 0;
+    queue[tail++] = start;
+    int best = -1, best_steps = -1, best_far = -1;
+    while (head < tail) {
+        int i = queue[head++], x = i % win_w, y = i / win_w, st = steps[i];
+        if (st <= want) {
+            int far = 1 << 20;                           /* the nearest of the cells to keep away from */
+            for (int k = 0; k < na; k++) {
+                int d = abs(wrapi(org_x + x, map_w) - ax[k]) + abs(wrapi(org_y + y, map_h) - ay[k]);
+                if (d < far) far = d;
+            }
+            if (st > best_steps || (st == best_steps && far > best_far)) { best = i; best_steps = st; best_far = far; }
+        }
+        if (st >= want) continue;
+        for (int d = 0; d < 4; d++) {
+            int nx = x + DX[d], ny = y + DY[d];
+            if (nx < 0 || ny < 0 || nx >= win_w || ny >= win_h) continue;
+            int j = ny * win_w + nx, code = cell_code(org_x + nx, org_y + ny);
+            if (seen[j] || occupied[j]) continue;
+            if (code >= 8 && code <= 0xC) continue;
+            if (code == 1 || code == 2) continue;        /* another map, or a recovery floor */
+            seen[j] = (uint8_t)(d + 1);
+            steps[j] = (uint16_t)(st + 1);
+            queue[tail++] = j;
+        }
+    }
+    if (best < 0 || best_steps <= 0) return 0;
+    *cx = wrapi(org_x + best % win_w, map_w);
+    *cy = wrapi(org_y + best / win_w, map_h);
+    return 1;
+}
+int walkto_leader_cell(int *cx, int *cy) {
+    if (r16(GAME_MODE) != MODE_FIELD) return 0;
+    map_read();
+    int moving;
+    leader_cell(cx, cy, &moving);
+    return !moving;
 }
 
 /* ------------------------------------------------------------------ starting */
@@ -230,7 +404,9 @@ static void leader_cell(int *cx, int *cy, int *moving) {
 
 int walkto_go(int cx, int cy, int slot) {
     active = 0;
-    if (!enabled || !field_free()) return 0;
+    drive = field_drivable() ? riding() : 0;
+    if (drive) slot = -1;                                /* (no talking from a vehicle) */
+    if (!ON || (!field_free() && !drive)) return 0;
     map_read();
     int pcx, pcy, moving;
     leader_cell(&pcx, &pcy, &moving);
@@ -249,7 +425,7 @@ int walkto_go(int cx, int cy, int slot) {
 }
 
 int walkto_click_screen(int sx, int sy) {
-    if (!enabled || !field_free()) return 0;
+    if (!enabled || (!field_free() && !field_drivable())) return 0;
     map_read();
     int wx = wrapi((int)r16(use_bg ? 0xEF9C : 0xEF94) + sx, map_w * 16);   /* the walked layer's camera */
     int wy = wrapi((int)r16(use_bg ? 0xEF98 : 0xEF90) + sy, map_h * 16);
@@ -298,16 +474,22 @@ uint8_t walkto_pad(uint8_t user, uint8_t pad) {
         else { pulse_frames--; return pulse_button; }
     }
     if (!active) return pad;
-    if (user || !enabled) { active = 0; return pad; }    /* the player takes over */
-    if (!field_free() || r16(FIELD_MAP) != map_at_start) { active = 0; return pad; }
+    if (user || !ON) { active = 0; return pad; }         /* the player takes over */
+    if (!(drive ? field_drivable() && riding() == drive : field_free()) || r16(FIELD_MAP) != map_at_start) { active = 0; return pad; }
     int x = (int)r16(LEADER + 0x30), y = (int)r16(LEADER + 0x34), pcx, pcy, moving;
     leader_cell(&pcx, &pcy, &moving);
     if (x != last_x || y != last_y) { frames_still = 0; last_x = x; last_y = y; }
     else if (++frames_still > 40) {                      /* stuck: someone in the way */
         frames_still = 0;
+        if (walk_log())
+            fprintf(stderr, "walk: still at cell %d,%d (pixel %d,%d), replan %d, on the path at %d of %d\n", pcx, pcy, x, y,
+                    replans + 1, here, ncells);
         if (++replans > 4 || !plan(pcx, pcy)) { active = 0; return 0; }
         phase = WALK;
     }
+    if (drive && walk_log() && getenv("PSIV_WALK_LOG")[0] == '2')   /* (=2: each frame of a drive) */
+        fprintf(stderr, "walk: frame: cell %d,%d pixel %d,%d moving %d, here %d of %d, facing %X, user %02X\n", pcx, pcy, x, y,
+                moving, here, ncells, r16(LEADER + 6), user);
     if (phase == WALK) {
         int k = -1;
         for (int i = here; i < ncells && k < 0; i++)
@@ -318,8 +500,9 @@ uint8_t walkto_pad(uint8_t user, uint8_t pad) {
         }
         here = k;
         if (k + 1 < ncells) {
+            int st = drive ? 2 : 1;                      /* (a vehicle steps two cells) */
             for (int d = 0; d < 4; d++)
-                if (wrapi(path_x[k] + DX[d], map_w) == path_x[k + 1] && wrapi(path_y[k] + DY[d], map_h) == path_y[k + 1])
+                if (wrapi(path_x[k] + st * DX[d], map_w) == path_x[k + 1] && wrapi(path_y[k] + st * DY[d], map_h) == path_y[k + 1])
                     return PADS[d];
             active = 0;
             return 0;

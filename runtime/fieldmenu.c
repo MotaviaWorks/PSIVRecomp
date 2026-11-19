@@ -269,7 +269,16 @@ typedef struct {
 } Hit;
 static Hit hits[200];
 static int nhits;
-static struct { int on, hold, rest, presses, waited; uint8_t press; Hit h; } drive;
+static struct { int on, hold, rest, presses, waited, nopick, ticks; uint8_t press; Hit h; } drive;
+/* the vehicle shortcuts (below, by the item code): what the click and the pad need of them */
+typedef struct { int n, slot[3], kind[3], ok[3]; } Vehicles;
+static int veh_focus = -1;                                       /* the box's row the keys are on; -1: none */
+static struct { int n, i, chosen, settle, row, kind, shown; Hit step[3]; } vseq;   /* the walk under way (row: the box's) */
+typedef struct { float x0, y0, x1, y1; int k; } VehHit;
+static VehHit vhits[3];
+static int nvhits;
+static void vehicles_now(Vehicles *v);
+static void vehicle_go(const Vehicles *v, int row);
 static int pulse;                 /* a click on nothing: a press of C, or of B (the right button), for a frame */
 static uint8_t pulse_key;
 static int wheel, wheel_rest;     /* turns of the wheel still to play: + down, - up */
@@ -312,9 +321,17 @@ static uint8_t drive_step(void) {
 
 int fieldmenu_click(float fx, float fy, int right) {
     if (!active) return 0;
+    if (vseq.n) return 1;                                /* (a vehicle's walk under way) */
     drive.on = 0;
     wheel = 0;
     if (right) { pulse = 1; pulse_key = PAD_B; return 1; }
+    for (int i = 0; i < nvhits; i++)                     /* a vehicle */
+        if (fx >= vhits[i].x0 && fx < vhits[i].x1 && fy >= vhits[i].y0 && fy < vhits[i].y1) {
+            Vehicles v;
+            vehicles_now(&v);
+            if (vhits[i].k < v.n && v.ok[vhits[i].k]) vehicle_go(&v, vhits[i].k);
+            return 1;
+        }
     for (int i = nhits - 1; i >= 0; i--) {               /* the last drawn is on top */
         const Hit *h = &hits[i];
         if (fx < h->x0 || fx >= h->x1 || fy < h->y0 || fy >= h->y1) continue;
@@ -322,7 +339,8 @@ int fieldmenu_click(float fx, float fy, int right) {
         if (h->cell_row < 0 && h->target < 0) { pulse = 1; pulse_key = h->dec; return 1; }   /* a press: a page's arrow */
         drive.h = *h;
         drive.on = 1;
-        drive.hold = drive.rest = drive.presses = drive.waited = 0;
+        drive.hold = drive.rest = drive.presses = drive.waited = drive.nopick = 0;
+        drive.ticks = 1;
         drive.press = 0;
         return 1;
     }
@@ -331,33 +349,227 @@ int fieldmenu_click(float fx, float fy, int right) {
     return 1;
 }
 
+/* ---- the items, grouped (GitHub issue 9): one row a kind of item. Display only: the pack is the
+ * game's, one item a slot; a row stands for the first slot holding that item. */
+#define INVENTORY_AT    0xF410u
+#define ITEM_PAGE_AT    0xE206u
+#define R_ITEMS_AT      0x05B39Au
+static int group_items = 1;
+void fieldmenu_set_group_items(int on) { group_items = on != 0; }
+
+typedef struct { int n, id[40], first[40], count[40]; } Kinds;
+static void kinds_of_pack(Kinds *k) {                    /* in the order the pack first holds them */
+    k->n = 0;
+    for (int i = 0; i < 40; i++) {
+        int id = (int)r8(INVENTORY_AT + (unsigned)i), g = 0;
+        if (!id) break;
+        while (g < k->n && k->id[g] != id) g++;
+        if (g == k->n) { k->id[g] = id; k->first[g] = i; k->count[g] = 0; k->n++; }
+        k->count[g]++;
+    }
+}
+static int kind_at(const Kinds *k, int slot) {
+    int id = slot >= 0 && slot < 40 ? (int)r8(INVENTORY_AT + (unsigned)slot) : 0;
+    for (int g = 0; g < k->n; g++)
+        if (k->id[g] == id) return g;
+    return 0;
+}
+static int items_grouped_now(void) {
+    return active && group_items && screen == SCR_ITEMS && routine_of(r16(WINDOW_INDEX)) == R_ITEMS_AT;
+}
+/* the slot the cursor is on, or is being walked to */
+static int items_slot(void) {
+    if (drive.on && drive.nopick && drive.h.routine == R_ITEMS_AT) return drive.h.page * 8 + drive.h.target;
+    return (int)r16(ITEM_PAGE_AT) * 8 + ((int)r8(OPTION_2) & 7);
+}
+/* the row an arrow leads to in rows laid out in columns of `per`, each column a page as the game's own
+ * lists have it: Up / Down wrap inside the column, Right / Left go to the next / previous column's top (and
+ * do nothing past the ends) */
+static int page_step(int row, int n, int per, uint8_t key) {
+    if (n < 1) return 0;
+    if (row < 0) row = 0;
+    if (row >= n) row = n - 1;
+    int top = row / per * per, len = n - top < per ? n - top : per;
+    if (key & PAD_DOWN) return top + (row - top + 1) % len;
+    if (key & PAD_UP) return top + (row - top - 1 + len) % len;
+    if (key & PAD_RIGHT) return top + per < n ? top + per : row;
+    if (key & PAD_LEFT) return top > 0 ? top - per : row;
+    return row;
+}
+
+/* the game's item cursor walked to a slot, nothing chosen; one tick of the cursor heard for it */
+static void walk_items_to(int slot) {
+    drive.h = (Hit){0, 0, 0, 0, R_ITEMS_AT, OPTION_2, ITEM_PAGE_AT, slot % 8, slot / 8, -1, PAD_UP, PAD_DOWN};
+    drive.on = drive.nopick = 1;
+    drive.hold = drive.rest = drive.presses = drive.waited = 0;
+    drive.ticks = 1;
+    drive.press = 0;
+}
+
+/* the kind an arrow leads to (columns of eight, as the game's pages): its first slot */
+static void group_step(uint8_t key) {
+    Kinds k;
+    kinds_of_pack(&k);
+    if (k.n < 1) return;
+    walk_items_to(k.first[page_step(kind_at(&k, items_slot()), k.n, 8, key)]);
+}
+
+/* the wheel over the item list: a row on or back, rolling from a column's bottom to the next one's top
+ * (the game's own Down wraps inside its page); it stops at the ends. Grouped or not */
+static void items_wheel(int d) {
+    int slot;
+    if (group_items) {
+        Kinds k;
+        kinds_of_pack(&k);
+        if (k.n < 1) return;
+        int g = kind_at(&k, items_slot()) + d;
+        if (g < 0 || g >= k.n) return;
+        slot = k.first[g];
+    } else {
+        int count = 0;
+        while (count < 40 && r8(INVENTORY_AT + (unsigned)count)) count++;
+        slot = items_slot() + d;
+        if (slot < 0 || slot >= count) return;
+    }
+    walk_items_to(slot);
+}
+
+/* ---- vehicle shortcuts (GitHub issue 9): the vehicles in the pack, boarded from the menu's first screen
+ * by the game's own way there -- Items, the vehicle, Use -- played as the pad */
+#define FIELD_MAP_AT    0xEC28u   /* Field_Map_Index: a planet's world map below $10 */
+#define BOARDING_AT     0xEC7Fu   /* Vehicle_Boarding_Flags: set as the menu opens, from the tile stood on */
+static const uint8_t VEH_ITEM[3] = {0x96, 0x97, 0x98};          /* Land Rover, Ice Digger, Hydrofoil */
+
+static void vehicles_now(Vehicles *v) {
+    int here = (r16(FIELD_MAP_AT) & 0xFFF0) == 0;
+    v->n = 0;
+    for (int k = 0; k < 3; k++)
+        for (int i = 0; i < 40; i++) {
+            unsigned id = r8(INVENTORY_AT + (unsigned)i);
+            if (!id) break;
+            if (id != VEH_ITEM[k]) continue;
+            v->slot[v->n] = i;
+            v->kind[v->n] = k;
+            v->ok[v->n] = here && (r8(BOARDING_AT) >> k & 1);
+            v->n++;
+            break;
+        }
+}
+
+static void vehicle_go(const Vehicles *v, int row) {
+    int slot = v->slot[row];
+    vseq.step[0] = (Hit){0, 0, 0, 0, R_MENU, OPTION_1, 0, 0, 0, -1, PAD_UP, PAD_DOWN};
+    vseq.step[1] = (Hit){0, 0, 0, 0, R_ITEMS_AT, OPTION_2, ITEM_PAGE_AT, slot % 8, slot / 8, -1, PAD_UP, PAD_DOWN};
+    vseq.step[2] = (Hit){0, 0, 0, 0, R_ITEM_DO, OPTION_3, 0, 0, 0, -1, PAD_UP, PAD_DOWN};
+    vseq.n = 3;
+    vseq.i = 0;
+    vseq.chosen = vseq.settle = 0;
+    vseq.row = row;
+    vseq.kind = v->kind[row];
+    vseq.shown = 0;
+    {   /* PSIV_FIELDMENU_LOG: which vehicle, from which slot */
+        static int on = -1;
+        if (on < 0) on = getenv("PSIV_FIELDMENU_LOG") != NULL;
+        if (on) fprintf(stderr, "fieldmenu: vehicle %02X (%s) from the pack's slot %d\n", VEH_ITEM[v->kind[row]],
+                        ui_item_name(VEH_ITEM[v->kind[row]]), slot);
+    }
+    drive.h = vseq.step[0];
+    drive.on = 1;
+    drive.hold = drive.rest = drive.presses = drive.waited = drive.nopick = drive.ticks = 0;
+    drive.press = 0;
+    veh_focus = -1;
+}
+
+int fieldmenu_quiet_choice(void) { return active && vseq.n && vseq.chosen++ > 0; }
+
+int fieldmenu_quiet_cursor(void) {
+    if (active && vseq.n) return 1;                              /* a vehicle's walk: no ticks at all */
+    if (!active || !drive.on) return 0;
+    if (drive.ticks > 0) { drive.ticks--; return 0; }
+    return 1;
+}
+
 void fieldmenu_wheel(int down) {
-    if (!active || drive.on) return;
+    if (!active || (drive.on && !drive.nopick)) return;
+    if (screen == SCR_ITEMS && routine_of(r16(WINDOW_INDEX)) == R_ITEMS_AT) { items_wheel(down ? 1 : -1); return; }
     wheel += down ? 1 : -1;
     if (wheel > 6) wheel = 6;
     if (wheel < -6) wheel = -6;
 }
 
 uint8_t fieldmenu_pad(uint8_t pad) {
-    if (!active) { drive.on = 0; pulse = 0; wheel = 0; return pad; }
+    static uint8_t was;
+    static int held;
+    uint8_t fresh = pad & (uint8_t)~was;
+    was = pad;
+    if (!active) { drive.on = 0; pulse = 0; wheel = 0; vseq.n = 0; veh_focus = -1; return pad; }
+    if (vseq.n) {                                    /* a vehicle's walk: the player's buttons wait (B stops it) */
+        if (fresh & PAD_B) { vseq.n = 0; drive.on = 0; return pad; }
+        pad = 0;
+    }
     uint8_t out = pad;
     if (sideways) {
         out = pad & (uint8_t)~(PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT);
         if (pad & PAD_LEFT) out |= PAD_UP;
         if (pad & PAD_RIGHT) out |= PAD_DOWN;
     }
+    /* the vehicles' box: Down from Macros into it, Up from its top back out; C boards one */
+    if (screen != SCR_MAIN || routine_of(r16(WINDOW_INDEX)) != R_MENU || vseq.n) veh_focus = -1;
+    else {
+        Vehicles v;
+        vehicles_now(&v);
+        if (!v.n) veh_focus = -1;
+        else if (veh_focus < 0) {
+            if ((fresh & PAD_DOWN) && r8(OPTION_1) == 6 && !drive.on) { veh_focus = 0; out &= (uint8_t)~PAD_DOWN; pad = out; }
+        } else {
+            if (veh_focus >= v.n) veh_focus = v.n - 1;
+            if (fresh & PAD_B) veh_focus = -1;                   /* (and B goes on to the game: the menu closes) */
+            else {
+                if (fresh & PAD_UP) veh_focus--;
+                else if ((fresh & PAD_DOWN) && veh_focus < v.n - 1) veh_focus++;
+                else if ((fresh & PAD_C) && v.ok[veh_focus]) vehicle_go(&v, veh_focus);
+                out &= (uint8_t)~(PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT | PAD_A | PAD_C);
+                pad = out;
+            }
+        }
+    }
+    /* grouped items: the arrows go as in the game's own pages (page_step); held, they repeat. The game
+     * never sees them: the port walks its cursor there */
+    uint8_t arrows = PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT;
+    if (items_grouped_now() && (out & arrows)) {
+        uint8_t a = out & arrows;
+        held = (fresh & arrows) ? 0 : held + 1;
+        if ((fresh & arrows) || (held >= 18 && held % 5 == 0))
+            group_step(a & PAD_DOWN ? PAD_DOWN : a & PAD_UP ? PAD_UP : a & PAD_RIGHT ? PAD_RIGHT : PAD_LEFT);
+        out &= (uint8_t)~arrows;
+        pad = out;                                       /* (so the walk is not taken for the player's own buttons) */
+    }
     if (pad) { drive.on = 0; pulse = 0; wheel = 0; return out; }   /* the player's own buttons come first */
     if (pulse) { pulse = 0; return pulse_key; }
     if (drive.on) {
         if (drive.hold > 0) { drive.hold--; return drive.press; }
         if (drive.rest > 0) { drive.rest--; return 0; }
-        if (drive.press == PAD_C) { drive.on = 0; return 0; }       /* chosen */
+        if (drive.press == PAD_C) {                                  /* chosen */
+            drive.on = 0;
+            if (vseq.n && ++vseq.i < vseq.n) {                       /* a vehicle's walk: its next step */
+                drive.h = vseq.step[vseq.i];
+                vseq.settle = 0;
+                drive.on = 1;
+                drive.hold = drive.rest = drive.presses = drive.waited = drive.nopick = drive.ticks = 0;
+                drive.press = 0;
+            } else vseq.n = 0;
+            return 0;
+        }
         uint8_t k = drive_step();
         if (k == WAIT) {
-            if (++drive.waited > 40) drive.on = 0;
+            if (++drive.waited > (vseq.n ? 150 : 40)) { drive.on = 0; vseq.n = 0; }
             return 0;
         }
         drive.waited = 0;
+        /* a vehicle's walk: each window is given a moment once it is up -- a press while it is still opening
+         * is lost (the Use / Look / Discard window's was) */
+        if (vseq.n && vseq.settle < 12) { vseq.settle++; return 0; }
+        if (!k && drive.nopick) { drive.on = 0; return 0; }          /* there: nothing chosen (grouped items) */
         if (!k) k = PAD_C;
         if (++drive.presses > 64) { drive.on = 0; return 0; }
         drive.press = k;
@@ -768,6 +980,25 @@ static void draw_commands(float x0, float y0, float x1, int cursor, int focus) {
     }
 }
 
+/* the vehicles' box: under the commands, on the menu's first screen */
+static void draw_vehicles(float x0, float y0, float x1) {
+    Vehicles v;
+    vehicles_now(&v);
+    if (!v.n) return;
+    win(x0, y0, x1, y0 + 19.0f + (float)v.n * 13.0f);
+    text(x0 + 9.0f, y0 + 12.4f, "Vehicles", SOFT);
+    for (int k = 0; k < v.n; k++) {
+        float base = y0 + 25.4f + (float)k * 13.0f;
+        uint32_t c = v.ok[k] ? WHITE : FAINT;
+        if (k == veh_focus || (vseq.n && k == vseq.row)) {
+            bar(x0 + 4.0f, x1 - 4.0f, base, BAR);
+            c = v.ok[k] ? NAVY : FAINT;
+        }
+        text(x0 + 9.0f, base, ui_item_name(VEH_ITEM[v.kind[k]]), c);
+        if (nvhits < 3) vhits[nvhits++] = (VehHit){x0 + 4.0f, base - 8.6f, x1 - 4.0f, base + 3.6f, k};
+    }
+}
+
 static void draw_meseta(float x0, float y1, float x1) {
     char t[32];
     win(x0, y1 - 19.0f, x1, y1);
@@ -834,6 +1065,37 @@ static void draw_items(float x0, float y0, float x1, float y1) {
     int item = at >= 0 ? (int)r8(INVENTORY + (unsigned)at) : 0;
     float w = x1 - x0;
 
+    if (group_items && count > 0) {                      /* one row a kind of item (GitHub issue 9) */
+        Kinds k;
+        kinds_of_pack(&k);
+        int sel = kind_at(&k, now == R_ITEMS ? items_slot() : at);
+        int pages = (k.n + 7) / 8, cols = (int)((w - 8.0f) / 70.0f), first = 0;
+        if (cols > 5) cols = 5;
+        if (cols < 1) cols = 1;
+        if (sel / 8 >= cols) first = sel / 8 - cols + 1;
+        float ly1 = y0 + 10.0f + 8 * 12.2f, cw = (w - 8.0f) / (float)cols;
+        win(x0, y0, x1, ly1);
+        for (int g = first * 8; g < k.n && g < (first + cols) * 8; g++) {
+            float cx0 = x0 + 4.0f + cw * (float)(g / 8 - first), base = y0 + 14.2f + (float)(g % 8) * 12.2f;
+            int id = k.id[g], kk = item_kind(id), slot = k.first[g];
+            uint32_t c = kk >= 1 && kk <= 7 ? SOFT : WHITE;
+            hit(cx0, cx0 + cw, base, R_ITEMS, OPTION_2, slot % 8, PAD_UP, PAD_DOWN, ITEM_PAGE, slot / 8);
+            if (g == sel) {
+                bar(cx0, cx0 + cw, base, now == R_ITEMS ? BAR : BAR_OFF);
+                c = now == R_ITEMS ? NAVY : WHITE;
+            }
+            text(cx0 + 5.0f, base, ui_item_name(id), c);
+            if (k.count[g] > 1) {
+                char n_[8];
+                snprintf(n_, sizeof n_, "x%d", k.count[g]);
+                text_right(cx0 + cw - 5.0f, base, n_, c);
+            }
+        }
+        if (first > 0) ui_triangle(&cv, (x0 + 4.4f) * S, (y0 + 6.0f) * S, 2.8f * S, 3, WHITE, 255);
+        if (first + cols < pages) ui_triangle(&cv, (x1 - 4.4f) * S, (y0 + 6.0f) * S, 2.8f * S, 2, WHITE, 255);
+        goto pack_done;
+    }
+    {
     /* the pack: the game's pages of eight, side by side -- Left and Right turn them */
     int pages = (count + 7) / 8, cols = (int)((w - 8.0f) / 70.0f), first = 0;
     if (cols > 5) cols = 5;
@@ -854,9 +1116,12 @@ static void draw_items(float x0, float y0, float x1, float y1) {
     }
     if (first > 0) ui_triangle(&cv, (x0 + 4.4f) * S, (y0 + 6.0f) * S, 2.8f * S, 3, WHITE, 255);
     if (first + cols < pages) ui_triangle(&cv, (x1 - 4.4f) * S, (y0 + 6.0f) * S, 2.8f * S, 2, WHITE, 255);
+    }
+pack_done:;
 
     /* what to do with it, and the party: who it would be used on */
     static const char *const DO[3] = {"Use", "Look", "Discard"};
+    float ly1 = y0 + 10.0f + 8 * 12.2f;
     float my0 = ly1 + 3.0f, my1 = y1 - 30.0f, ax1 = x0 + 62.0f;
     int choice = (int)r8(OPTION_3);
     win(x0, my0, ax1, my0 + 10.0f + 3 * 12.5f);
@@ -1855,8 +2120,26 @@ void fieldmenu_draw(uint32_t *out, int stride, int scale, int w, int h) {
         draw_shop(m, m, W - m, H - m);
     } else if (screen == SCR_SYSTEM) {
         draw_system(m, m, W - m, H - m);
+    } else if (vseq.n) {                                 /* a vehicle's walk: the first screen held, the row lit */
+        draw_commands(m, m, m + cmd, 6, 0);
+        nvhits = 0;
+        draw_vehicles(m, m + 10.0f + 7 * 13.0f + 3.0f, m + cmd);
+        draw_meseta(m, H - m, m + cmd);
+        draw_party(rx0, m, W - m, 16.0f, 1, -1, 0);
+        /* a banner while the game is taken through it: "Starting Land-Rover", the dots counting */
+        char t[64];
+        int dots = (vseq.shown++ / 12) % 4;
+        snprintf(t, sizeof t, "Starting %s", ui_item_name(VEH_ITEM[vseq.kind]));
+        float cap = CAP * 1.25f, tw = ui_text_width(t, cap * S) / S, dw = ui_text_width("...", cap * S) / S;
+        float cx = (rx0 + W - m) / 2.0f, cy = H / 2.0f, bw = tw + dw + 36.0f;
+        win(cx - bw / 2.0f, cy - 16.0f, cx + bw / 2.0f, cy + 16.0f);
+        ui_text(&cv, (cx - (tw + dw) / 2.0f) * S, (cy + cap / 2.0f) * S, cap * S, t, WHITE, 255);
+        if (dots) ui_text(&cv, (cx - (tw + dw) / 2.0f + tw) * S, (cy + cap / 2.0f) * S, cap * S, dots == 1 ? "." : dots == 2 ? ".." : "...", WHITE, 255);
     } else if (screen != SCR_PLAIN && screen != SCR_CHEST) {
-        draw_commands(m, m, m + cmd, (int)r8(OPTION_1), screen == SCR_MAIN && routine_of(r16(WINDOW_INDEX)) == R_MENU);
+        int on_main = screen == SCR_MAIN && routine_of(r16(WINDOW_INDEX)) == R_MENU;
+        draw_commands(m, m, m + cmd, (int)r8(OPTION_1), on_main && veh_focus < 0);
+        nvhits = 0;
+        if (screen == SCR_MAIN) draw_vehicles(m, m + 10.0f + 7 * 13.0f + 3.0f, m + cmd);
         draw_meseta(m, H - m, m + cmd);
         if (screen == SCR_EQUIP) draw_equip(rx0, m, W - m, H - m);
         else if (screen == SCR_ITEMS) draw_items(rx0, m, W - m, H - m);
@@ -1875,7 +2158,7 @@ void fieldmenu_draw(uint32_t *out, int stride, int scale, int w, int h) {
         if (ccol >= wins[i].x && ccol < wins[i].x + wins[i].w && crow > wins[i].y && crow < wins[i].y + wins[i].h - 1) top = i;
     /* (the windows that come up in the middle keep their places to one another: Order's two) */
     int bx0 = 99, by0c = 99, bx1 = 0, by1c = 0;
-    for (int pass = 0; pass < 2; pass++)
+    for (int pass = 0; pass < 2 && !vseq.n; pass++)   /* (none during a vehicle's walk: the first screen is held) */
         for (int i = 0; i < nwins; i++) {
             const Win *p = &wins[i];
             if (!p->plain) continue;

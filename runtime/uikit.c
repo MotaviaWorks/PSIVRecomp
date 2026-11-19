@@ -6,6 +6,7 @@
 #include "m68k.h"
 #include "romart.h"
 #include "par.h"
+#include "scalex.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -217,11 +218,43 @@ void ui_round_rect(const UiCanvas *cv, float x0, float y0, float x1, float y1, f
     ui_round_rect_v(cv, x0, y0, x1, y1, r, c, c, alpha);
 }
 
+/* Smoothing (ui_set_image_look): how an image's pixels are enlarged. 0: as sharp blocks. 1, Soft:
+ * blended, as the game's picture is. 2, Scale2x: read from a copy of the image already enlarged
+ * through the filter (scalex.h), made once for each image and size and kept: the images are the
+ * party's portraits, which stay where they are for as long as the program runs. */
+static int image_look;
+void ui_set_image_look(int look) { image_look = look; }
+
+#define FILTERED_MAX 48
+static struct { const uint8_t *src; int w, h, f; uint8_t *rgba; } filtered[FILTERED_MAX];
+static int filtered_n;
+
+/* im enlarged f times through the filter into *big (im itself when there is no room) */
+static const UiImage *image_filtered(const UiImage *im, int f, UiImage *big) {
+    for (int i = 0; i < filtered_n; i++)
+        if (filtered[i].src == im->rgba && filtered[i].w == im->w && filtered[i].h == im->h && filtered[i].f == f) {
+            big->w = im->w * f; big->h = im->h * f; big->rgba = filtered[i].rgba;
+            return big;
+        }
+    if (filtered_n >= FILTERED_MAX) return im;
+    uint32_t *in = malloc((size_t)im->w * (size_t)im->h * 4), *out = malloc((size_t)im->w * (size_t)im->h * 4 * (size_t)(f * f));
+    if (!in || !out) { free(in); free(out); return im; }
+    memcpy(in, im->rgba, (size_t)im->w * (size_t)im->h * 4);         /* (a pixel's four bytes as one value) */
+    scalex_upscale(in, im->w, im->w, im->h, out, im->w * f, f);
+    free(in);
+    filtered[filtered_n].src = im->rgba; filtered[filtered_n].w = im->w; filtered[filtered_n].h = im->h;
+    filtered[filtered_n].f = f; filtered[filtered_n].rgba = (uint8_t *)out;
+    filtered_n++;
+    big->w = im->w * f; big->h = im->h * f; big->rgba = (uint8_t *)out;
+    return big;
+}
+
 typedef struct {
     const UiCanvas *cv;
     const UiImage *im;
     float x0, y0, size;
     int dim, alpha;
+    int soft;                         /* the four pixels round each point, blended */
 } ImageRows;
 
 static void image_rows(void *ctx, int a, int b) {
@@ -240,10 +273,32 @@ static void image_rows(void *ctx, int a, int b) {
             float dy = py < r ? r - py : py > size - r ? py - (size - r) : 0;
             float cover = dx > 0 && dy > 0 ? r + 0.5f - sqrtf(dx * dx + dy * dy) : 1.0f;
             if (cover <= 0) continue;
-            int uu = (int)(px / size * (float)im->w), vv = (int)(py / size * (float)im->h);
-            uu = uu >= im->w ? im->w - 1 : uu;
-            vv = vv >= im->h ? im->h - 1 : vv;
-            const uint8_t *p = &im->rgba[((size_t)vv * (size_t)im->w + (size_t)uu) * 4];
+            uint8_t blended[4];
+            const uint8_t *p;
+            if (q->soft) {                               /* Soft: the four pixels round the point, by how near */
+                float fu = px / size * (float)im->w - 0.5f, fv = py / size * (float)im->h - 0.5f;
+                int u0 = (int)floorf(fu), v0 = (int)floorf(fv);
+                float tu = fu - (float)u0, tv = fv - (float)v0, sum[4] = {0, 0, 0, 0};
+                for (int k = 0; k < 4; k++) {
+                    int uu = u0 + (k & 1), vv = v0 + (k >> 1);
+                    uu = uu < 0 ? 0 : uu >= im->w ? im->w - 1 : uu;
+                    vv = vv < 0 ? 0 : vv >= im->h ? im->h - 1 : vv;
+                    const uint8_t *s = &im->rgba[((size_t)vv * (size_t)im->w + (size_t)uu) * 4];
+                    float wgt = ((k & 1) ? tu : 1.0f - tu) * ((k >> 1) ? tv : 1.0f - tv) * (float)s[3];
+                    sum[0] += (float)s[0] * wgt; sum[1] += (float)s[1] * wgt; sum[2] += (float)s[2] * wgt;
+                    sum[3] += wgt;
+                }
+                if (sum[3] < 1.0f) continue;
+                blended[0] = (uint8_t)(sum[0] / sum[3]); blended[1] = (uint8_t)(sum[1] / sum[3]);
+                blended[2] = (uint8_t)(sum[2] / sum[3]);
+                blended[3] = (uint8_t)(sum[3] > 255.0f ? 255.0f : sum[3]);
+                p = blended;
+            } else {
+                int uu = (int)(px / size * (float)im->w), vv = (int)(py / size * (float)im->h);
+                uu = uu >= im->w ? im->w - 1 : uu;
+                vv = vv >= im->h ? im->h - 1 : vv;
+                p = &im->rgba[((size_t)vv * (size_t)im->w + (size_t)uu) * 4];
+            }
             if (!p[3]) continue;
             float rr = p[0], gg = p[1], bb = p[2];
             if (dim) { float l = (rr * 0.3f + gg * 0.59f + bb * 0.11f) * 0.55f; rr = gg = bb = l; }
@@ -279,8 +334,19 @@ void ui_mask(const UiCanvas *cv, const uint8_t *mask, int mw, int mh, float x0, 
 }
 
 void ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float size, int dim, int alpha) {
-    ImageRows q = {cv, im, x0, y0, size, dim, alpha};
-    int n = (int)size;
+    if (!im || !im->rgba || im->w < 1) return;
+    UiImage big;
+    int n = (int)size, soft = 0;
+    if (image_look == 1 && n > im->w) {
+        soft = 1;
+    } else if (image_look == 2 && n >= im->w * 2) {
+        /* Scale2x: by the whole number of times it is being enlarged, up to four; past that by a
+         * factor that divides it, so the enlarged copy's pixels come out as even blocks */
+        int r = (n + im->w / 2) / im->w;
+        int f = r <= 4 ? r : r % 4 == 0 ? 4 : r % 3 == 0 ? 3 : 4;
+        im = image_filtered(im, f, &big);
+    }
+    ImageRows q = {cv, im, x0, y0, size, dim, alpha, soft};
     if (n >= 96) par_rows(image_rows, &q, n);                          /* a large one: in pieces */
     else if (n > 0) image_rows(&q, 0, n);
 }

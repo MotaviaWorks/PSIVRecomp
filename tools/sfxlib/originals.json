@@ -1,0 +1,460 @@
+{
+ "about": "The game's own effects on the chip, measured (Hermes ~/psiv-lab/sfxr census.py): how long each sounds, its loudest quarter second and its peak, dB re 16-bit full scale in the port's mix. The new sounds are cut and levelled against these.",
+ "effects": {
+  "B5": {
+   "name": "Rod",
+   "secs": 0.12,
+   "loud_db": -17.7,
+   "peak_db": -11.3,
+   "going": false
+  },
+  "B6": {
+   "name": "Shot",
+   "secs": 0.17,
+   "loud_db": -18.1,
+   "peak_db": -12.8,
+   "going": false
+  },
+  "B7": {
+   "name": "Slasher",
+   "secs": 0.17,
+   "loud_db": -22.9,
+   "peak_db": -12.3,
+   "going": false
+  },
+  "B8": {
+   "name": "AttackMiss",
+   "secs": 0.07,
+   "loud_db": -28.3,
+   "peak_db": -12.4,
+   "going": false
+  },
+  "B9": {
+   "name": "EnemyKilled",
+   "secs": 0.87,
+   "loud_db": -18.7,
+   "peak_db": -14.9,
+   "going": false
+  },
+  "BA": {
+   "name": "EnemyAttack1",
+   "secs": 0.16,
+   "loud_db": -17.6,
+   "peak_db": -12.1,
+   "going": false
+  },
+  "BB": {
+   "name": "TechCast",
+   "secs": 0.77,
+   "loud_db": -18.6,
+   "peak_db": -12.8,
+   "going": false
+  },
+  "BC": {
+   "name": "BuffCast",
+   "secs": 0.47,
+   "loud_db": -16.2,
+   "peak_db": -9.5,
+   "going": false
+  },
+  "BD": {
+   "name": "HealTechCast",
+   "secs": 0.57,
+   "loud_db": -19.9,
+   "peak_db": -11.3,
+   "going": false
+  },
+  "BE": {
+   "name": "Foi",
+   "secs": 0.37,
+   "loud_db": -16.6,
+   "peak_db": -12.1,
+   "going": false
+  },
+  "BF": {
+   "name": "Legeon",
+   "secs": 0.39,
+   "loud_db": -11.4,
+   "peak_db": -8.4,
+   "going": false
+  },
+  "C0": {
+   "name": "Megid",
+   "secs": 1.27,
+   "loud_db": -12.4,
+   "peak_db": -5.7,
+   "going": false
+  },
+  "C1": {
+   "name": "Phonon",
+   "secs": 0.47,
+   "loud_db": -18.1,
+   "peak_db": -7.4,
+   "going": false
+  },
+  "C2": {
+   "name": "FireBreath",
+   "secs": 0.32,
+   "loud_db": -13.8,
+   "peak_db": -6.7,
+   "going": false
+  },
+  "C3": {
+   "name": "Efess",
+   "secs": 0.77,
+   "loud_db": -10.9,
+   "peak_db": -5.1,
+   "going": false
+  },
+  "C4": {
+   "name": "Moonshad",
+   "secs": 0.55,
+   "loud_db": -18.3,
+   "peak_db": -13.0,
+   "going": false
+  },
+  "C5": {
+   "name": "LaserAttack",
+   "secs": 0.56,
+   "loud_db": -17.1,
+   "peak_db": -6.6,
+   "going": false
+  },
+  "C6": {
+   "name": "Zan",
+   "secs": 0.42,
+   "loud_db": -19.1,
+   "peak_db": -14.9,
+   "going": false
+  },
+  "C7": {
+   "name": "Gra",
+   "secs": 0.14,
+   "loud_db": -16.0,
+   "peak_db": -8.4,
+   "going": false
+  },
+  "C8": {
+   "name": "Vol",
+   "secs": 0.89,
+   "loud_db": -15.3,
+   "peak_db": -12.1,
+   "going": false
+  },
+  "C9": {
+   "name": "Saner",
+   "secs": 0.71,
+   "loud_db": -19.5,
+   "peak_db": -16.3,
+   "going": false
+  },
+  "CA": {
+   "name": "Rimit",
+   "secs": 0.92,
+   "loud_db": -20.9,
+   "peak_db": -17.7,
+   "going": false
+  },
+  "CB": {
+   "name": "Brose",
+   "secs": 1.07,
+   "loud_db": -14.7,
+   "peak_db": -8.5,
+   "going": false
+  },
+  "CC": {
+   "name": "Res",
+   "secs": 0.87,
+   "loud_db": -20.2,
+   "peak_db": -12.7,
+   "going": false
+  },
+  "CD": {
+   "name": "Recovery",
+   "secs": 1.22,
+   "loud_db": -18.1,
+   "peak_db": -14.3,
+   "going": false
+  },
+  "CE": {
+   "name": "Tandle",
+   "secs": 0.82,
+   "loud_db": -17.5,
+   "peak_db": -10.0,
+   "going": false
+  },
+  "CF": {
+   "name": "AndroidSkillImplant",
+   "secs": 0.69,
+   "loud_db": -14.6,
+   "peak_db": -5.0,
+   "going": false
+  },
+  "D0": {
+   "name": "Rifle",
+   "secs": 0.76,
+   "loud_db": -11.9,
+   "peak_db": -8.4,
+   "going": false
+  },
+  "D1": {
+   "name": "SleepGas",
+   "secs": 0.49,
+   "loud_db": -17.3,
+   "peak_db": -9.8,
+   "going": false
+  },
+  "D2": {
+   "name": "Eliminat",
+   "secs": 0.19,
+   "loud_db": -17.5,
+   "peak_db": -9.1,
+   "going": false
+  },
+  "D3": {
+   "name": "Spark",
+   "secs": 0.07,
+   "loud_db": -22.8,
+   "peak_db": -9.9,
+   "going": false
+  },
+  "D4": {
+   "name": "WarCry",
+   "secs": 0.87,
+   "loud_db": -18.1,
+   "peak_db": -10.2,
+   "going": false
+  },
+  "D5": {
+   "name": "MoleAttack",
+   "secs": 0.34,
+   "loud_db": -19.7,
+   "peak_db": -13.3,
+   "going": false
+  },
+  "D6": {
+   "name": "MechEnemyAlarm",
+   "secs": 0.69,
+   "loud_db": -19.2,
+   "peak_db": -12.8,
+   "going": false
+  },
+  "D7": {
+   "name": "EnemyAttack3",
+   "secs": 0.24,
+   "loud_db": -18.7,
+   "peak_db": -8.6,
+   "going": false
+  },
+  "D8": {
+   "name": "EnemyAttack4",
+   "secs": 0.52,
+   "loud_db": -16.4,
+   "peak_db": -7.9,
+   "going": false
+  },
+  "D9": {
+   "name": "Fusion",
+   "secs": 1.39,
+   "loud_db": -18.2,
+   "peak_db": -14.9,
+   "going": false
+  },
+  "DA": {
+   "name": "EnemyAttack5",
+   "secs": 0.47,
+   "loud_db": -18.4,
+   "peak_db": -9.9,
+   "going": false
+  },
+  "DB": {
+   "name": "Alarm",
+   "secs": 0.32,
+   "loud_db": -24.4,
+   "peak_db": -16.5,
+   "going": false
+  },
+  "DC": {
+   "name": "Deban",
+   "secs": 0.52,
+   "loud_db": -15.6,
+   "peak_db": -9.2,
+   "going": false
+  },
+  "DD": {
+   "name": "GraveOpening",
+   "secs": 1.14,
+   "loud_db": -12.5,
+   "peak_db": -2.6,
+   "going": false
+  },
+  "DE": {
+   "name": "Teleport",
+   "secs": 1.14,
+   "loud_db": -17.2,
+   "peak_db": -13.5,
+   "going": false
+  },
+  "DF": {
+   "name": "Stairs",
+   "secs": 0.94,
+   "loud_db": -23.4,
+   "peak_db": -8.7,
+   "going": false
+  },
+  "E0": {
+   "name": "RidingElevator",
+   "secs": 0.81,
+   "loud_db": -10.4,
+   "peak_db": -8.4,
+   "going": false
+  },
+  "E1": {
+   "name": "ChestOpened",
+   "secs": 0.3,
+   "loud_db": -16.2,
+   "peak_db": -9.9,
+   "going": false
+  },
+  "E2": {
+   "name": "DoorOpened",
+   "secs": 1.3,
+   "loud_db": -14.7,
+   "peak_db": -8.4,
+   "going": false
+  },
+  "E3": {
+   "name": "SpaceshipPropelled",
+   "secs": 1.34,
+   "loud_db": -15.0,
+   "peak_db": -11.3,
+   "going": false
+  },
+  "E4": {
+   "name": "PowerDown",
+   "secs": 2.14,
+   "loud_db": -12.9,
+   "peak_db": -8.4,
+   "going": false
+  },
+  "E5": {
+   "name": "ElevatorOpen",
+   "secs": 0.19,
+   "loud_db": -16.7,
+   "peak_db": -8.4,
+   "going": false
+  },
+  "E6": {
+   "name": "BarrierBroken",
+   "secs": 1.05,
+   "loud_db": -16.5,
+   "peak_db": -5.0,
+   "going": false
+  },
+  "E7": {
+   "name": "ConveyorBelt",
+   "secs": 9.96,
+   "loud_db": -11.6,
+   "peak_db": -7.7,
+   "going": true
+  },
+  "E8": {
+   "name": "Claw",
+   "secs": 0.24,
+   "loud_db": -17.3,
+   "peak_db": -9.9,
+   "going": false
+  },
+  "E9": {
+   "name": "Unused1",
+   "secs": 0.51,
+   "loud_db": -20.9,
+   "peak_db": -11.5,
+   "going": false
+  },
+  "EA": {
+   "name": "BlackWave",
+   "secs": 1.13,
+   "loud_db": -16.4,
+   "peak_db": -8.2,
+   "going": false
+  },
+  "EB": {
+   "name": "EnemySpellCast",
+   "secs": 0.95,
+   "loud_db": -18.9,
+   "peak_db": -12.8,
+   "going": false
+  },
+  "EC": {
+   "name": "Lightning",
+   "secs": 2.08,
+   "loud_db": -9.5,
+   "peak_db": -5.2,
+   "going": false
+  },
+  "ED": {
+   "name": "AnotherGate",
+   "secs": 1.25,
+   "loud_db": -17.8,
+   "peak_db": -11.7,
+   "going": false
+  },
+  "EE": {
+   "name": "IceBroken",
+   "secs": 0.72,
+   "loud_db": -21.2,
+   "peak_db": -12.8,
+   "going": false
+  },
+  "EF": {
+   "name": "FallingIntoHole",
+   "secs": 0.71,
+   "loud_db": -19.7,
+   "peak_db": -13.2,
+   "going": false
+  },
+  "F0": {
+   "name": "Telepipe",
+   "secs": 1.02,
+   "loud_db": -17.0,
+   "peak_db": -6.7,
+   "going": false
+  },
+  "F1": {
+   "name": "Souvenir",
+   "secs": 0.77,
+   "loud_db": -16.9,
+   "peak_db": -9.0,
+   "going": false
+  },
+  "F2": {
+   "name": "MovingCursor",
+   "secs": 0.04,
+   "loud_db": -30.4,
+   "peak_db": -15.2,
+   "going": false
+  },
+  "F3": {
+   "name": "Selection",
+   "secs": 0.29,
+   "loud_db": -25.1,
+   "peak_db": -13.3,
+   "going": false
+  },
+  "F4": {
+   "name": "Surprise",
+   "secs": 1.32,
+   "loud_db": -19.2,
+   "peak_db": -7.6,
+   "going": false
+  },
+  "F5": {
+   "name": "Sword",
+   "secs": 0.19,
+   "loud_db": -17.1,
+   "peak_db": -12.1,
+   "going": false
+  }
+ }
+}

@@ -13,8 +13,10 @@
  */
 #include "sound.h"
 #include "algol.h"
+#include "algol2.h"
 #include "mixbus.h"
 #include "music.h"
+#include "sfx.h"
 #include "m68k.h"
 #include "ym2612.h"
 
@@ -77,17 +79,62 @@ static uint64_t sound_ticks;
  * music.c read them: on the original chips, the effects for Settings > Sound
  * (mixbus.h); the rest is the music */
 static unsigned fx_fm, fx_psg;
+
+/* Which effect a track plays: PlaySFX leaves the effect's voice table at the track's +$20, and each
+ * effect has its own (the effect's data in the ROM, its first word the way to its voices). The
+ * driver's table of tables is at $D1A60; its fourth entry is SFXPtrs, one pointer an effect from
+ * $B5. Not found (another ROM): no IDs, and every effect gets the plain polish. */
+#define SFX_FIRST 0xB5
+#define SFX_COUNT 0x43
+static uint32_t sfx_voices[SFX_COUNT];
+static int sfx_voices_read;
+static void sfx_voices_table(void) {
+    sfx_voices_read = 1;
+    if (!m68k_rom || m68k_rom_size < 0xD1A70) return;
+    const uint8_t *r = m68k_rom;
+    uint32_t tbl = (uint32_t)r[0xD1A6C] << 24 | (uint32_t)r[0xD1A6D] << 16 | (uint32_t)r[0xD1A6E] << 8 | r[0xD1A6F];
+    if (tbl + SFX_COUNT * 4 > m68k_rom_size) return;
+    for (int i = 0; i < SFX_COUNT; i++) {
+        const uint8_t *e = r + tbl + i * 4;
+        uint32_t base = (uint32_t)e[0] << 24 | (uint32_t)e[1] << 16 | (uint32_t)e[2] << 8 | e[3];
+        if (base + 2 > m68k_rom_size) { memset(sfx_voices, 0, sizeof sfx_voices); return; }
+        sfx_voices[i] = base + (uint32_t)(r[base] << 8 | r[base + 1]);
+    }
+}
+
+static uint8_t track_effect(unsigned a) {
+    uint32_t v = (uint32_t)m68k_ram[a + 0x21] << 16 | (uint32_t)m68k_ram[a + 0x22] << 8 | m68k_ram[a + 0x23];
+    for (int i = 0; i < SFX_COUNT; i++)
+        if (sfx_voices[i] && sfx_voices[i] == v) return (uint8_t)(SFX_FIRST + i);
+    return 0xFF;
+}
+
+/* the game's own effects on Algol (Settings > Sound > Sound effects > Algol; sfx.h, algol2.h) */
+static int effects_on_algol(void) { return sfx_algol(); }
+
 static void effect_channels(void) {
+    static int told;
     unsigned fm = 0, psg = 0;
+    uint8_t fm_id[6] = {0}, psg_id[4] = {0};
+    int on = effects_on_algol();
+    if (on && !sfx_voices_read) sfx_voices_table();
     for (int i = 0; i < 9; i++) {
         unsigned a = 0x5220u + (unsigned)i * 0x30u;
         uint8_t flags = m68k_ram[a], chn = m68k_ram[a + 1];
         if (!(flags & 0x80)) continue;
-        if (chn & 0x80) psg |= 1u << (chn >> 5 & 3);
-        else if ((chn & 3) < 3) fm |= 1u << ((chn & 3) + 3 * (chn >> 2 & 1));
+        if (chn & 0x80) {
+            psg |= 1u << (chn >> 5 & 3);
+            if (on) psg_id[chn >> 5 & 3] = track_effect(a);
+        } else if ((chn & 3) < 3) {
+            int c = (chn & 3) + 3 * (chn >> 2 & 1);
+            fm |= 1u << c;
+            if (on) fm_id[c] = track_effect(a);
+        }
     }
     fx_fm = fm;
     fx_psg = psg;
+    if (on || told) algol2_fx_tracks(fm_id, psg_id);     /* (once more when switched off: the channels are the song's again) */
+    told = on;
 }
 
 void psiv_sound_tick(void) {
@@ -209,13 +256,15 @@ static void advance(double n) {
             static unsigned solo = 0xFFF;                  /* PSIV_CHANNELS: see algol.c */
             if (!solo_read) { const char *e = getenv("PSIV_CHANNELS"); if (e && *e) solo = (unsigned)strtoul(e, NULL, 16); solo_read = 1; }
             int custom = music_active();                   /* your own file plays the music (music.h) */
+            int xfx = effects_on_algol();                  /* the effects' channels are Algol's, not the chips' */
             unsigned psg_mask = custom ? music_fx_psg() : algol_enabled() ? algol_psg_effects() : (solo >> 6 & 0xF);
+            if (xfx && (custom || algol_enabled())) psg_mask = 0;
             /* Settings > Sound: the music and the effects at their own levels
              * (mixbus.h). Your file and Algol are music apart from the chips;
              * on the original chips the channels the effects hold are split
              * from the song's. All at 1: the sum exactly as it always was */
             float gm = mixbus_music(), ge = mixbus_effects();
-            int split = !custom && !algol_enabled() && (gm != 1.0f || ge != 1.0f) && (solo & 0x43F) == 0x43F;
+            int split = !custom && !algol_enabled() && (gm != 1.0f || ge != 1.0f || xfx) && (solo & 0x43F) == 0x43F;
             int32_t pf = 0;
             for (psg_phase += PSG_PER_SAMPLE; psg_phase >= 1; psg_phase -= 1, ticks++) {
                 psg_clock();
@@ -236,22 +285,48 @@ static void advance(double n) {
                 float ml, mr;
                 ym_generate_mask(&l, &r, music_fx_fm());
                 music_render(&ml, &mr);
-                fl = (float)((l + p) * 9 / 4) * ge + ml * gm;
-                fr = (float)((r + p) * 9 / 4) * ge + mr * gm;
+                if (xfx) {                                  /* ... or Algol does (the chip still runs: its timers) */
+                    float el, er;
+                    algol2_render_split(NULL, NULL, &el, &er, music_fx_fm(), music_fx_psg(), 0, 1);
+                    fl = el * ge + ml * gm;
+                    fr = er * ge + mr * gm;
+                } else {
+                    fl = (float)((l + p) * 9 / 4) * ge + ml * gm;
+                    fr = (float)((r + p) * 9 / 4) * ge + mr * gm;
+                }
             } else if (algol_enabled()) {
                 /* the music on Algol; the original chips only for the
                  * channels a sound effect holds */
                 float ml, mr;
                 ym_generate_mask(&l, &r, algol_fm_effects());
-                algol_render(&ml, &mr);
-                fl = (float)((l + p) * 9 / 4) * ge + ml * gm;
-                fr = (float)((r + p) * 9 / 4) * ge + mr * gm;
+                if (xfx) {                                  /* ... or Algol plays those too, in a mix of their own */
+                    float el, er;
+                    if (algol_version() == 2) {
+                        algol2_render_split(&ml, &mr, &el, &er, algol_fm_effects(), algol_psg_effects(), 1, 1);
+                    } else {
+                        algol_render(&ml, &mr);
+                        algol2_render_split(NULL, NULL, &el, &er, algol_fm_effects(), algol_psg_effects(), 0, 1);
+                    }
+                    fl = el * ge + ml * gm;
+                    fr = er * ge + mr * gm;
+                } else {
+                    algol_render(&ml, &mr);
+                    fl = (float)((l + p) * 9 / 4) * ge + ml * gm;
+                    fr = (float)((r + p) * 9 / 4) * ge + mr * gm;
+                }
             } else if (split) {
                 /* the song's channels and the effects', each at its level */
                 int32_t lf, rf;
                 ym_generate_split(&l, &r, &lf, &rf, fx_fm);
-                fl = (float)((l + p) * 9 / 4) * gm + (float)((lf + pf) * 9 / 4) * ge;
-                fr = (float)((r + p) * 9 / 4) * gm + (float)((rf + pf) * 9 / 4) * ge;
+                if (xfx) {                                  /* the song on the chips; the effects' channels on Algol */
+                    float el, er;
+                    algol2_render_split(NULL, NULL, &el, &er, fx_fm, fx_psg, 0, 1);
+                    fl = (float)((l + p) * 9 / 4) * gm + el * ge;
+                    fr = (float)((r + p) * 9 / 4) * gm + er * ge;
+                } else {
+                    fl = (float)((l + p) * 9 / 4) * gm + (float)((lf + pf) * 9 / 4) * ge;
+                    fr = (float)((r + p) * 9 / 4) * gm + (float)((rf + pf) * 9 / 4) * ge;
+                }
             } else {
                 if ((solo & 0x43F) != 0x43F)
                     ym_generate_mask(&l, &r, (solo & 0x1F) | ((solo >> 5 | solo >> 10) & 1) << 5);   /* tuning: some channels */
@@ -337,6 +412,8 @@ void sound_68k_write(uint32_t a, uint8_t v) {
         /* a drum: the sample number (its pitch, volume and pan are already in place) */
         if ((a & 0x1FFF) == 0x1F00 && v && v < 0x80 && algol_enabled())
             algol_dac_hit(v, z80_ram[0x1F02], (z80_ram[0x1F01] & 0x80) ? z80_ram[0x1F03] : 16, z80_ram[0x1F04]);
+        else if ((a & 0x1FFF) == 0x1F00 && !v && algol_enabled())
+            algol_dac_stop();                          /* a rest in the drum track: the sample stops */
         return;
     }
     if (a < 0x6000) { ym_logged_write(a & 3, v, 0); return; }

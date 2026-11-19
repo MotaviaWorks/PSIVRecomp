@@ -44,6 +44,15 @@
 #include <stdint.h>
 
 void fieldmenu_set_enabled(int on);
+/* the Items screen: one row a kind of item, with how many (display only: the
+ * game's pack keeps one item a slot; a row picks the first of its kind) */
+void fieldmenu_set_group_items(int on);
+/* the frame loop, for each cursor tick the game asks for ($F2): 1 = drop it --
+ * the port is walking the cursor (a click, a grouped step) and has let its one
+ * tick through already */
+int  fieldmenu_quiet_cursor(void);
+/* ... and each choice sound ($F3): 1 = drop it (a vehicle shortcut's walk: one heard) */
+int  fieldmenu_quiet_choice(void);
 int  fieldmenu_enabled(void);
 
 /* once per frame, before its lines are drawn (frame.c): decides whether the

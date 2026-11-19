@@ -8,10 +8,11 @@ effects, a battle camera, living water and swaying trees, the party's voices
 in battle (made with VoiceDesign, placeholders for now), the port's own sound
 effects, a Journal, cheats, click/tap to walk.
 
-The sound effects most heard in battle -- blades, claws, guns, the
-techniques, the combination attacks, enemies' blows -- are the port's own,
-synthesized as it starts. To hear the game's originals: Settings > Sound >
-Sound effects: Original.
+New, and wanting ears: Settings > Sound > Sound effects: Algol plays the
+game's own effects on the chip remastered -- clean, in stereo, with room
+around them. Tell us which ones sound better, and which ones worse. (Modern
+sounds, the row under it, will put new sounds in place of the game's as a
+library of them is built; the synthesized ones of earlier versions are gone.)
 
 **It ships none of the game.** You supply your own ROM.
 
@@ -84,7 +85,18 @@ additions) and **Classic** (the original game, unchanged), **Settings** and
 Display, Sound, Battles, Controls, Cheats, and Buttons (what each button and key does, with your
 gamepad's own names for them). Turn pages with the shoulder buttons,
 Tab, or a tap on a page's name; the line at the bottom says what the
-highlighted setting does. **Mode: Classic** (on the Game page) switches every
+highlighted setting does. On the Display and Battles pages, Smoothing, Water, Trees, Depth, Fog,
+Camera, Weather and Effects show a short preview: the setting off, beside it as you have it. The
+game makes these once from your ROM, in the background, about half a minute after its first
+start (they go in `previews/`, about 25 MB). Not on Android yet. **World map** (Game page; off
+unless you turn it on) puts a small map in the corner while you walk Motavia, Dezolis or Rykros;
+M, R3 or a tap on it opens the whole map (the game and its music run on under it), where you can
+drag, zoom, read the places' names, and click a spot to have the party walk there. *Explored* shows only where you have been.
+**Smoothing** (Display page) has three choices: Off, Soft (it now looks the same with a text box
+or a menu up as without, and in battles) and Scale2x, which rounds off the pixels' stair-steps
+without blurring, in battles too; **V-Sync** (Display page; off unless you turn it on) makes each picture wait for the
+display, for a screen that shows tearing.
+**Mode: Classic** (on the Game page) switches every
 addition off and gives you the original game. The Sound page has a slider
 each for the volume of everything, the music, the effects and the voices;
 Battle voices and Scene voices are switches of their own there, and Music
@@ -139,7 +151,7 @@ Not in this beta
 - Intel Macs.
 - Save states: the game's own saves only. (Rewind goes back up to two minutes, ten
   seconds a press: Backspace, the left shoulder, or "Go back 10 seconds" in the menu.)
-- The Algol music chip is an experiment (Settings > Sound > Music).
+- Algol, the chip remastered, and Proto Algol, the first Algol, are new (Settings > Sound > Music).
 - Voiced story scenes and remixed music: optional packs, separate downloads. To
   install the voice pack, choose Settings > Sound > Voice pack and pick its
   `.zip`, or put the `.zip` in the game's folder before starting.

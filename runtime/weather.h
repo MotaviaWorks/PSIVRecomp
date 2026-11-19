@@ -54,6 +54,10 @@ int  weather_active(void);
 int  weather_tint(int *mr, int *mg, int *mb, int *ar, int *ag, int *ab);
 void weather_draw(const WeatherFrame *f);
 void weather_battle_end(void);           /* out of the battle: the weather clears */
+/* the frame loop, every frame: out of a battle the weather ends, whatever is
+ * drawing the screen (the field with its side panels, a first-person dungeon
+ * and a paused picture never reach depth.c: the rain went on after the battle) */
+void weather_frame(void);
 
 /* the frame loop: rain and thunder into a frame of audio (interleaved stereo
  * float at 16-bit scale, SOUND_RATE), and whether any is playing */

@@ -96,6 +96,8 @@ def mac_app(build, app, ver):
     for f in ('NotoSans-Regular.ttf', 'OFL.txt'):
         shutil.copyfile(os.path.join(ROOT, 'res', 'fonts', f), os.path.join(resources, 'fonts', f))
     shutil.copytree(os.path.join(ROOT, 'res', 'voices'), os.path.join(resources, 'voices'))   # before signing
+    if os.path.isdir(os.path.join(ROOT, 'res', 'sounds')):   # the modern sounds' library (runtime/sfx.h)
+        shutil.copytree(os.path.join(ROOT, 'res', 'sounds'), os.path.join(resources, 'sounds'))
     short = re.match(r'[0-9.]+', ver).group(0)          # 0.1.1-alpha+abc -> 0.1.1
     with open(os.path.join(app, 'Contents', 'Info.plist'), 'w', encoding='utf-8', newline='\n') as f:
         f.write(INFO_PLIST.format(short=short, full=escape(ver)))
@@ -139,6 +141,8 @@ def stage(kind, build, folder, sdl_license, ver=''):
     # the party's battle voices (the port's own: runtime/battlevox.h)
     if kind != 'macos':                                  # (the app has them inside: mac_app)
         shutil.copytree(os.path.join(ROOT, 'res', 'voices'), os.path.join(folder, 'voices'))
+        if os.path.isdir(os.path.join(ROOT, 'res', 'sounds')):   # the modern sounds' library (runtime/sfx.h)
+            shutil.copytree(os.path.join(ROOT, 'res', 'sounds'), os.path.join(folder, 'sounds'))
     licenses(os.path.join(folder, 'LICENSES'), sdl_license)
     # the port's own licence (GPL-3.0): it travels with every copy
     text = open(os.path.join(ROOT, 'LICENSE'), encoding='utf-8').read()

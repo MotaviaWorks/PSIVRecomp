@@ -24,6 +24,9 @@ psiv.log
 psiv-crash.txt
 saves/
 screenshots/
+# made from your ROM (game art, never committed): the Boss Arena's pictures, the settings' previews
+/arena/
+/previews/
 
 # Sound effect samples (your own; licensed, never committed)
 sfx/**/*.wav

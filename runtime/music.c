@@ -11,6 +11,7 @@
 #include "m68k.h"
 #include "sound.h"
 #include "par.h"
+#include "wave.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -19,6 +20,8 @@
 #include <string.h>
 
 #define LEVEL 0.85f                   /* a mastered file, about the game's music level (a gain in music.ini adjusts) */
+#define WAVE_ID 0x100                 /* music.ini's "wave" lines: the file a Wave Mode run plays (no song's ID) */
+#define CUE_LEAD 8.0                  /* s: a battle starting this close before its part lets the file reach it */
 
 typedef struct {
     char path[600];
@@ -26,6 +29,7 @@ typedef struct {
     int frames, rate;
     int loop_start, loop_end;         /* frames; loop_end 0 = no loop */
     int start;                        /* where it begins: its first sound (or music.ini's) */
+    int cue[WAVE_NODES];              /* Wave Mode: where each battle's part begins (frames; -1 none) */
     float gain;
     unsigned used;
 } Track;
@@ -52,6 +56,12 @@ static float fade = 1.0f, ramp, ramp_to;
 static int paused;
 static unsigned fx_fm, fx_psg;
 static int log_on = -1;
+/* Wave Mode's own file: from a run's start to its end, in place of every song the game
+ * starts on the way (the battles', the maps'), through the console starting over between maps */
+static int wave_on;                   /* the run's file plays */
+static unsigned wave_for, wave_none;  /* the run (wave_serial) it plays for; the run found to have no file */
+static int wave_cued = -1;            /* the battle whose part has been looked for */
+static double seek = -1.0;            /* a jump under way: the level down, there, up again */
 
 static const char *const SONGS[0x34] = {
     "Tonoe de Pon", "Inn", "Motavia Village", "Motavia Town", "Organic Beat", "Dezolis Town 1", "Now on Sale",
@@ -157,7 +167,8 @@ static int wav_load(const char *path, Track *t) {
 }
 
 /* ------------------------------------------------------------------ which file */
-static int ini_lookup(int id, char *file, size_t n, double *loop_a, double *loop_b, float *gain_db, double *start) {
+static int ini_lookup(int id, char *file, size_t n, double *loop_a, double *loop_b, float *gain_db, double *start,
+                      double *cue) {
     char path[700];
     snprintf(path, sizeof path, "%s/music.ini", folder);
     FILE *f = fopen(path, "r");
@@ -170,7 +181,9 @@ static int ini_lookup(int id, char *file, size_t n, double *loop_a, double *loop
         if (*p == '#' || *p == ';') continue;
         unsigned h;
         int used;
-        if (sscanf(p, "%x%n", &h, &used) != 1 || (int)h != id) continue;
+        if (!strncmp(p, "wave", 4) && (p[4] == ' ' || p[4] == '\t' || p[4] == '=')) { h = WAVE_ID; used = 4; }
+        else if (sscanf(p, "%x%n", &h, &used) != 1) continue;
+        if ((int)h != id) continue;
         p += used;
         while (*p == ' ' || *p == '\t') p++;
         if (*p == '=') {                                        /* 8F = some file.wav */
@@ -189,6 +202,10 @@ static int ini_lookup(int id, char *file, size_t n, double *loop_a, double *loop
         } else if (!strncmp(p, "gain", 4)) {
             float g;
             if (sscanf(p + 4, "%f", &g) == 1) *gain_db = g;
+        } else if (!strncmp(p, "cue", 3)) {                     /* wave cue 2 32.0: battle 2's part */
+            int k;
+            double a;
+            if (sscanf(p + 3, "%d %lf", &k, &a) == 2 && k >= 1 && k <= WAVE_NODES) cue[k - 1] = a;
         }
     }
     fclose(f);
@@ -224,9 +241,13 @@ static void load_finish(void) {
 static Track *track_for(int id, int *wait) {
     *wait = 0;
     char file[600] = {0}, path[1300];
-    double la = -1.0, lb = -1.0, st = -1.0;
+    double la = -1.0, lb = -1.0, st = -1.0, cue[WAVE_NODES];
     float gdb = 0.0f;
-    if (!ini_lookup(id, file, sizeof file, &la, &lb, &gdb, &st)) snprintf(file, sizeof file, "%02X.wav", id);
+    for (int k = 0; k < WAVE_NODES; k++) cue[k] = -1.0;
+    if (!ini_lookup(id, file, sizeof file, &la, &lb, &gdb, &st, cue)) {
+        if (id == WAVE_ID) snprintf(file, sizeof file, "wave.wav");
+        else snprintf(file, sizeof file, "%02X.wav", id);
+    }
     if (file[0] == '/' || file[0] == '\\' || (file[0] && file[1] == ':')) snprintf(path, sizeof path, "%s", file);
     else snprintf(path, sizeof path, "%s/%s", folder, file);
     Track *t = NULL;
@@ -263,6 +284,10 @@ static Track *track_for(int id, int *wait) {
     if (st >= 0.0) t->start = (int)lround(st * t->rate);
     else while (t->start < t->frames && abs(t->pcm[(size_t)t->start * 2]) < 33 && abs(t->pcm[(size_t)t->start * 2 + 1]) < 33) t->start++;
     if (t->start >= t->frames) t->start = 0;
+    for (int k = 0; k < WAVE_NODES; k++) {
+        int c = cue[k] >= 0.0 ? (int)lround(cue[k] * t->rate) : -1;
+        t->cue[k] = c < t->frames ? c : -1;
+    }
     t->used = ++use_count;
     return t;
 }
@@ -287,20 +312,71 @@ void music_set_folder(const char *dir) {
     int on = dir && *dir;
     if (on && strcmp(dir, folder)) {                         /* another folder: its files */
         cur = NULL;
+        wave_on = 0;
+        wave_none = 0;
         for (int i = 0; i < CACHE; i++) { free(cache[i].pcm); memset(&cache[i], 0, sizeof cache[i]); }
     }
     snprintf(folder, sizeof folder, "%s", on ? dir : "");
     if (on && !enabled) fresh = 1;                           /* a song already going keeps the game's */
     enabled = on;
-    if (!on) { cur = NULL; pending = 0; }
+    if (!on) { cur = NULL; pending = 0; wave_on = 0; wave_none = 0; }
 }
 
 void music_reset(void) {
-    cur = NULL;
+    if (!wave_on) cur = NULL;                                /* (a run's file plays on: the console starts over between maps) */
     pending = 0;
     song = music_on = 0;
     fresh = 1;
     fx_fm = fx_psg = 0;
+}
+
+void music_wave_stop(void) {
+    if (!wave_on) return;
+    wave_on = 0;
+    seek = -1.0;
+    if (cur) ramp_to = 0.0f;
+    if (log_on > 0) printf("music: wave: the run is over at %.3f s\n", cur ? pos / cur->rate : -1.0);
+}
+
+/* A Wave Mode run under way: its file from the start (asked for once a run: none, and the
+ * game's songs play as ever); at each battle's start, to that battle's part if music.ini
+ * names one -- unless the file is in it already, or about to reach it. */
+static void wave_tick(void) {
+    int ws = wave_state();
+    if (ws != WAVE_LOADING && ws != WAVE_WALKING && ws != WAVE_FIGHTING && ws != WAVE_RELOAD) {
+        music_wave_stop();
+        return;
+    }
+    unsigned run = wave_serial();
+    if (run == wave_none) return;
+    if (!wave_on || wave_for != run) {
+        int wait;
+        Track *t = track_for(WAVE_ID, &wait);
+        if (!t) {
+            if (!wait) { wave_none = run; wave_on = 0; }
+            return;
+        }
+        wave_on = 1;
+        wave_for = run;
+        wave_cued = -1;
+        seek = -1.0;
+        cur = t;
+        pos = (double)t->start;
+        ramp = 0.0f;
+        ramp_to = 1.0f;
+        if (log_on > 0) printf("music: wave: run %u -> %s\n", run, t->path);
+    }
+    if (ws == WAVE_FIGHTING && wave_cued != wave_node() && cur) {
+        wave_cued = wave_node();
+        int c = wave_cued < WAVE_NODES ? cur->cue[wave_cued] : -1;
+        int next = cur->loop_end > 0 ? cur->loop_end : cur->frames;
+        for (int k = 0; k < WAVE_NODES; k++) if (cur->cue[k] > c && cur->cue[k] < next) next = cur->cue[k];
+        int jump = c >= 0 && (pos < (double)c - CUE_LEAD * cur->rate || pos >= (double)next);
+        if (jump) seek = (double)c;
+        if (log_on > 0)
+            printf("music: wave: battle %d at %.3f s%s\n", wave_cued + 1, pos / cur->rate,
+                   jump ? " -> its part" : c >= 0 ? " (in its part, or about to be)" : "");
+    }
 }
 
 void music_tick(void) {
@@ -313,7 +389,12 @@ void music_tick(void) {
     int playing = 0;
     for (int i = 0; i < 10; i++) if (m68k_ram[0x5040u + (unsigned)i * 0x30u] & 0x80) playing = 1;
     if (loading.busy && par_async_done(&loading.done)) load_finish();   /* a file has been read */
-    if (fresh) {
+    wave_tick();
+    if (wave_on) {                                           /* the run's file: the game's songs pass by unheard */
+        fresh = 0;
+        song = now_song;
+        pending = 0;
+    } else if (fresh) {
         fresh = 0;
         song = now_song;
         pending = 0;
@@ -343,12 +424,12 @@ void music_tick(void) {
         }
     }
     if (!playing) pending = 0;
-    if (cur && !playing) ramp_to = 0.0f;                     /* the game stopped its music */
+    if (cur && !playing && !wave_on) ramp_to = 0.0f;         /* the game stopped its music */
     music_on = playing;
     /* the game's fade-out: 15 steps, about 1.5 dB each */
     int fo = m68k_ram[0x5004];
-    fade = fo && fo <= 15 ? powf(10.0f, -1.5f * (float)(15 - fo) / 20.0f) : 1.0f;
-    paused = m68k_ram[0x5007] != 0;
+    fade = !wave_on && fo && fo <= 15 ? powf(10.0f, -1.5f * (float)(15 - fo) / 20.0f) : 1.0f;   /* (a run's file plays */
+    paused = !wave_on && m68k_ram[0x5007] != 0;                                                 /* through both) */
     /* the channels the sound-effect tracks hold */
     unsigned fm = 0, psg = 0;
     for (int i = 0; i < 9; i++) {
@@ -401,6 +482,10 @@ void music_render(float *left, float *right) {
             l += (l2 - l) * w;
             r += (r2 - r) * w;
         }
+    }
+    if (seek >= 0.0) {                                       /* a jump (Wave Mode, to a battle's part): down, there, up */
+        ramp_to = 0.0f;
+        if (ramp < 0.02f) { pos = seek; seek = -1.0; ramp_to = 1.0f; }
     }
     ramp += (ramp_to - ramp) * (ramp_to > ramp ? 0.004f : 0.0012f);   /* a click-free start, a short fade at a stop */
     if (ramp_to == 0.0f && ramp < 0.0005f) { cur = NULL; return; }
