@@ -24,6 +24,20 @@
 
 void        depth_set_level(int level);
 int         depth_get_level(void);
+/* A battle's opening: it starts on a close-up of the enemies, in a flash, then the view draws back and the party
+ * comes up into it (about a second). depth_intro: 1 while the close-up holds, down to 0 as the view draws back,
+ * 0 with no opening going (what is drawn over the battle fades in by it, and the pad waits for it). */
+void        depth_set_intro(int on);
+float       depth_intro(void);
+/* ... and 1 while an opening holds on an enemy's cast (Zio at Nurvus, his Magic Barrier): the cast's name, in the
+ * window at the top, stays up through the close-up */
+int         depth_intro_cast(void);
+/* Backdrops the port draws itself in place of the game's battle background, where it has one: Zio's stage (both
+ * of his fights) as a sea of blue fog under a black sky, welling up at his feet and flowing out from them. */
+void        depth_set_backdrops(int on);
+/* The strike (an experiment): when one of the party goes up to an enemy to strike it, the view cuts in close on
+ * them for as long as they are there, and back. */
+void        depth_set_strike(int on);
 const char *depth_level_name(int level);
 
 /* Battle fog: drifting mist between the enemies and the party, tinted from

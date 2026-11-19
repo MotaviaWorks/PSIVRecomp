@@ -414,6 +414,7 @@ static Setting settings[] = {
     {"enhance.battle_depth", "1", "battles drawn as layers at different depths under a gently moving camera: 0 off, 1 subtle, 2 strong (F9 cycles)"},
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
     {"enhance.autosave", "on", "auto save: the game saved for you as you go -- each time the party comes to another place, and every few minutes on the way -- in a save of its own (saves/psiv-auto.srm) that the launcher's Continue and Load game take; your own saves are never touched: on / off"},
+    {"enhance.menu_pause", "off", "the Esc menu holds the game: off = in the story the game goes on under the menu, its music with it (nothing you press reaches it, and a voiced scene waits on its page); on = the game and its sound stop while the menu is up. The Boss Arena and Wave Mode always stop: their fights are timed"},
     {"enhance.rewind", "on", "rewind: Backspace or the left shoulder fades to white and back to about ten seconds before (a state kept every ten seconds, the last two minutes): on / off"},
     {"enhance.trees", "on", "trees on the field sway in the breeze, light flickering through their leaves: on / off"},
     {"enhance.water", "on", "the field's living water: ripples, light, glints and foam drawn over the sea, rivers and pools: on / off"},
@@ -426,6 +427,9 @@ static Setting settings[] = {
     {"enhance.voices", "on", "the party's voices in battle: shouts as they attack, grunts when hit, a breath as they cast: on / off"},
     {"enhance.scene_voices", "on", "the voiced story scenes, from the optional voice pack once it is installed: on / off"},
     {"enhance.battle_camera", "on", "when an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping (needs battle depth): on / off"},
+    {"enhance.battle_backdrops", "on", "backdrops the port draws itself in place of the game's battle background, where it has one (Zio's stage: a sea of blue fog flowing from his feet, to every edge of the view; with battle depth, fog, effects or widescreen on): on / off"},
+    {"enhance.battle_strike", "on", "an experiment: when one of the party goes up to an enemy to strike it, the view cuts in close on them for as long as they are there, and back (with the modern battle menus, and battle depth, fog, effects or widescreen on): on / off"},
+    {"enhance.battle_intro", "on", "a battle opens on a close-up of the enemies, in a flash, then the view draws back to the party (about a second; with battle depth, fog, effects or widescreen on): on / off"},
     {"enhance.battle_weather", "1", "battle weather by place: rain and storms on Motavia's grass, beaches and sea, snow on Dezolis, mist clouds on Rykros, debris in space: 0 off, 1 light, 2 heavy"},
     {"enhance.battle_weather_sound", "on", "the rain and thunder heard with the battle weather: on / off"},
     {"enhance.text", "modern", "text: modern = redrawn with the font below at full resolution; original = the game's pixel font"},
@@ -1227,6 +1231,7 @@ static void quit(int code);
 
 /* the system menu (below) draws over the frame while it's open */
 static int menu_is_open(void);
+static int menu_pauses;                    /* Settings > Game > This menu: the Esc menu holds the game (see menu_live) */
 static void menu_draw(void);
 static int map_open;                   /* the whole world map is up, over the game (which runs on) */
 static void map_draw_mini(void);
@@ -1636,7 +1641,8 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
                 game_picture(pixels, w, h, stride, ds, look);
                 depth_shown = 1;
             }
-            if (hdtext_enabled() && hdtext_has_text(frame_lines, w, h)) {    /* modern text */
+            /* modern text (not over a battle's opening: the game's windows are out of the close-up) */
+            if (hdtext_enabled() && depth_intro() <= 0.4f && hdtext_has_text(frame_lines, w, h)) {
                 if (!depth_shown) game_picture(pixels, w, h, stride, ds, look);
                 hdtext_draw(frame_lines, w, h, depth_pixels, stride, ds);
                 depth_shown = 1;
@@ -1812,6 +1818,10 @@ static void apply_enhancements(void) {
     fieldmenu_set_group_items(SDL_strcasecmp(setting("enhance.group_items"), "off") != 0);
     battleui_set_group_items(SDL_strcasecmp(setting("enhance.group_items"), "off") != 0);
     battleui_set_pan(SDL_strcasecmp(setting("enhance.battle_camera"), "off") != 0);
+    depth_set_intro(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_intro"), "off") != 0);
+    menu_pauses = !SDL_strcasecmp(setting("enhance.menu_pause"), "on");
+    depth_set_strike(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_strike"), "off") != 0);
+    depth_set_backdrops(!classic_mode() && SDL_strcasecmp(setting("enhance.battle_backdrops"), "off") != 0);
     battlevox_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.voices"), "off") != 0);
     scenevox_set_auto(!SDL_strcasecmp(setting("enhance.auto_text"), "on"));
     journal_notes = !classic_mode() && SDL_strcasecmp(setting("enhance.journal_notes"), "off") != 0;
@@ -1913,6 +1923,9 @@ static const MenuItem GAME_ITEMS[] = {
     {"Rewind", "enhance.rewind", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 0,
      "Backspace or the left shoulder goes back about ten seconds: a fade to white and back.",
      apply_enhancements},
+    {"This menu", "enhance.menu_pause", {"off", "on"}, {"Music plays on", "Pauses the game"}, 0, 0, 0, 0,
+     "With this menu up the game goes on under it, its music with it; nothing you press reaches it. Or the game "
+     "and its sound stop. The Boss Arena and Wave Mode always stop: their fights are timed.", apply_enhancements},
     {"Journal notes", "enhance.journal_notes", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "A note in the corner when the story moves on. The Journal, in this menu, says what to do next.",
      apply_enhancements},
@@ -1994,6 +2007,15 @@ static const MenuItem BATTLE_ITEMS[] = {
      "Drifting mist between the enemies and the party. F8 switches it too.", apply_enhancements},
     {"Camera", "enhance.battle_camera", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "When an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping.",
+     apply_enhancements},
+    {"Opening", "enhance.battle_intro", {"on", "off"}, {"Close-up", "Plain"}, 0, 0, 0, 1,
+     "A battle opens on a close-up of the enemies, in a flash, then the view draws back to the party.",
+     apply_enhancements},
+    {"Strike zoom", "enhance.battle_strike", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
+     "An experiment: when one of the party goes up to an enemy to strike it, the view cuts in close on them, and back.",
+     apply_enhancements},
+    {"Backdrops", "enhance.battle_backdrops", {"on", "off"}, {"New", "Original"}, 0, 0, 0, 1,
+     "Zio's stage as a sea of blue fog flowing from his feet, to every edge of the view. The game's own elsewhere.",
      apply_enhancements},
     {"Weather", "enhance.battle_weather", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1,
      "Rain and storms on Motavia, snow on Dezolis, mist clouds on Rykros, debris in space. Heavy: more of it.",
@@ -3034,6 +3056,14 @@ static void menu_close(void) {
     input_hold = 1;
 }
 static int menu_is_open(void) { return menu_screen != MENU_CLOSED; }
+/* The Esc menu over a running game (PsiLok, 2026-11-19: "could we have the game music continue in the ESC menu.
+ * The game itself dosent have to be paused since there's no penalty for being AFK"): in the story the game goes on
+ * under the menu -- its music, a battle's turn playing out, a walk on its way -- with nothing of the player's
+ * reaching it, and a voiced scene's auto-advance waiting. Not in the Boss Arena or Wave Mode (timed), not with F10,
+ * not in the launcher; Settings > Game > This menu has the old way. */
+static int menu_live(void) {
+    return menu_is_open() && !menu_pauses && !paused && !in_launcher && !arena_mode && !wave_mode && !arena_scanning;
+}
 
 static const MenuPage *page_now(void) { return &PAGES[menu_page]; }
 /* A page with more settings than the panel shows scrolls: by the wheel (or its arrows, tapped),
@@ -4555,8 +4585,48 @@ static void draw_load(float W, float H, const char *hint) {
 
 /* a boss's picture (arenapic.h) at its frame now, nearest-pixel, into units x0..x0+w, y0..y0+h */
 static uint64_t arena_anim_t(void) { return SDL_GetTicks() * 60 / 1000; }
+/* The part of a boss's picture that is shown (PsiLok, 2026-11-19: "lets make them cropped/zoomed in to eliminate
+ * backdrop imperfections like Zio at Nervus and Profound Darkness"). Some stages do not fill the battle's picture:
+ * Zio's has black above its cloud and a black notch under it (the party's windows cover that in the fight),
+ * Profound Darkness's a black band along the foot. Rows that are black across their middle three quarters are left
+ * off, top and bottom, then black columns at the sides; what is shown is the largest piece of the rest in the
+ * picture's own shape, about its middle (so it comes out enlarged). A stage that fills its picture is shown whole. */
+static void arena_pic_crop(const ArenaPic *pic, int *cx, int *cy, int *cw, int *ch) {
+    static const uint8_t *seen[ARENA_MAX];
+    static int box[ARENA_MAX][4];
+    int i = (int)(pic - arena_pics), w = pic->w, h = pic->h;
+    *cx = *cy = 0; *cw = w; *ch = h;
+    if (i < 0 || i >= ARENA_MAX || !pic->px || !pic->nruns) return;
+    if (seen[i] != pic->px) {
+        int k = pic->run_frame[0];
+        const uint8_t *src = pic->px + (size_t)k * (size_t)w * (size_t)h;
+        const uint16_t *pal = pic->pal + k * 64;
+        int y0 = 0, y1 = h, x0 = 0, x1 = w, m0 = w / 8, m1 = w - w / 8;
+#define ROW_BLACK(y, n) do { n = 0; for (int x = m0; x < m1; x++) n += !(pal[src[(y) * w + x] & 63] & 0x0EEE); } while (0)
+        for (int n; y0 < h; y0++) { ROW_BLACK(y0, n); if (n * 100 < (m1 - m0) * 98) break; }
+        for (int n; y1 > y0; y1--) { ROW_BLACK(y1 - 1, n); if (n * 100 < (m1 - m0) * 98) break; }
+#undef ROW_BLACK
+        for (int side = 0; side < 2; side++)
+            while (x1 > x0) {
+                int x = side ? x1 - 1 : x0, n = 0;
+                for (int y = y0; y < y1; y++) n += !(pal[src[y * w + x] & 63] & 0x0EEE);
+                if (n * 100 < (y1 - y0) * 98) break;
+                if (side) x1--; else x0++;
+            }
+        int bw = x1 - x0, bh = y1 - y0;
+        if (bh < h / 3 || bw < w / 3) { x0 = y0 = 0; bw = w; bh = h; }     /* (next to nothing left: whole) */
+        int pw = bh * w / h, ph = bh;                             /* the picture's shape inside it */
+        if (pw > bw) { pw = bw; ph = bw * h / w; }
+        box[i][0] = x0 + (bw - pw) / 2; box[i][1] = y0 + (bh - ph) / 2; box[i][2] = pw; box[i][3] = ph;
+        seen[i] = pic->px;
+    }
+    *cx = box[i][0]; *cy = box[i][1]; *cw = box[i][2]; *ch = box[i][3];
+}
+
 static void draw_arena_pic(const ArenaPic *pic, float x0, float y0, float w, float h) {
     int k = arenapic_frame_at(pic, arena_anim_t());
+    int cx, cy, cw, ch;
+    arena_pic_crop(pic, &cx, &cy, &cw, &ch);
     const uint8_t *src = pic->px + (size_t)k * (size_t)pic->w * (size_t)pic->h;
     const uint16_t *pal = pic->pal + k * 64;
     uint32_t rgb[64];
@@ -4568,12 +4638,12 @@ static void draw_arena_pic(const ArenaPic *pic, float x0, float y0, float w, flo
     int X0 = (int)(x0 * m_S), Y0 = (int)(y0 * m_S), X1 = (int)((x0 + w) * m_S), Y1 = (int)((y0 + h) * m_S);
     for (int Y = Y0; Y < Y1; Y++) {
         if (Y < m_cv.y0 || Y >= m_cv.y1) continue;
-        int v = (int)((float)(Y - Y0) * (float)pic->h / (float)(Y1 - Y0));
-        if (v >= pic->h) v = pic->h - 1;
+        int v = cy + (int)((float)(Y - Y0) * (float)ch / (float)(Y1 - Y0));
+        if (v >= cy + ch) v = cy + ch - 1;
         for (int X = X0; X < X1; X++) {
             if (X < m_cv.x0 || X >= m_cv.x1) continue;
-            int u = (int)((float)(X - X0) * (float)pic->w / (float)(X1 - X0));
-            if (u >= pic->w) u = pic->w - 1;
+            int u = cx + (int)((float)(X - X0) * (float)cw / (float)(X1 - X0));
+            if (u >= cx + cw) u = cx + cw - 1;
             ui_blend(&m_cv.px[(size_t)Y * (size_t)m_cv.stride + (size_t)X], rgb[src[v * pic->w + u]], 255);
         }
     }
@@ -5438,7 +5508,7 @@ static void menu_layout(float W, float H) {
     } else if (menu_screen == MENU_JOURNAL) {
         draw_journal(W, H, hint);
     } else if (menu_screen == MENU_MAIN) {
-        m_text(12.0f, 17.0f, 6.4f, "Paused", C_GOLD, 0);
+        m_text(12.0f, 17.0f, 6.4f, menu_live() ? "Menu" : "Paused", C_GOLD, 0);   /* (the game goes on under it, or not) */
         rows_off = arena_mode ? 1u << M_REWIND : 0;
         draw_rows(W, main_labels(), N_MAIN, 26.0f);
         rows_off = 0;
@@ -7015,11 +7085,11 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         if (map_open && test_map_go) { map_walk(map_cx, map_cy); SDL_Log("map: %s", map_open ? map_note : "walking"); }
         test_map_frame = 0;
     }
-    if (paused || menu_is_open()) {                      /* the game holds: so do the rumble and the sound */
+    if ((paused || menu_is_open()) && !menu_live()) {    /* the game holds: so do the rumble and the sound */
         rumble_off();
         audio_rest();
     }
-    while (paused || menu_is_open()) {                   /* F10 or the menu: hold here, keep the window alive */
+    while ((paused || menu_is_open()) && !menu_live()) { /* F10 or the menu: hold here, keep the window alive */
         holding = 1;                                     /* (the watchdog knows it's on purpose) */
         present(pixels, w, h, 0);
         rumble_output();                                 /* the Rumble setting's sample */
@@ -7034,6 +7104,8 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         back_to_launcher();
         return;                                          /* (this frame's picture is the old game's: not shown) */
     }
+    scenevox_wait(menu_live());
+    if (menu_live() && test_menu_script) menu_script_step();   /* (testing: the menu's script, a step a frame) */
     if (map_open) {                                      /* the world map: the game runs on under it */
         map_tick();
         if (test_menu_script) menu_script_step();        /* (testing: the map's script, a step a frame) */
@@ -7048,6 +7120,12 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
     uint8_t user = read_input() | touch_pad();
     for (int i = 0; i < n_test_keys; i++)                /* testing: scripted keys */
         if (frame_count >= test_keys[i].frame && frame_count < test_keys[i].frame + test_keys[i].len) user |= test_keys[i].keys;
+    if (depth_intro() > 0.25f) user = 0;                 /* a battle's opening: the menu is not in view yet */
+    {   /* the Esc menu over the running game: what the player holds is the menu's, until it is let go after */
+        static int menu_hold;
+        if (menu_live()) { menu_hold = 1; user = 0; }
+        else if (menu_hold) { if (user) user = 0; else menu_hold = 0; }
+    }
     {   /* the world map is up: what the player holds is the map's, and stays so until it is let go */
         static int map_hold;
         if (map_open) { map_hold = 1; user = 0; }

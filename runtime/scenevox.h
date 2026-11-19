@@ -55,5 +55,8 @@ float scenevox_memory(void);
 void scenevox_set_auto(int on);
 int  scenevox_auto(void);
 uint8_t scenevox_pad(uint8_t user, uint8_t pad);
+/* 1: the press auto-advance has ready waits (the Esc menu is up over the running game: the scene's next page comes
+ * when the menu has gone) */
+void scenevox_wait(int on);
 
 #endif

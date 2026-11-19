@@ -163,6 +163,43 @@ static float t;                          /* seconds of battle shown */
 static float pan_x, pan_y, zoom_extra;   /* camera, eased */
 static float shake_amp, shake_t;
 static float pan_a;                      /* the camera pan (battleui_pan): pixels, eased */
+/* the close-up this frame (the opening's, the strike's): every layer enlarged cl_z times more, the layers' point
+ * (cl_x, cl_y_*) at their maps' centres; 1 and the centres themselves with none. For what is drawn over the picture
+ * (the effects' sparks, the numbers by way of depth_to_screen) */
+static float cl_z = 1.0f, cl_x, cl_y_en, cl_y_pa;
+/* The strike (depth_set_strike; an experiment, PsiLok 2026-11-19: "when a member uses a technique that makes their
+ * sprite approach the enemy, can the camera zoom in instantly on the attack then back"). The game draws one who
+ * goes up to an enemy as sprites in that member's own tiles, there. While such sprites are in the picture the view
+ * is close on them -- at once, no easing in; the place taken when they first appear and kept, so the view does not
+ * follow their leap -- and it draws back over a tenth of a second when they have gone. */
+#define STRIKE_ZOOM 1.5f
+#define STRIKE_BACK 0.10f                /* s */
+static int strike_on = 1, strike_gap;
+static float strike_k, strike_gx, strike_gy;
+void depth_set_strike(int on) { strike_on = on != 0; }
+/* The opening (depth_set_intro): a battle begins on a close-up of the enemies, in a flash, and the view draws
+ * back to show the party, who come up from below as it does. The game has the party and its menu there within
+ * half a second of the enemies; what the port draws over the battle fades in with the view, and the pad waits. */
+#define INTRO_HOLD 0.55f                 /* s on the enemies */
+#define INTRO_BACK 0.60f                 /* s drawing back */
+#define INTRO_PARTY_TOP 120.0f           /* the party's heads, game y: below the picture's foot in the close-up */
+enum { INTRO_WAIT, INTRO_RUN, INTRO_DONE };
+static int intro_on = 1, intro_state = INTRO_DONE;
+static float intro_t, intro_wait, intro_k, intro_zoom = 1.0f;
+static float intro_gx, intro_gy, intro_qy;   /* the anchor: the enemies' feet (their middle, their foot); where it
+                                              * is put in the close-up, view y */
+static uint64_t intro_stamp;
+/* Zio at Nurvus (event battle 6, the Arena's too) has an opening of its own: the fight starts with his Magic
+ * Barrier, about two seconds of it before the game shows the party. The close-up stays on him for all of the
+ * cast, pushing in slowly, and draws back when the party is in the picture. */
+#define EVENT_BATTLE_INDEX 0xECFCu       /* Event_Battle_Index: the story battle's number, negative in the others */
+#define EVENT_ZIO_NURVUS   6
+#define INTRO_CAST_MOST    6.0f          /* s: no longer than this on a cast, whatever the game does */
+static int intro_cast;
+static float intro_cast_t, intro_push;
+void depth_set_intro(int on) { intro_on = on != 0; }
+float depth_intro(void) { return frame_logical - intro_stamp <= 3 ? intro_k : 0.0f; }
+int depth_intro_cast(void) { return frame_logical - intro_stamp <= 3 && intro_cast; }
 static int last_popups;
 
 void depth_set_level(int l) { level = l < 0 ? 0 : l >= DEPTH_LEVELS ? DEPTH_LEVELS - 1 : l; }
@@ -198,12 +235,14 @@ static inline uint32_t tinted(uint32_t s, int mr, int mg, int mb, int ar, int ag
 }
 
 /* output pixel -> source coordinate for a layer moved by the camera */
+/* (zmul, csrc: the opening's close-up -- the layer enlarged that much more, with its point csrc at the view's
+ * `center`; 1 and center otherwise) */
 static void build_map(int16_t *map, int n, int scale, int size, float center, float factor,
-                      float zoom, float cam, int mirror) {
-    float s = 1.0f + factor * (zoom - 1.0f);
+                      float zoom, float cam, int mirror, float zmul, float csrc) {
+    float s = (1.0f + factor * (zoom - 1.0f)) * zmul;
     for (int i = 0; i < n; i++) {
         float q = ((float)i + 0.5f) / (float)scale;
-        int p = (int)floorf(center + (q - center) / s + factor * cam);
+        int p = (int)floorf(csrc + (q - center) / s + factor * cam);
         if (mirror) {
             if (p < 0) p = -p - 1;
             if (p >= size) p = 2 * size - p - 1;
@@ -407,10 +446,10 @@ static void add_dot(uint32_t *out, int stride, int ow, int oh, int scale, float 
 static void fx_draw(uint32_t *out, int stride, int w, int h, int scale, float cam_x, float cam_y, float zoom,
                     float strength) {
     int ow = w * scale, oh = h * scale;
-    float s = 1.0f + F_ENEMY * (zoom - 1.0f), cxs = w / 2.0f, cys = h / 2.0f;
+    float s = (1.0f + F_ENEMY * (zoom - 1.0f)) * cl_z, cxs = w / 2.0f, cys = h / 2.0f;
     for (int i = 0; i < nparts; i++) {
         const Particle *p = &parts[i];
-        float qx = cxs + (p->x - cxs - F_ENEMY * cam_x) * s, qy = cys + (p->y - cys - F_ENEMY * cam_y) * s;
+        float qx = cxs + (p->x - cl_x - F_ENEMY * cam_x) * s, qy = cys + (p->y - cl_y_en - F_ENEMY * cam_y) * s;
         float age = 1.0f - p->life / p->max_life;            /* 0 new .. 1 gone */
         float X = qx * (float)scale, Y = qy * (float)scale;
         float a, R;
@@ -480,10 +519,10 @@ static float cam_last_x, cam_last_y, cam_last_zoom, cam_last_w, cam_last_h, cam_
 
 void depth_to_screen(int party, float x, float y, float *ox, float *oy) {
     if (!cam_valid) { *ox = x; *oy = y; return; }
-    float f = party ? F_PARTY : F_ENEMY, s = 1.0f + f * (cam_last_zoom - 1.0f);
+    float f = party ? F_PARTY : F_ENEMY, s = (1.0f + f * (cam_last_zoom - 1.0f)) * cl_z;
     float cx = cam_last_w / 2.0f, cy = party ? (float)PARTY_FEET_Y : cam_last_h / 2.0f;
-    *ox = cx + (x - f * (party ? cam_last_x : cam_last_en) - cx) * s;
-    *oy = cy + (y - (party ? 0.0f : f * cam_last_y) - cy) * s;
+    *ox = cx + (x - f * (party ? cam_last_x : cam_last_en) - cl_x) * s;                 /* (cl_*: a close-up) */
+    *oy = cy + (y - (party ? 0.0f : f * cam_last_y) - (party ? cl_y_pa : cl_y_en)) * s;
 }
 
 /* source coordinate for every output column and row, per layer */
@@ -537,12 +576,12 @@ static const uint8_t *fine_make(int plane, uint8_t (*src)[VDP_MAX_W], uint8_t (*
 static int16_t colf_bg[VDP_MAX_W * MAX_SCALE], colf_en[VDP_MAX_W * MAX_SCALE], colf_pa[VDP_MAX_W * MAX_SCALE];
 static int16_t rowf_bg[VDP_MAX_H * MAX_SCALE], rowf_en[VDP_MAX_H * MAX_SCALE], rowf_pa[VDP_MAX_H * MAX_SCALE];
 static void build_map_fine(int16_t *fine, int16_t *map, int n, int scale, int f, int size, float center,
-                           float factor, float zoom, float cam, int mirror) {
-    float s = 1.0f + factor * (zoom - 1.0f);
+                           float factor, float zoom, float cam, int mirror, float zmul, float csrc) {
+    float s = (1.0f + factor * (zoom - 1.0f)) * zmul;
     int fsize = size * f;
     for (int i = 0; i < n; i++) {
         float q = ((float)i + 0.5f) / (float)scale;
-        int p = (int)floorf((center + (q - center) / s + factor * cam) * (float)f);
+        int p = (int)floorf((csrc + (q - center) / s + factor * cam) * (float)f);
         if (mirror) {
             if (p < 0) p = -p - 1;
             if (p >= fsize) p = 2 * fsize - p - 1;
@@ -577,6 +616,234 @@ typedef struct {
     const int16_t *cb, *ce, *cp, *rb, *re, *rp;      /* the maps into them */
 } Rows;
 
+/* the storm's light this frame (weather.c), for what the port draws of a stage itself: on, each channel's share
+ * of 256, what is added */
+static int bd_tint, bd_tm[3] = {256, 256, 256}, bd_ta[3];
+
+/* Zio's stage (depth_set_backdrops). The game's own is a band of blue cloud 320 wide and 112 high: black bars at
+ * the sides in widescreen, and a black notch under it that shows whenever the party's windows are away. The
+ * port's: a floor of fog to every edge of the view, seen in perspective under a black sky, welling up at Zio's
+ * feet and flowing out from them (a noise carried outward in two phases that take turns, so it never jumps), a
+ * bank of it standing against the sky at the horizon. Made each frame at twice the game's size in the stage's own
+ * space, and shown through the enemies' camera, so Zio's feet stay where they are in it; it takes the game's
+ * fades from the game's own picture (how bright and how white its cloud is). */
+#define ZF_RES     2
+#define ZF_MX      32                    /* the stage beyond the view, game pixels a side (the camera's drift, its turn) */
+#define ZF_MY      8
+#define ZF_W       ((VDP_MAX_W + 2 * ZF_MX) * ZF_RES)
+#define ZF_H       ((VDP_MAX_H + 2 * ZF_MY) * ZF_RES)
+#define ZF_HORIZON 60.0f                 /* game y */
+#define ZF_FEET    119.0f                /* the foot of his picture */
+#define ZF_HEEL    115.0f                /* his heels: where the fog flows out from, and how near he stands */
+#define ZF_Z0      (2400.0f / (ZF_HEEL - ZF_HORIZON + 6.0f))
+#define ZF_CYCLE   2.6f                  /* s: a phase of the flow */
+#define ZF_LEN     26.0f                 /* how far it carries the fog, floor units */
+#define ZF_WISP_TOP 124.0f               /* how far above his feet the wisps reach, game pixels */
+#define ZF_HIGH    15.0f                 /* a billow's height at most, game pixels at his feet (more nearer, less further) */
+static uint32_t zf_buf[ZF_H][ZF_W];
+static float zf_hgt[ZF_H][ZF_W], zf_amb[ZF_H][ZF_W];   /* the floor seen at each pixel: its billow's height 0..1, its light */
+static uint8_t zf_base[ZF_H][ZF_W];                     /* how near the fog at a pixel stands: its foot's game row + 1 (0: none) */
+static uint8_t zf_feet[VDP_MAX_H][VDP_MAX_W];           /* the feet of what the game drew at a pixel, game row: fog that stands
+                                                         * nearer goes over it (the enemies: his; a sprite: its object's) */
+static int16_t zf_col[VDP_MAX_W * MAX_SCALE], zf_row[VDP_MAX_H * MAX_SCALE];
+static int zf_want = 1, zf_on;
+void depth_set_backdrops(int on) { zf_want = on != 0; }
+typedef struct { float t, cx, dim, white; int bw, bh; float wisp; } ZfGen;   /* (wisp: how far the wisps are up, 0..1) */
+static float zf_wisp;
+
+static inline float zf_noise(float x, float y) {
+    float fx = floorf(x), fy = floorf(y), ax = x - fx, ay = y - fy;
+    int x0 = (int)fx & (NOISE - 1), y0 = (int)fy & (NOISE - 1), x1 = (x0 + 1) & (NOISE - 1), y1 = (y0 + 1) & (NOISE - 1);
+    float a = (float)noise[y0][x0] + ((float)noise[y0][x1] - (float)noise[y0][x0]) * ax;
+    float b = (float)noise[y1][x0] + ((float)noise[y1][x1] - (float)noise[y1][x0]) * ax;
+    return (a + (b - a) * ay) * (1.0f / 255.0f);
+}
+
+static inline uint32_t zf_color(float v, const ZfGen *g) {
+    static const float RAMP[5][4] = {{0.00f, 0, 0, 0}, {0.14f, 3, 8, 46}, {0.42f, 12, 44, 170}, {0.70f, 64, 132, 238},
+                                     {1.00f, 218, 236, 255}};
+    v = v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
+    int i = v < RAMP[1][0] ? 0 : v < RAMP[2][0] ? 1 : v < RAMP[3][0] ? 2 : 3;
+    float k = (v - RAMP[i][0]) / (RAMP[i + 1][0] - RAMP[i][0]);
+    float cr = (RAMP[i][1] + (RAMP[i + 1][1] - RAMP[i][1]) * k) * g->dim;
+    float cg = (RAMP[i][2] + (RAMP[i + 1][2] - RAMP[i][2]) * k) * g->dim;
+    float cb = (RAMP[i][3] + (RAMP[i + 1][3] - RAMP[i][3]) * k) * g->dim;
+    cr += (255.0f - cr) * g->white; cg += (255.0f - cg) * g->white; cb += (255.0f - cb) * g->white;
+    return 0xFF000000u | (uint32_t)cr << 16 | (uint32_t)cg << 8 | (uint32_t)cb;
+}
+
+/* first, a row at a time: the sky and the bank against it as they are; for the floor, what stands at each point of
+ * it -- a billow's height (the flow's noise, carried outward from his heels) and
+ * the light there */
+static void zf_rows(void *ctx, int y0, int y1) {
+    const ZfGen *g = ctx;
+    float ph1 = fmodf(g->t / ZF_CYCLE, 1.0f), ph2 = fmodf(ph1 + 0.5f, 1.0f);
+    float w1 = 1.0f - fabsf(2.0f * ph1 - 1.0f), w2 = 1.0f - w1, wn = 1.0f / sqrtf(w1 * w1 + w2 * w2);
+    float a1 = ph1 * ZF_LEN, a2 = ph2 * ZF_LEN;
+    for (int by = y0; by < y1; by++) {
+        float gy = ((float)by + 0.5f) / ZF_RES - ZF_MY, above = ZF_HORIZON - gy;
+        uint32_t *dst = zf_buf[by];
+        memset(zf_base[by], 0, (size_t)g->bw);
+        for (int bx = 0; bx < g->bw; bx++) {
+            float gx = ((float)bx + 0.5f) / ZF_RES - ZF_MX - g->cx, v;
+            if (above > 44.0f) {
+                v = 0.0f;                                     /* the sky */
+            } else if (above > 0.0f) {                        /* the bank's top against it, and its glow */
+                /* (tongues of it, tall and short, leaning and drifting; thin at their tips) */
+                float lean = gx + above * 0.5f;
+                float crest = 5.0f + 22.0f * zf_noise(lean * 0.5f + g->t * 2.4f + 300.0f, 40.0f + g->t * 1.0f)
+                            + 14.0f * zf_noise(lean * 2.3f - g->t * 6.0f, 90.0f + g->t * 2.2f);
+                float k = 1.0f - above / crest;
+                v = 0.09f / (1.0f + above * 0.25f);
+                if (k > 0.0f)
+                    v += 0.70f * k * (0.35f + 0.65f * k)
+                       + (zf_noise(gx * 2.6f - g->t * 7.0f, above * 3.4f + g->t * 3.0f) - 0.5f) * 0.7f * k;
+            } else {                                          /* the floor, from his feet outward */
+                float d = -above, zf = 2400.0f / (d + 6.0f);
+                float fx = gx * zf * (1.0f / 60.0f), fz = ZF_Z0 - zf;
+                float r = sqrtf(fx * fx + fz * fz) + 0.001f, ux = fx / r, uz = fz / r;
+                float p1x = (fx - ux * a1) * 3.0f, p1z = (fz - uz * a1) * 9.0f;
+                float p2x = (fx - ux * a2) * 3.0f + 97.0f, p2z = (fz - uz * a2) * 9.0f + 31.0f;
+                float n1 = zf_noise(p1x, p1z) + 0.45f * zf_noise(p1x * 2.7f + 11.0f, p1z * 2.7f);
+                float n2 = zf_noise(p2x, p2z) + 0.45f * zf_noise(p2x * 2.7f + 11.0f, p2z * 2.7f);
+                float n = ((n1 - 0.725f) * w1 + (n2 - 0.725f) * w2) * wn;
+                float big = zf_noise(fx * 0.9f + g->t * 1.1f, fz * 2.6f + 140.0f) - 0.5f;
+                float hh = 0.48f + n * 1.9f + big * 0.7f;
+                hh = hh < 0.0f ? 0.0f : hh > 1.0f ? 1.0f : hh;
+                hh = hh * hh * (3.0f - 2.0f * hh);
+                zf_hgt[by][bx] = hh;
+                zf_amb[by][bx] = 0.22f + 0.10f / (1.0f + d * 0.07f) + 0.20f / (1.0f + r * r * 0.02f);
+                continue;
+            }
+            dst[bx] = zf_color(v, g);
+        }
+    }
+}
+
+/* then, a column at a time, from the nearest row back: each point's billow stands up from it (taller the nearer),
+ * and is drawn where nothing nearer has been -- dark at its foot, pale to white at its top. Each pixel keeps how
+ * near its billow stands (zf_base), so he stands in it: zf_over. */
+static void zf_cols(void *ctx, int x0, int x1) {
+    const ZfGen *g = ctx;
+    int hy = (int)((ZF_HORIZON + ZF_MY) * ZF_RES);
+    for (int bx = x0; bx < x1; bx++) {
+        int ytop = g->bh;
+        for (int by = g->bh - 1; by >= hy; by--) {
+            float d = ((float)by + 0.5f) / ZF_RES - ZF_MY - ZF_HORIZON, hh = zf_hgt[by][bx];
+            float hpx = hh * ZF_HIGH * (d + 6.0f) * (ZF_RES / 65.0f);
+            int top = by - (int)hpx;
+            if (top < 0) top = 0;
+            if (top >= ytop) continue;                        /* behind something nearer */
+            float amb = zf_amb[by][bx], inv = hpx > 0.5f ? 1.0f / hpx : 0.0f, lit = hh > 1.0f ? 1.0f : hh;
+            int row = by / ZF_RES - ZF_MY + 1;
+            uint8_t base = (uint8_t)(row < 1 ? 1 : row > 255 ? 255 : row);
+            for (int y = (by < ytop ? by : ytop - 1); y >= top; y--) {
+                float u = (float)(by - y) * inv;
+                zf_buf[y][bx] = zf_color(amb + lit * (0.10f + 0.56f * u * u), g);
+                zf_base[y][bx] = base;
+            }
+            ytop = top;
+        }
+        /* see-through at their tops: where a nearer billow's edge stands against a further one, the two blend over
+         * a few pixels (the nearer the more, downward) */
+        for (int y = hy + 1; y < g->bh - 2; y++) {
+            if (!zf_base[y - 1][bx] || zf_base[y][bx] < zf_base[y - 1][bx] + 3) continue;
+            uint32_t back = zf_buf[y - 1][bx];
+            for (int j = 0; j < 3 && zf_base[y + j][bx] == zf_base[y][bx]; j++) {
+                uint32_t c = zf_buf[y + j][bx], a = j == 0 ? 150 : j == 1 ? 95 : 45;       /* the further one's share */
+                zf_buf[y + j][bx] = 0xFF000000u | ((((back >> 16 & 255) * a + (c >> 16 & 255) * (255 - a)) / 255) << 16)
+                                  | ((((back >> 8 & 255) * a + (c >> 8 & 255) * (255 - a)) / 255) << 8)
+                                  | (((back & 255) * a + (c & 255) * (255 - a)) / 255);
+            }
+        }
+    }
+}
+
+/* last, the wisps: dark smoke streaming up off him into the sky, a paler blue close round him, as the story's
+ * picture of him has it. Tongues of the noise drawn out upward and rising, thick round his body and ragged at their
+ * tips, swaying a little; behind him (he is drawn over them) and behind the fog that stands nearer than he does.
+ * They come with Nightmare: rising from him as the great face appears in the sky, there while it is, sinking
+ * back when it goes (g->wisp). */
+static void zf_wisps(void *ctx, int y0, int y1) {
+    const ZfGen *g = ctx;
+    for (int by = y0; by < y1; by++) {
+        float gy = ((float)by + 0.5f) / ZF_RES - ZF_MY, up = ZF_FEET - gy;        /* above his feet */
+        float reach = 46.0f + (ZF_WISP_TOP - 46.0f) * g->wisp;                    /* (their tips climb as they come) */
+        if (up < 0.0f || up > reach) continue;
+        float rise = up > reach - 46.0f ? (reach - up) * (1.0f / 46.0f) : 1.0f;   /* thinning upward */
+        rise *= g->wisp < 0.5f ? g->wisp * 2.0f : 1.0f;
+        if (up < 8.0f) rise *= up * (1.0f / 8.0f);
+        float sway = 5.0f * sinf(g->t * 0.9f + up * 0.045f) * (up * (1.0f / ZF_WISP_TOP));
+        int b0 = (int)((g->cx - 78.0f + ZF_MX) * ZF_RES), b1 = (int)((g->cx + 78.0f + ZF_MX) * ZF_RES);
+        if (b0 < 0) b0 = 0;
+        if (b1 > g->bw) b1 = g->bw;
+        for (int bx = b0; bx < b1; bx++) {
+            if (zf_base[by][bx] >= (int)ZF_HEEL + 2) continue;                    /* fog nearer than he is */
+            float gx = ((float)bx + 0.5f) / ZF_RES - ZF_MX - g->cx - sway, ax = fabsf(gx);
+            /* (a flame's outline: widest at his shoulders' height, drawn in toward its tip; strongest down its
+             * middle, where he hides it, so what shows is its ragged sides and the tongues above his head) */
+            float half = (up < 30.0f ? 34.0f + up * 0.33f : 44.0f) * (1.0f - 0.62f * up * (1.0f / ZF_WISP_TOP));
+            float side = 1.0f - (ax / half) * (ax / half);
+            if (side <= 0.0f) continue;
+            float body = side * rise;
+            float n = zf_noise(gx * 7.0f + 400.0f, (up - g->t * 34.0f) * 2.2f)
+                    + 0.5f * zf_noise(gx * 17.0f, (up - g->t * 52.0f) * 5.0f + 70.0f);
+            float k = body * 2.1f - (1.5f - n) * 0.92f;
+            if (k <= 0.0f) continue;
+            if (k > 1.0f) k = 1.0f;
+            float near_him = ax < 30.0f && up < 66.0f ? (1.0f - ax * (1.0f / 30.0f)) * (1.0f - up * (1.0f / 66.0f)) : 0.0f;
+            uint32_t wc = zf_color(0.20f + 0.20f * k + 0.24f * near_him * k, g), bc = zf_buf[by][bx];
+            /* (smoke against the sky; over the pale fog only a shade of it) */
+            float most = gy > ZF_HORIZON + 22.0f ? 180.0f : gy > ZF_HORIZON - 14.0f ? 180.0f + (ZF_HORIZON + 22.0f - gy) * (60.0f / 36.0f) : 240.0f;
+            uint32_t a = (uint32_t)(k * 1.5f >= 1.0f ? most : k * 1.5f * most);
+            zf_buf[by][bx] = 0xFF000000u | ((((wc >> 16 & 255) * a + (bc >> 16 & 255) * (255 - a)) / 255) << 16)
+                           | ((((wc >> 8 & 255) * a + (bc >> 8 & 255) * (255 - a)) / 255) << 8)
+                           | (((wc & 255) * a + (bc & 255) * (255 - a)) / 255);
+        }
+    }
+}
+
+/* a pixel of the enemies' side (output X, Y; `feet`: zf_feet where it comes from) under the fog that stands nearer
+ * than its feet: seen through it, faintly at the fog's top and less and less the deeper it stands in */
+static inline uint32_t zf_over(uint32_t col, int X, int Y, int feet) {
+    int br = zf_row[Y], bc = zf_col[X], lim = feet + 2;
+    if (zf_base[br][bc] < lim) return col;
+    int deep = 0;                                         /* rows of that fog over this pixel */
+    while (deep < 14 && br - deep - 1 >= 0 && zf_base[br - deep - 1][bc] >= lim) deep++;
+    uint32_t fc = zf_buf[br][bc], fa = (uint32_t)(60 + deep * 11);     /* (see-through: 60 at its top to 214 well in) */
+    if (bd_tint) fc = tinted(fc, bd_tm[0], bd_tm[1], bd_tm[2], bd_ta[0], bd_ta[1], bd_ta[2]);
+    if (fa >= 255) return fc;
+    return 0xFF000000u | ((((fc >> 16 & 255) * fa + (col >> 16 & 255) * (255 - fa)) / 255) << 16)
+         | ((((fc >> 8 & 255) * fa + (col >> 8 & 255) * (255 - fa)) / 255) << 8)
+         | (((fc & 255) * fa + (col & 255) * (255 - fa)) / 255);
+}
+
+/* is this Zio's stage (the game's own background: nothing above the cloud, cloud across the middle, nothing in
+ * the notch below it), and how far has the game faded it (to black, to white)? */
+static int zf_stage(const VdpLine *lines, int w, int h, float *dim, float *white) {
+    int ev = m68k_ram[EVENT_BATTLE_INDEX], cx = w / 2;
+    if (!zf_want || (ev != 4 && ev != EVENT_ZIO_NURVUS) || h < 200) return 0;
+    /* (the sky and the notch are one black of the background's own, the same palette entry: told by the entry, not
+     * the colour, so the game's fades make no difference; the cloud's art has that black in it here and there) */
+    int black = lines[20].plane_b[cx], sky = 0, cloud = 0, notch = 0, cols = 0;
+    for (int x = cx - 120; x <= cx + 120; x += 4, cols++) {
+        sky += lines[20].plane_b[x] != black || lines[40].plane_b[x] != black;
+        cloud += (lines[100].plane_b[x] != black) + (lines[140].plane_b[x] != black);
+        notch += x > cx - 90 && x < cx + 90 && lines[180].plane_b[x] != black;
+    }
+    if (sky || notch || cloud < cols) return 0;                  /* (cloud: half of the two rows at least) */
+    long r = 0, g = 0, b = 0, n = 0;
+    for (int y = 72; y <= 160; y += 8)
+        for (int x = cx - 120; x <= cx + 120; x += 8) {
+            uint32_t c = vdp_color(lines[y].plane_b[x] & 0x3F);
+            r += c >> 16 & 255; g += c >> 8 & 255; b += c & 255; n++;
+        }
+    float ar = (float)r / (float)n, ab = (float)b / (float)n;                 /* (in full light: 66, 112, 209) */
+    *white = ar > 70.0f ? fminf(1.0f, (ar - 66.0f) / 189.0f) : 0.0f;
+    *dim = *white > 0.0f ? 1.0f : fminf(1.0f, ab / 209.0f);
+    return 1;
+}
+
 static void compose_rows(void *ctx, int y0, int y1) {
     const Rows *q = ctx;
     uint32_t *out = q->out;
@@ -594,6 +861,7 @@ static void compose_rows(void *ctx, int y0, int y1) {
         const uint8_t *nrow1 = noise[fog_row1[Y]], *nrow2 = noise[fog_row2[Y]];
         int prof = fog_on ? fog_profile[Y] : 0;
         if (Y > y0 && vu == (Y - 1) / ui_div && fe == re[Y - 1] && fp == rp[Y - 1] && fb == rb[Y - 1]
+            && (!zf_on || zf_row[Y] == zf_row[Y - 1])
             && prof == (fog_on ? fog_profile[Y - 1] : 0)
             && (!prof || (fog_row1[Y] == fog_row1[Y - 1] && fog_row2[Y] == fog_row2[Y - 1]))) {
             memcpy(dst, dst - out_stride, (size_t)ow * sizeof *dst);      /* the row above, again */
@@ -649,7 +917,14 @@ static void compose_rows(void *ctx, int y0, int y1) {
             uint8_t what = WX_FRONT_ENEMY;
             if (ve >= 0 && (u = col_en[X]) >= 0 && (c = l_ac[ce[X]]) != 0) far = tpal[c & 0x3F];
             else if (ve >= 0 && u >= 0 && (c = l_en[ce[X]]) != 0) far = tpal[c & 0x3F];
-            else { far = tpal[l_bg[cb[X]] & 0x3F]; what = WX_FRONT_BG; }
+            else {
+                if (zf_on) {
+                    far = zf_buf[zf_row[Y]][zf_col[X]];
+                    if (bd_tint) far = tinted(far, bd_tm[0], bd_tm[1], bd_tm[2], bd_ta[0], bd_ta[1], bd_ta[2]);
+                } else far = tpal[l_bg[cb[X]] & 0x3F];
+                what = WX_FRONT_BG;
+            }
+            if (zf_on && what == WX_FRONT_ENEMY) far = zf_over(far, X, Y, zf_feet[ve][u]);   /* Zio's stage: he stands in it */
             if (fog_on && prof) {
                 int d = (nrow1[fog_col1[X]] * 5 + nrow2[fog_col2[X]] * 3) >> 3;   /* 0..255 */
                 d = (d - 80) * 2;                                                 /* contrast: wisps */
@@ -690,6 +965,13 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     ease(&fog_cur, FOG_ALPHA[fog_level], k);
     ease(&fx_cur, FX_STRENGTH[fx_level], k);
     if (mode != MODE_BATTLE) {
+        strike_k = 0.0f;
+        strike_gap = 0;
+        cl_z = 1.0f;
+        intro_state = INTRO_WAIT;                             /* the next battle opens on its enemies */
+        intro_t = intro_wait = intro_cast_t = intro_push = 0.0f;
+        intro_k = 1.0f;
+        intro_cast = 0;
         ramp = t = pan_x = pan_y = zoom_extra = shake_amp = pan_a = 0.0f;
         last_popups = 0;
         fog_tint_valid = 0;
@@ -734,12 +1016,17 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             party_under[y][x] = 0;
             layer[L_BG][y][x] = b ? b : (uint8_t)(l->backdrop | 0x40);   /* never transparent */
             if (a) {
+                /* (one of the party at low priority: the game draws the one an enemy's technique lands
+                 * on that way, for its effect to pass over them. Still the party's, under the action:
+                 * with the enemies there were two of them, the other put back in their place) */
+                int low_party = !(a & 0x80) && !vehicle && tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI
+                                && battleui_tile_member(tile) >= 0;
                 if (l->win_in[x]) layer[L_UI][y][x] = a;
-                else if (!(a & 0x80)) layer[L_ENEMY][y][x] = a;
+                else if (!(a & 0x80) && !low_party) layer[L_ENEMY][y][x] = a;
                 else if (vehicle && tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI) layer[L_UI][y][x] = a;
                 else if (tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI) {
                     layer[L_PARTY][y][x] = a;
-                    party_under[y][x] = l->plane_a_under[x];
+                    party_under[y][x] = low_party ? 1 : l->plane_a_under[x];
                     if (y < ptop_col[x]) ptop_col[x] = y;
                 }
                 else if (tile >= TILE_PARTY_HI && tile < TILE_UI_HI) {
@@ -803,6 +1090,162 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             }
         }
     }
+
+    /* The opening: wait for the enemies to be in the picture (the game brings the battle in from white, the
+     * enemies sliding up into their places over a few frames), then hold on them, enlarged about their middle
+     * until they fill most of the view, and draw back. No one to be seen within a second and a half: the view
+     * draws back as it is. */
+    float ik = 0.0f;
+    if (!intro_on) intro_state = INTRO_DONE;
+    /* (the game's own windows have low-priority cells too -- their text, with the Original menus -- which sort
+     * with the enemies: out of the close-up, as the windows are, and not taken for an enemy) */
+    if (intro_state == INTRO_WAIT || (intro_state == INTRO_RUN && intro_k > 0.4f))
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int tile = lines[y].plane_a_tile[x] & 0x7FF;
+                if (layer[L_ENEMY][y][x] && !lines[y].win_in[x] && (tile >= TILE_UI_HI || (tile >= 0x15E && tile < TILE_PARTY_LO)))
+                    layer[L_ENEMY][y][x] = 0;
+            }
+    if (intro_state == INTRO_WAIT || (intro_state == INTRO_RUN && intro_t < 0.30f)) {
+        int x0 = w, x1 = -1, y0 = h, y1 = -1;
+        long n = 0, lit_n = 0;
+        uint8_t seen[64];                                     /* a colour that shows (some bosses come out of the dark) */
+        for (int i = 0; i < 64; i++) {
+            uint32_t c = vdp_color(i);
+            seen[i] = (c >> 16 & 255) >= 56 || (c >> 8 & 255) >= 56 || (c & 255) >= 56;
+        }
+        /* (above the game's status window, rows 19 on, and not a row filled from side to side: plane A is
+         * filled under that window, and that is no enemy) */
+        for (int y = 0; y < 148 && y < h; y++) {
+            int rx0 = w, rx1 = -1, rn = 0, rl = 0;
+            for (int x = 0; x < w; x++)
+                if (layer[L_ENEMY][y][x] || layer[L_ACTION][y][x]) {      /* (an enemy's own sprites too) */
+                    uint8_t c = layer[L_ENEMY][y][x] ? layer[L_ENEMY][y][x] : layer[L_ACTION][y][x];
+                    rn++;
+                    rl += seen[c & 0x3F];
+                    if (x < rx0) rx0 = x;
+                    if (x > rx1) rx1 = x;
+                }
+            if (!rn || rn * 100 > w * 85) continue;
+            n += rn;
+            lit_n += rl;
+            if (rx0 < x0) x0 = rx0;
+            if (rx1 > x1) x1 = rx1;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+        }
+        int found = n > 300 && lit_n > 150 && x1 - x0 >= 12 && y1 - y0 >= 12;
+        /* the anchor is where they stand: the middle of them, at their feet. The close-up enlarges all of the
+         * picture about that point (so the ground stays under them) and puts it low in the view, them above it */
+        float zoom_to = 1.5f, gx_to = (float)w / 2.0f, gy_to = 119.0f, qy_to = (float)h * 0.72f;
+        if (found) {
+            float eh = (float)(y1 - y0 + 1);
+            zoom_to = fminf((float)w * 0.72f / (float)(x1 - x0 + 1), (float)h * 0.70f / eh);
+            zoom_to = zoom_to < 1.3f ? 1.3f : zoom_to > 1.9f ? 1.9f : zoom_to;
+            gx_to = (float)(x0 + x1 + 1) / 2.0f;
+            gy_to = (float)(y1 + 1);
+            qy_to = (float)h * 0.54f + eh * zoom_to * 0.5f;
+            qy_to = qy_to < (float)h * 0.62f ? (float)h * 0.62f : qy_to > (float)h * 0.82f ? (float)h * 0.82f : qy_to;
+        }
+        if (intro_state == INTRO_WAIT) {
+            intro_wait += dt;
+            intro_zoom = zoom_to; intro_gx = gx_to; intro_gy = gy_to; intro_qy = qy_to;
+            if (found) { intro_state = INTRO_RUN; intro_t = 0.0f; }
+            else if (intro_wait > 1.5f) { intro_state = INTRO_RUN; intro_t = INTRO_HOLD; }   /* no one to open on
+                                                               * (an entrance the game stages in the dark): back */
+        } else if (found) {                                   /* with them as they come to their places */
+            ease(&intro_zoom, zoom_to, 0.3f);
+            ease(&intro_gx, gx_to, 0.4f);
+            ease(&intro_gy, gy_to, 0.4f);
+            ease(&intro_qy, qy_to, 0.4f);
+        }
+    }
+    if (intro_state == INTRO_RUN) {
+        /* Zio at Nurvus: the hold lasts as long as the party is not in the picture (his cast), the view pushing
+         * in a little all the while */
+        long party_px = 0;
+        for (int y = 0; y < h; y += 2)
+            for (int x = 0; x < w; x += 2) party_px += layer[L_PARTY][y][x] != 0;
+        intro_cast = !vehicle && m68k_ram[EVENT_BATTLE_INDEX] == EVENT_ZIO_NURVUS && party_px < 60
+                     && intro_t < INTRO_HOLD && intro_cast_t < INTRO_CAST_MOST;
+        if (intro_cast && intro_t + dt >= INTRO_HOLD) {
+            intro_cast_t += dt;
+            intro_push = fminf(0.12f, intro_push + 0.035f * dt);
+        } else {
+            intro_t += dt;
+        }
+        if (intro_t >= INTRO_HOLD + INTRO_BACK) { intro_state = INTRO_DONE; intro_cast = 0; }
+    }
+    if (intro_state != INTRO_DONE) {
+        float u = (intro_t - INTRO_HOLD) / INTRO_BACK;
+        u = u < 0.0f ? 0.0f : u > 1.0f ? 1.0f : u;
+        ik = 1.0f - u * u * (3.0f - 2.0f * u);
+    }
+    intro_k = ik;
+    intro_stamp = frame_logical;
+    /* the close-up: one camera for the background, the enemies and the party (each layer's own drift apart),
+     * the whole picture enlarged about the anchor (a little more at first: it eases off as it holds) and the
+     * anchor put at the view's middle, low. Drawing back, the size and the anchor's place go home together, so
+     * whatever stands on the ground stays on it. The party is below the picture's foot until then (a little
+     * further down than the camera alone has them, where their heads would show); the game's own windows and
+     * cursors wait for the view */
+    float icreep = intro_state == INTRO_RUN && intro_t < INTRO_HOLD ? 0.05f * (1.0f - intro_t / INTRO_HOLD) : 0.0f;
+    float iz = 1.0f + (intro_zoom * (1.0f + icreep + intro_push) - 1.0f) * ik;
+    float iqx = intro_gx + ((float)w / 2.0f - intro_gx) * ik, iqy = intro_gy + (intro_qy - intro_gy) * ik;
+    float icx = intro_gx - (iqx - (float)w / 2.0f) / iz;                 /* (every column map's centre is w / 2) */
+    float icy_bg = intro_gy - (iqy - (float)h * 0.45f) / iz, icy_en = intro_gy - (iqy - (float)h / 2.0f) / iz;
+    float idrop = (float)h + 6.0f - (intro_qy + (INTRO_PARTY_TOP - intro_gy) * intro_zoom);
+    float icy_pa = intro_gy - (iqy - (float)PARTY_FEET_Y) / iz - (idrop > 0.0f ? idrop : 0.0f) * ik / iz;
+    if (ik <= 0.0f) { iz = 1.0f; icx = (float)w / 2.0f; icy_bg = (float)h * 0.45f; icy_en = (float)h / 2.0f; icy_pa = (float)PARTY_FEET_Y; }
+    if (ik > 0.4f && !vehicle) {
+        memset(layer[L_UI], 0, sizeof layer[L_UI]);
+        memset(layer[L_POINTER], 0, sizeof layer[L_POINTER]);
+    }
+    {   /* the strike: one of the party at an enemy -- the one acting, as low-priority sprites in their own tiles,
+         * a figure's size, above where the party stands */
+        int actor = m68k_ram[0x4142] << 8 | m68k_ram[0x4143], bx0 = w, bx1 = -1, by0 = h, by1 = -1;
+        if (strike_on && ik <= 0.0f && !vehicle && actor >= 1 && actor <= 5) {
+            uint32_t sat = (uint32_t)(vdp.reg[5] & 0x7E) << 9;
+            for (int id = 0; id < 80; id++) {
+                if (sx1[id] < 0 || hi[id]) continue;
+                const uint8_t *sp = &vdp.vram[(sat + (uint32_t)id * 8) & 0xFFFF];
+                if (battleui_tile_member((sp[4] << 8 | sp[5]) & 0x7FF) != actor - 1) continue;
+                if (sx0[id] < bx0) bx0 = sx0[id];
+                if (sx1[id] > bx1) bx1 = sx1[id];
+                if (sy0[id] < by0) by0 = sy0[id];
+                if (sy1[id] > by1) by1 = sy1[id];
+            }
+        }
+        int there = bx1 >= 0 && bx1 - bx0 >= 12 && by1 - by0 >= 24 && by1 < PARTY_FEET_Y - 20;
+        if (there) {
+            if (strike_k < 1.0f) {                            /* cut in: on them as they are now */
+                strike_gx = (float)(bx0 + bx1 + 1) / 2.0f;
+                strike_gy = (float)(by1 + 1);
+                if (strike_gy < 112.0f) strike_gy = 112.0f;   /* (caught mid-leap: the ground under them) */
+            }
+            strike_k = 1.0f;
+            strike_gap = 0;
+        } else if (strike_k > 0.0f && ++strike_gap > 3) {     /* gone (not a frame's flicker): back */
+            strike_k -= dt / STRIKE_BACK;
+            if (strike_k < 0.0f) strike_k = 0.0f;
+        }
+        if (strike_k > 0.0f && ik <= 0.0f) {
+            float k = strike_k * strike_k * (3.0f - 2.0f * strike_k);
+            float qx = (float)w / 2.0f, qy = (float)h * 0.64f;
+            float lo = (float)w - ((float)w - strike_gx) * STRIKE_ZOOM, hi_x = strike_gx * STRIKE_ZOOM;   /* inside the picture */
+            if (qx < lo) qx = lo;
+            if (qx > hi_x) qx = hi_x;
+            iz = 1.0f + (STRIKE_ZOOM - 1.0f) * k;
+            iqx = strike_gx + (qx - strike_gx) * k;
+            iqy = strike_gy + (qy - strike_gy) * k;
+            icx = strike_gx - (iqx - (float)w / 2.0f) / iz;
+            icy_bg = strike_gy - (iqy - (float)h * 0.45f) / iz;
+            icy_en = strike_gy - (iqy - (float)h / 2.0f) / iz;
+            icy_pa = strike_gy - (iqy - (float)PARTY_FEET_Y) / iz;
+        }
+    }
+    int closeup = ik > 0.0f || strike_k > 0.0f;
+    cl_z = iz; cl_x = icx; cl_y_en = icy_en; cl_y_pa = icy_pa;
 
     /* The camera pan: while an enemy attacks someone (or someone casts),
      * the game stands them under the enemy, often over another member. The
@@ -881,11 +1324,33 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             uint8_t s = lines[y].sprite[x];
             if (s & 0x80) layer[obj_ui[sprite_root(parent, lines[y].sprite_no[x] & 127)] ? L_UI : L_POINTER][y][x] = s;
         }
+    /* part of an enemy: some enemies cast or strike with a part of their own picture as sprites (a
+     * robe's sides lifted with the arms), cut out of plane A and set against what is left of it. Such
+     * an object lies along the enemy's picture and not over it (an effect on an enemy is drawn over
+     * it): it stays with the enemies whoever stands below, or the enemy comes apart (Xe-A-Thoul's
+     * Giwat, with the one it is cast on stood under it and the view turned) */
+    static int obj_edge[128], obj_over[128];
+    memset(obj_edge, 0, sizeof obj_edge);
+    memset(obj_over, 0, sizeof obj_over);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            if (!layer[L_ACTION][y][x]) continue;
+            int r = sprite_root(parent, lines[y].sprite_no[x] & 127);
+            if (layer[L_ENEMY][y][x]) obj_over[r]++;
+            else if ((x > 0 && layer[L_ENEMY][y][x - 1] && !layer[L_ACTION][y][x - 1])
+                     || (x + 1 < w && layer[L_ENEMY][y][x + 1] && !layer[L_ACTION][y][x + 1])
+                     || (y > 0 && layer[L_ENEMY][y - 1][x] && !layer[L_ACTION][y - 1][x])
+                     || (y + 1 < h && layer[L_ENEMY][y + 1][x] && !layer[L_ACTION][y + 1][x]))
+                obj_edge[r]++;
+        }
     /* on the party: over someone's picture, or coming down on them (all the
      * way by the time it reaches the top of their head) */
     int any_near = 0;
     for (int r = 0; r < 128; r++) {
+        if (closeup) break;                                   /* (a close-up: one camera, no sprite goes over to
+                                                               * the party's -- an enemy's own would leave it) */
         if (ox1[r] < 0 || sprite_root(parent, r) != r || obj_ui[r]) continue;
+        if (obj_edge[r] >= 16 && obj_over[r] * 2 < obj_edge[r]) continue;
         int top = h;
         for (int x = ox0[r] < 0 ? 0 : ox0[r]; x <= ox1[r] && x < w; x++)
             if (ptop_col[x] < top) top = ptop_col[x];
@@ -963,19 +1428,59 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     int ow = w * scale, oh = h * scale;
     int fine = fine_want && scale >= 2 && fine_ready() ? scale : 0;   /* Scale2x: the layers enlarged this much */
     if (fine) {
-        build_map_fine(colf_bg, col_bg, ow, scale, fine, w, w / 2.0f, F_BG, zoom, cam_bg, 1);
-        build_map_fine(rowf_bg, row_bg, oh, scale, fine, h, h * 0.45f, F_BG, zoom, cam_y, 1);
-        build_map_fine(colf_en, col_en, ow, scale, fine, w, w / 2.0f, F_ENEMY, zoom, cam_en, 0);
-        build_map_fine(rowf_en, row_en, oh, scale, fine, h, h / 2.0f, F_ENEMY, zoom, cam_y, 0);
-        build_map_fine(colf_pa, col_pa, ow, scale, fine, w, w / 2.0f, F_PARTY, zoom, cam_x, 0);
-        build_map_fine(rowf_pa, row_pa, oh, scale, fine, h, (float)PARTY_FEET_Y, F_PARTY, zoom, 0.0f, 0);
+        build_map_fine(colf_bg, col_bg, ow, scale, fine, w, w / 2.0f, F_BG, zoom, cam_bg, 1, iz, icx);
+        build_map_fine(rowf_bg, row_bg, oh, scale, fine, h, h * 0.45f, F_BG, zoom, cam_y, 1, iz, icy_bg);
+        build_map_fine(colf_en, col_en, ow, scale, fine, w, w / 2.0f, F_ENEMY, zoom, cam_en, 0, iz, icx);
+        build_map_fine(rowf_en, row_en, oh, scale, fine, h, h / 2.0f, F_ENEMY, zoom, cam_y, 0, iz, icy_en);
+        build_map_fine(colf_pa, col_pa, ow, scale, fine, w, w / 2.0f, F_PARTY, zoom, cam_x, 0, iz, icx);
+        build_map_fine(rowf_pa, row_pa, oh, scale, fine, h, (float)PARTY_FEET_Y, F_PARTY, zoom, 0.0f, 0, iz, icy_pa);
     } else {
-        build_map(col_bg, ow, scale, w, w / 2.0f, F_BG, zoom, cam_bg, 1);
-        build_map(row_bg, oh, scale, h, h * 0.45f, F_BG, zoom, cam_y, 1);
-        build_map(col_en, ow, scale, w, w / 2.0f, F_ENEMY, zoom, cam_en, 0);
-        build_map(row_en, oh, scale, h, h / 2.0f, F_ENEMY, zoom, cam_y, 0);
-        build_map(col_pa, ow, scale, w, w / 2.0f, F_PARTY, zoom, cam_x, 0);
-        build_map(row_pa, oh, scale, h, (float)PARTY_FEET_Y, F_PARTY, zoom, 0.0f, 0);   /* no vertical move */
+        build_map(col_bg, ow, scale, w, w / 2.0f, F_BG, zoom, cam_bg, 1, iz, icx);
+        build_map(row_bg, oh, scale, h, h * 0.45f, F_BG, zoom, cam_y, 1, iz, icy_bg);
+        build_map(col_en, ow, scale, w, w / 2.0f, F_ENEMY, zoom, cam_en, 0, iz, icx);
+        build_map(row_en, oh, scale, h, h / 2.0f, F_ENEMY, zoom, cam_y, 0, iz, icy_en);
+        build_map(col_pa, ow, scale, w, w / 2.0f, F_PARTY, zoom, cam_x, 0, iz, icx);
+        build_map(row_pa, oh, scale, h, (float)PARTY_FEET_Y, F_PARTY, zoom, 0.0f, 0, iz, icy_pa);   /* (no vertical move but the opening's) */
+    }
+
+    {   /* Zio's stage: the fog made for this frame, and the way into it through the enemies' camera */
+        float zdim = 1.0f, zwhite = 0.0f;
+        zf_on = !vehicle && zf_stage(lines, w, h, &zdim, &zwhite);
+        if (!zf_on) zf_wisp = 0.0f;
+        if (zf_on) {
+            int bh = (h + 2 * ZF_MY) * ZF_RES;
+            /* Nightmare's face: the enemies' picture in the sky over him, where nothing else of theirs is */
+            long face = 0;
+            for (int y = 0; y < 50; y += 2)
+                for (int x = w / 2 - 60; x < w / 2 + 60; x += 2) face += layer[L_ENEMY][y][x] != 0;
+            ease(&zf_wisp, face > 250 ? 1.0f : 0.0f, 1.0f - expf(-dt / (face > 250 ? 0.7f : 0.45f)));
+            ZfGen g = {t, (float)w / 2.0f, zdim, zwhite, (w + 2 * ZF_MX) * ZF_RES, bh, zf_wisp};
+            par_rows(zf_rows, &g, bh);
+            par_rows(zf_cols, &g, g.bw);
+            if (zf_wisp > 0.02f) par_rows(zf_wisps, &g, bh);
+            /* whose feet are where: the enemies' picture stands at his; a sprite at its object's foot (his own
+             * while he casts, a fighter's who has run up to him), and no further off than he is */
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int f = (int)ZF_HEEL;
+                    if (lines[y].sprite[x]) {
+                        int o = oy1[sprite_root(parent, lines[y].sprite_no[x] & 127)] + 1;
+                        if (o > f) f = o > 250 ? 250 : o;
+                    }
+                    zf_feet[y][x] = (uint8_t)f;
+                }
+            float s = (1.0f + F_ENEMY * (zoom - 1.0f)) * iz;
+            for (int X = 0; X < ow; X++) {
+                float q = ((float)X + 0.5f) / (float)scale, src = icx + (q - (float)w / 2.0f) / s + F_ENEMY * cam_en;
+                int bx = (int)floorf((src + (float)ZF_MX) * ZF_RES);
+                zf_col[X] = (int16_t)(bx < 0 ? 0 : bx >= g.bw ? g.bw - 1 : bx);
+            }
+            for (int Y = 0; Y < oh; Y++) {
+                float q = ((float)Y + 0.5f) / (float)scale, src = icy_en + (q - (float)h / 2.0f) / s + F_ENEMY * cam_y;
+                int by = (int)floorf((src + (float)ZF_MY) * ZF_RES);
+                zf_row[Y] = (int16_t)(by < 0 ? 0 : by >= bh ? bh - 1 : by);
+            }
+        }
     }
 
     /* fog: tinted from the background's average colour (eased, so flashes
@@ -1064,6 +1569,8 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                              tmr, tmg, tmb, tar, tag, tab);
         tint_r = (int)(fc >> 16 & 255); tint_g = (int)(fc >> 8 & 255); tint_b = (int)(fc & 255);
     }
+    bd_tint = tint;                                           /* (Zio's fog under the storm's light too) */
+    bd_tm[0] = tmr; bd_tm[1] = tmg; bd_tm[2] = tmb; bd_ta[0] = tar; bd_ta[1] = tag; bd_ta[2] = tab;
     Rows rows = {out, out_stride, scale, ow, pal, tpal, panning, t_out, a_out, lit, fog_on, tint_r, tint_g, tint_b};
     const uint8_t *near_fine = NULL;                          /* (Scale2x: the sprites on the party, enlarged) */
     if (fine) {                                               /* every layer through the filter, now they are sorted */
@@ -1120,7 +1627,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                     }
                 }
                 if ((c & 0x80) ? f == 3 : (f == 1 || f == 3)) continue;
-                dst[X] = tpal[c & 0x3F];
+                dst[X] = zf_on ? zf_over(tpal[c & 0x3F], X, Y, zf_feet[ve][u]) : tpal[c & 0x3F];
                 front[Y][X] = WX_FRONT_PARTY;                 /* with the party, for the weather */
             }
         }
@@ -1131,5 +1638,18 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         weather_draw(&wf);
     }
     if (fx_on) fx_draw(out, out_stride, w, h, scale, cam_en, cam_y, zoom, fx_cur);
+    if (intro_state == INTRO_RUN && intro_t < 0.24f) {        /* the opening's flash, on the close-up as it appears */
+        float f = 1.0f - intro_t / 0.24f;
+        int a = (int)(200.0f * f * f);
+        for (int Y = 0; Y < oh; Y++) {
+            uint32_t *dst = out + (size_t)Y * (size_t)out_stride;
+            for (int X = 0; X < ow; X++) {
+                uint32_t c = dst[X];
+                int r = (int)(c >> 16 & 255), g = (int)(c >> 8 & 255), b = (int)(c & 255);
+                r += ((255 - r) * a) >> 8; g += ((255 - g) * a) >> 8; b += ((255 - b) * a) >> 8;
+                dst[X] = 0xFF000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+            }
+        }
+    }
     return 1;
 }

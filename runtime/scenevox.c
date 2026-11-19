@@ -40,7 +40,10 @@ static int line_clip_now = -1;        /* the clip of the line on screen, and fra
 static long line_frames;
 void scenevox_set_auto(int on) { auto_on = on; }
 int  scenevox_auto(void) { return auto_on; }
+static int waiting;
+void scenevox_wait(int on) { waiting = on; }
 uint8_t scenevox_pad(uint8_t user, uint8_t pad) {
+    if (waiting) return pad;                                   /* (the press it has ready keeps) */
     if (user) { press_frames = 0; return pad; }                /* the player's own buttons come first */
     if (press_frames > 0) { press_frames--; return (uint8_t)(pad | PAD_C); }
     return pad;

@@ -129,7 +129,11 @@ Hold Tab to fast-forward, F10 pause, F11 fullscreen, F12 screenshot
 (`screenshots/`). **Esc** (or the pad's Back/Select) opens the system menu:
 resume, go back 10 seconds, the journal, settings, return to menu (the
 launcher again, after a Yes; the game starts over from what is chosen
-there), quit. Settings are on
+there), quit. In the story the game goes on under this menu, its music
+with it: nothing you press reaches it, and a voiced scene waits on its
+page (Settings > Game > This menu: Pauses the game, for the old way; F10
+always pauses; the Boss Arena and Wave Mode always stop under it, their
+fights being timed). Settings are on
 seven pages -- Game, Display, Sound, Battles, Controls, Cheats, Buttons --
 turned with Tab / Page Up / Page Down, the shoulder
 buttons, or a click or tap on the page's name; the line under the list says
@@ -239,6 +243,21 @@ The additions:
 - **Battle camera** (Battles page, Camera: on / off; needs battle depth):
   when an enemy attacks someone, the view turns to face them, and the party
   slides along instead of overlapping (`runtime/depth.c`).
+- **Battle opening** (Battles page, Opening: Close-up / Plain): a battle
+  opens on a close-up of the enemies, in a flash, then the view draws back
+  and the party comes up into it; about a second, and the menus wait for
+  it. An entrance the game stages itself in the dark (Dark Force) is left
+  as it is.
+  Zio at Nurvus has an opening of its own: the close-up stays on him while
+  he casts his Magic Barrier, then draws back as the party comes in.
+- **Strike zoom** (Battles page: on / off; an experiment): when one of the
+  party goes up to an enemy to strike it, the view cuts in close on them
+  for as long as they are there, and back. Needs the modern battle menus.
+- **Backdrops** (Battles page, Backdrops: New / Original): where the port
+  has a backdrop of its own it is drawn in place of the game's. So far
+  Zio's stage: a sea of blue fog under a black sky, welling up at his feet
+  and flowing out from them, to every edge of the view (the game's own is
+  320 wide with a black notch under it).
 - **Battle voices** (Sound page: on / off): the party speaks in battle -- a
   shout as they attack, a grunt when hit, a breath as they cast, a cry when
   they fall, a cheer when they win (`runtime/battlevox.c`). The voice lines

@@ -101,6 +101,9 @@ static int nwins;
 typedef struct { int x, y, down; } Pointer;
 static Pointer pointers[8];
 static int npointers;
+/* where the game's cursor stood over each enemy (by fighter, 5-10) when last seen there: see the target's pointer */
+static Pointer seen_ptr[11];
+static uint8_t seen_ptr_ok[11];
 
 static uint16_t nt(int r, int c) {
     uint32_t base = (uint32_t)(vdp.reg[2] & 0x38) << 10;
@@ -389,7 +392,9 @@ static Mote motes[MAX_MOTES];
 static int nmotes;
 static float mote_due;
 
-static int party_tile(uint16_t e) { int t = e & 0x7FF; return (e & 0x8000) && t >= 0x180 && t < 0x280; }
+/* (at either priority: the game draws one an enemy's technique lands on at low priority while its
+ * effect passes over them, and they are still there) */
+static int party_tile(uint16_t e) { int t = e & 0x7FF; return t >= 0x180 && t < 0x280; }
 
 /* The camera pan (battleui_pan, drawn by depth.c): while the battle plays
  * out, the one the game stands away from their place (attacked, or a caster
@@ -429,6 +434,8 @@ static void party_reset(void) {
     memset(members, 0, sizeof members);
     memset(home_x, 0, sizeof home_x);
     standing = restore = shown = 0;
+    memset(seen_ptr_ok, 0, sizeof seen_ptr_ok);
+    memset(tile_owner, 0, sizeof tile_owner);
     memset(aura_level, 0, sizeof aura_level);
     nmotes = 0;
     mote_due = 0;
@@ -467,6 +474,13 @@ static int find_member(const Member *m, int lo, int hi) {
     return -1;
 }
 
+/* a cell as the game has it under its windows and numbers (its copy without them, in override by now) */
+static uint16_t nt_under(int r, int c) {
+    uint16_t e = nt(r, c);
+    int i = (r & 31) * 64 + (c & 63);
+    return ui_tile(e) || pop_cell[i] ? override[i] : e;
+}
+
 static void party_frame(void) {
     int r2 = (int)(r16(BATTLE_ROUTINE_2) & 0x7FFF), menu = menu_of(r2);
     int results = (r2 >= 0x1E && r2 <= 0x26) || (r2 >= 0x2D && r2 <= 0x2F);
@@ -498,7 +512,8 @@ static void party_frame(void) {
             }
             for (int r = 0; r < PARTY_ROWS; r++)
                 for (int c = 0; c < 6; c++) {
-                    uint16_t e = nt(PARTY_ROW0 + r, col0 + c);
+                    /* (mid-action a window may be over them: "Atk Pow is Up!" over the one who cried) */
+                    uint16_t e = keep ? nt(PARTY_ROW0 + r, col0 + c) : nt_under(PARTY_ROW0 + r, col0 + c);
                     int t = e & 0x7FF;
                     now[r][c] = e;
                     if (party_tile(e) && t >= lo && t < hi) any = 1;
@@ -539,6 +554,16 @@ static void party_frame(void) {
     if (pan_on && !keep && !results)
         for (int k = 0; k < 5; k++)
             if ((moved >> k & 1) && members[k].valid) { pan_member = k; pan_dx = (now_col[k] - members[k].col0) * 8; break; }
+    /* a blow that fells the one stood there makes them blink, in the picture one frame in two: still
+     * stood there in between, or the view turns back and forth with it */
+    static int hold_member = -1, hold_dx, hold_left;
+    if (pan_member >= 0) { hold_member = pan_member; hold_dx = pan_dx; hold_left = 6; }
+    else if (hold_member >= 0 && hold_left > 0 && pan_on && !keep && !results && members[hold_member].valid
+             && !((present | alive) >> hold_member & 1)) {
+        hold_left--;
+        pan_member = hold_member;
+        pan_dx = hold_dx;
+    } else hold_member = -1;
     memset(pan_owner, 0, sizeof pan_owner);
     for (int k = 0; k < 5; k++) {
         const Member *m = &members[k];
@@ -557,8 +582,9 @@ static void party_frame(void) {
         int key = r2 << 24 | ((int)r16(COMD_INPUT) & 15) << 20 | moved << 15 | present << 10 | restore << 5
                 | ((int)r16(CURRENT_ACTOR) & 31);
         if (log_on && key != last)
-            printf("battleui: routine %02X fighter %u actor %04X present %02X moved %02X standing %02X restore %02X\n",
-                   r2, r16(COMD_INPUT), r16(CURRENT_ACTOR), present, moved, standing, restore);
+            printf("battleui: L%llu routine %02X fighter %u actor %04X present %02X moved %02X standing %02X restore %02X"
+                   " pan %d %d\n", (unsigned long long)frame_logical, r2, r16(COMD_INPUT), r16(CURRENT_ACTOR), present,
+                   moved, standing, restore, pan_member, pan_dx);
         last = key;
     }
     /* The game stands one acting (a caster, an archer) or one an enemy
@@ -577,8 +603,16 @@ static void party_frame(void) {
                 int row = PARTY_ROW0 + r, col = m->col0 + c;
                 if (!e || col < 0 || col >= 64) continue;
                 uint16_t cur = nt(row, col);
-                if ((cur & 0x7FF) && !ui_tile(cur) && !pop_cell[row * 64 + col]) {
-                    back_cells[row * 64 + col] = e;           /* behind what the game drew there */
+                int under = ui_tile(cur) || pop_cell[row * 64 + col];
+                /* mid-action, under a window or a number of the game's: what the game has there (its
+                 * copy without windows, in override already), someone it stood here, is still its own
+                 * (or Gryz lost his body to Chaz's, in whose place he stood, while "Atk Pow is Up!"
+                 * was over him) */
+                if (under && !keep) { cur = override[row * 64 + col]; under = 0; }
+                if ((cur & 0x7FF) && !under) {
+                    /* behind what the game drew there (vdp.h: or over it, if that is at low priority;
+                     * but never over one of the party the game drew that way) */
+                    back_cells[row * 64 + col] = !(cur & 0x8000) && tile_owner[cur & 0x7FF] ? (uint16_t)(e & 0x7FFF) : e;
                     continue;
                 }
                 override[row * 64 + col] = e;
@@ -1104,6 +1138,12 @@ static struct {
     int hold, rest, presses, waited, ticks;
     uint8_t press;
 } drive;
+/* The cursor the menus show: the game's own -- or, while the port is walking it somewhere for the mouse, where
+ * it is going. (The walk is a press at a time, and to another column of a list by way of that column's top: shown
+ * as it went, the highlight ran through rows the mouse was never on.) */
+static int shown_cur(int menu, int fighter, int cur) {
+    return drive.on && drive.menu == menu && (fighter < 0 || drive.fighter == fighter) ? drive.target : cur;
+}
 #define MAX_HITS 64
 static Hit hits[MAX_HITS];
 static int nhits;
@@ -1150,6 +1190,7 @@ static void draw_bar(int menu, int fighter, const char *chosen, const char *line
         int main_menu = menu == M_MAIN, n = main_menu ? 3 : 5;
         const char *const *names = main_menu ? MAIN : COMMANDS;
         int cur = main_menu ? (int)r16(MAIN_OPTION) % 3 : (int)r16(COMD_INDEX + (unsigned)fighter * 2) % 5;
+        cur = main_menu ? shown_cur(M_MAIN, -1, cur) : shown_cur(M_COMMAND, fighter, cur);
         for (int i = 0; i < n; i++) {
             float w = width(names[i]) + 10.0f;
             hit_add(x, BAR_Y0, x + w, BAR_Y1, main_menu ? M_MAIN : M_COMMAND, i, 1);
@@ -1274,7 +1315,7 @@ static void draw_techs(int fighter, int id, float alpha) {
         unsigned base = CHAR_STATS + (unsigned)id * 0x80;
         snprintf(info, sizeof info, "TP %u/%u", r16(base + 0x12), r16(base + 0x14));
     }
-    draw_list(M_TECH, "Techniques", info, entries, n, (int)r16(TECH_INDEX + (unsigned)fighter * 2) & 15, alpha);
+    draw_list(M_TECH, "Techniques", info, entries, n, shown_cur(M_TECH, fighter, (int)r16(TECH_INDEX + (unsigned)fighter * 2) & 15), alpha);
 }
 
 static void draw_skills(int fighter, float alpha) {
@@ -1290,7 +1331,7 @@ static void draw_skills(int fighter, float alpha) {
         e->desc = battledesc_skill((int)s);
         n = i + 1;
     }
-    draw_list(M_SKILL, "Skills", "uses left", entries, n, (int)r16(SKILL_INDEX + (unsigned)fighter * 2) & 7, alpha);
+    draw_list(M_SKILL, "Skills", "uses left", entries, n, shown_cur(M_SKILL, fighter, (int)r16(SKILL_INDEX + (unsigned)fighter * 2) & 7), alpha);
 }
 
 /* the row an arrow leads to in rows laid out in columns of `per`, each column a page as the game's own
@@ -1336,7 +1377,7 @@ static void draw_items(int fighter, int id, float alpha) {
         if (!e->desc && i < equipped) e->desc = "Equipped.";
         n = i + 1;
     }
-    int cur = (int)r16(ITEM_INDEX + (unsigned)fighter * 2);
+    int cur = shown_cur(M_ITEM, fighter, (int)r16(ITEM_INDEX + (unsigned)fighter * 2));
     groups.valid = 0;
     if (group_items) {
         /* the rows: each worn item on its own, then one a kind of the pack's (in the order it first holds them) */
@@ -1356,7 +1397,7 @@ static void draw_items(int fighter, int id, float alpha) {
             if (groups.count[g] > 1) snprintf(rows[g].cost, sizeof rows[g].cost, "\xC3\x97%d", groups.count[g]);   /* x3 */
         groups.fighter = fighter;
         groups.valid = 1;
-        int row = drive.on && !drive.confirm && drive.menu == M_ITEM ? group_row(drive.target) : group_row(cur);
+        int row = group_row(cur);                     /* (cur: where a walk is going, shown_cur) */
         char info[24];
         snprintf(info, sizeof info, "column %d/%d", row / 4 + 1, (groups.n + 3) / 4 > 0 ? (groups.n + 3) / 4 : 1);
         list_slot = groups.slot;
@@ -1369,11 +1410,13 @@ static void draw_items(int fighter, int id, float alpha) {
     draw_list(M_ITEM, "Items", info, entries, n, cur, alpha);
 }
 
-/* a chevron over what the game's cursor pointed at, its name in a window above */
-static void draw_target(const char *label, int party, int frame, float alpha) {
+/* a chevron over what the game's cursor pointed at (or at `at`, where the mouse has sent it: see the caller), its
+ * name in a window above */
+static void draw_target(const char *label, int party, int frame, float alpha, const Pointer *at) {
     for (int i = 0; i < npointers; i++) {
         const Pointer *p = &pointers[i];
         if (!p->down) continue;
+        if (at) p = at;
         float gx = (float)p->x + 8.0f, gy = (float)p->y + 10.0f, sx, sy;
         depth_to_screen(party, gx + OX, gy, &sx, &sy);
         sx -= OX;
@@ -1587,7 +1630,7 @@ static void draw_vehicle(int menu, int frame, float alpha) {
         bar(x, x + w, base, BAR_OFF, alpha);
         text(x + 5.0f, base, MAIN[1], WHITE, alpha);
         x += w + 2.0f;
-        int cur = (int)(r16(COMD_INDEX) & 0x7F) & 1;
+        int cur = shown_cur(M_VEH_WEAPON, -1, (int)(r16(COMD_INDEX) & 0x7F) & 1);
         for (int i = 0; i < 2; i++) {
             int b = veh_weapon(stats, i);
             if (b < 0 || !WEAPON_NAMES[b][0]) continue;
@@ -1604,7 +1647,7 @@ static void draw_vehicle(int menu, int frame, float alpha) {
         }
         lc = WHITE;
     } else if (menu == M_VEH_MAIN) {
-        int cur = (int)r16(MAIN_OPTION) % 3;
+        int cur = shown_cur(M_VEH_MAIN, -1, (int)r16(MAIN_OPTION) % 3);
         for (int i = 0; i < 3; i++) {
             float w = width(MAIN[i]) + 10.0f;
             hit_add(x, y0, x + w, y1, M_VEH_MAIN, i, 1);
@@ -1656,6 +1699,11 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     if ((back_c >> 5 & 7) < lo) lo = back_c >> 5 & 7;
     if ((back_c >> 9 & 7) < lo) lo = back_c >> 9 & 7;
     fade = (float)hi / 7.0f * (1.0f - (float)lo / 7.0f);
+    float fade_game = fade;
+    {   /* the battle's opening: all of this comes in as the view draws back (sooner than the view ends) */
+        float ik = depth_intro();
+        fade *= 1.0f - ik * ik;
+    }
 
     int r2 = (int)(r16(BATTLE_ROUTINE_2) & 0x7FFF), menu = menu_of(r2);
     if (vehicle) {                          /* no party: the cockpit's readout, its windows, its bar */
@@ -1672,7 +1720,7 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     card_layout(view_w);
     int target_id = -1;
     if (menu == M_TARGET_ALLY) {            /* the game counts the party left to right, like the cards */
-        int t = (int)r16(CHAR_INDEX);
+        int t = shown_cur(M_TARGET_ALLY, -1, (int)r16(CHAR_INDEX));
         if (t >= 0 && t < ncards) target_id = cards[t].id;
     }
 
@@ -1714,7 +1762,10 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
         const Win *w = &wins[i];
         if (w->y >= 20 && w->w >= 30) continue;                  /* the status bar: the party's windows instead */
         if (menu != M_NONE && w->y >= 4) continue;               /* a menu: drawn below */
+        float keep = fade;
+        if (w->y < 4 && depth_intro_cast()) fade = fade_game;    /* (an opening held on a cast: its name stays up) */
         draw_window(w, w->y < 4, 1.0f);
+        fade = keep;
     }
 
     /* the open list or the target; then the bar: the choices across it, or
@@ -1743,13 +1794,37 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     case M_TARGET_ENEMY: case M_TARGET_ALLY: {
         char name[32] = "";
         if (menu == M_TARGET_ENEMY) {
-            int f = nth_fighter(5, 10, (int)r16(ENEMY_INDEX));
+            /* the one pointed at: the game's cursor -- or, while the port walks that to where the mouse is, the
+             * one it is going to (the game's cursor steps from enemy to enemy on the way). The pointer is then
+             * put where the game's stood over that enemy when last seen there; not seen yet, as far along from
+             * where it is now as that enemy stands from this one. */
+            static int last_ei = -1, steady;
+            int ei = (int)r16(ENEMY_INDEX), si = shown_cur(M_TARGET_ENEMY, -1, ei);
+            int fg = nth_fighter(5, 10, ei), f = nth_fighter(5, 10, si);
+            const Pointer *gp = NULL, *at = NULL;
+            Pointer guess;
+            for (int i = 0; i < npointers && !gp; i++)
+                if (pointers[i].down) gp = &pointers[i];
+            steady = ei == last_ei ? steady + 1 : 0;
+            last_ei = ei;
+            if (gp && fg >= 5 && fg <= 10 && steady >= 3 && !(drive.on && drive.menu == M_TARGET_ENEMY)) {
+                seen_ptr[fg] = *gp;                           /* (the game's cursor at rest over this one) */
+                seen_ptr_ok[fg] = 1;
+            }
+            if (gp && f >= 5 && f <= 10 && f != fg) {
+                if (seen_ptr_ok[f]) at = &seen_ptr[f];
+                else if (fg >= 0) {
+                    guess = *gp;
+                    guess.x += (int)r16(FIGHTERS + (unsigned)f * 0x40 + 0x0C) - (int)r16(FIGHTERS + (unsigned)fg * 0x40 + 0x0C);
+                    at = &guess;
+                }
+            }
             if (f >= 0) {
                 uint32_t st = ui_ram32(FIGHTERS + (unsigned)f * 0x40 + 4) & 0xFFFF;
                 if (st >= ENEMY_STATS && st < ENEMY_STATS + 0x200)
                     ui_decode_name(&m68k_ram[st], 14, name, (int)sizeof name);
             }
-            draw_target(name, 0, frame, menu_alpha);
+            draw_target(name, 0, frame, menu_alpha, at);
         } else if (target_id >= 0) {
             snprintf(name, sizeof name, "%s", UI_CHAR_NAMES[target_id]);
         }
@@ -1795,6 +1870,7 @@ static int pulse_b;
 
 int battleui_click(float fx, float fy, int right) {
     if (!active) return 0;
+    if (depth_intro() > 0.25f) return 1;                  /* the battle's opening: nothing to click yet */
     if (right) { drive.on = 0; pulse_b = 3; return 1; }   /* back */
     for (int i = nhits - 1; i >= 0; i--) {                 /* the last drawn is on top */
         const Hit *h = &hits[i];
