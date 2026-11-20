@@ -159,6 +159,12 @@ static void make_noise(void) {
     noise_ready = 1;
 }
 static float ramp;                       /* 0..1, eases the effect in at battle start */
+/* An enemy's own pieces (see depth_compose: sprites in its colours, flush against its picture), remembered where
+ * they were last known for one: the game draws a technique's flash over the enemy who casts it, and for those
+ * frames the join does not show (Juza's Forceflash: the half of him drawn as sprites went dark and slid) */
+#define OWN_SEEN 12
+#define OWN_TTL  30                      /* frames a place is remembered after the piece was last seen in it */
+static struct { int x0, y0, x1, y1, ttl; } own_seen[OWN_SEEN];
 static float t;                          /* seconds of battle shown */
 static float pan_x, pan_y, zoom_extra;   /* camera, eased */
 static float shake_amp, shake_t;
@@ -978,6 +984,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         intro_k = 1.0f;
         intro_cast = 0;
         ramp = t = pan_x = pan_y = zoom_extra = shake_amp = pan_a = step_k = 0.0f;
+        memset(own_seen, 0, sizeof own_seen);
         last_popups = 0;
         fog_tint_valid = 0;
         nparts = nhits = 0;
@@ -998,7 +1005,8 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     t += dt;
 
     /* sort the frame into layers */
-    static int sx0[128], sy0[128], sx1[128], sy1[128], near_ui[128], hi[128], on_party[128];
+    static int sx0[128], sy0[128], sx1[128], sy1[128], near_ui[128], hi[128], on_party[128], sline[128];
+    int en_lines = 0;                                         /* the palette lines the enemies' picture is drawn in */
     static int ptop_col[VDP_MAX_W];                           /* each column's highest party pixel */
     for (int i = 0; i < 128; i++) { sx0[i] = sy0[i] = 1 << 20; sx1[i] = sy1[i] = -1; hi[i] = on_party[i] = 0; }
     for (int x = 0; x < w; x++) ptop_col[x] = h;
@@ -1027,7 +1035,11 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                 int low_party = !(a & 0x80) && !vehicle && tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI
                                 && battleui_tile_member(tile) >= 0;
                 if (l->win_in[x]) layer[L_UI][y][x] = a;
-                else if (!(a & 0x80) && !low_party) layer[L_ENEMY][y][x] = a;
+                else if (!(a & 0x80) && !low_party) {
+                    layer[L_ENEMY][y][x] = a;
+                    if (tile < TILE_UI_HI && !(tile >= 0x15E && tile < TILE_PARTY_LO))   /* (not a window's text) */
+                        en_lines |= 1 << (a >> 4 & 3);
+                }
                 else if (vehicle && tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI) layer[L_UI][y][x] = a;
                 else if (tile >= TILE_PARTY_LO && tile < TILE_PARTY_HI) {
                     layer[L_PARTY][y][x] = a;
@@ -1047,6 +1059,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                 if (y < sy0[id]) sy0[id] = y;
                 if (y > sy1[id]) sy1[id] = y;
                 if (layer[L_PARTY][y][x]) on_party[id] = 1;
+                sline[id] = s >> 4 & 3;
                 if (!(s & 0x80)) {
                     layer[L_ACTION][y][x] = s;
                     act_n++; act_x += x; act_y += y;
@@ -1298,7 +1311,11 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     int t_dy = (int)lroundf(-STEP_UP * step_k) * scale, a_dy = (int)lroundf(STEP_DOWN * step_k) * scale;   /* the step */
 
     /* objects: sprites that touch, or all but touch (an enemy's lunge, a
-     * claw, a technique's burst), so no picture is ever split between layers */
+     * claw, a technique's burst), so no picture is ever split between layers.
+     * Not across an enemy's own colours, though: a sprite in a palette line the enemies' picture is drawn in
+     * joins only others in that line. The game draws a part of an enemy as sprites in the enemy's colours, and
+     * a technique's effect in the effects' own line: the effect that lands on someone touches the arms that
+     * cast it, and as one object the arms went with it, to the party (Xe-A-Thoul again, PsiLok 2026-11-20) */
     static int parent[128], obj_ui[128], obj_party[128], ox0[128], oy0[128], ox1[128], oy1[128];
     static float obj_w[128];
     for (int i = 0; i < 128; i++) {
@@ -1311,7 +1328,8 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     for (int i = 0; i < 128; i++) {
         if (sx1[i] < 0) continue;
         for (int j = i + 1; j < 128; j++)
-            if (sx1[j] >= 0 && sx0[i] <= sx1[j] + 5 && sx0[j] <= sx1[i] + 5 && sy0[i] <= sy1[j] + 5 && sy0[j] <= sy1[i] + 5) {
+            if (sx1[j] >= 0 && sx0[i] <= sx1[j] + 5 && sx0[j] <= sx1[i] + 5 && sy0[i] <= sy1[j] + 5 && sy0[j] <= sy1[i] + 5
+                && (sline[i] == sline[j] || !((en_lines >> sline[i] | en_lines >> sline[j]) & 1))) {
                 int a = sprite_root(parent, i), b = sprite_root(parent, j);
                 if (a != b) parent[b] = a;
             }
@@ -1342,30 +1360,94 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
      * robe's sides lifted with the arms), cut out of plane A and set against what is left of it. Such
      * an object lies along the enemy's picture and not over it (an effect on an enemy is drawn over
      * it): it stays with the enemies whoever stands below, or the enemy comes apart (Xe-A-Thoul's
-     * Giwat, with the one it is cast on stood under it and the view turned) */
-    static int obj_edge[128], obj_over[128], obj_tot[128];
+     * Giwat, with the one it is cast on stood under it and the view turned).
+     * And the surest sign of a part of an enemy: its colours. obj_seam and obj_own count the object's pixels
+     * that lie against, and on, a pixel of the enemies' picture drawn in the same palette line (ENEMY_ART: low
+     * priority, as that picture is; not a damage number) */
+#define ENEMY_ART(e, line) ((e) && !((e) & 0x80) && ((e) >> 4 & 3) == (line))
+    static int obj_edge[128], obj_over[128], obj_tot[128], obj_seam[128], obj_own[128];
     memset(obj_edge, 0, sizeof obj_edge);
     memset(obj_over, 0, sizeof obj_over);
     memset(obj_tot, 0, sizeof obj_tot);
+    memset(obj_seam, 0, sizeof obj_seam);
+    memset(obj_own, 0, sizeof obj_own);
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
-            if (!layer[L_ACTION][y][x]) continue;
-            int r = sprite_root(parent, lines[y].sprite_no[x] & 127);
+            uint8_t s = layer[L_ACTION][y][x];
+            if (!s) continue;
+            int r = sprite_root(parent, lines[y].sprite_no[x] & 127), line = s >> 4 & 3;
             obj_tot[r]++;
-            if (layer[L_ENEMY][y][x]) obj_over[r]++;
-            else if ((x > 0 && layer[L_ENEMY][y][x - 1] && !layer[L_ACTION][y][x - 1])
-                     || (x + 1 < w && layer[L_ENEMY][y][x + 1] && !layer[L_ACTION][y][x + 1])
-                     || (y > 0 && layer[L_ENEMY][y - 1][x] && !layer[L_ACTION][y - 1][x])
-                     || (y + 1 < h && layer[L_ENEMY][y + 1][x] && !layer[L_ACTION][y + 1][x]))
-                obj_edge[r]++;
+            if (layer[L_ENEMY][y][x]) {
+                obj_over[r]++;
+                obj_own[r] += ENEMY_ART(layer[L_ENEMY][y][x], line);
+                continue;
+            }
+            /* beside it: the enemies' picture bare (obj_edge), or in this sprite's colours and not under this
+             * object -- bare, or under another's sprite: a technique's effect passing over an enemy hid the
+             * seam of the arms he held out, for a frame (obj_seam) */
+            static const int nx[4] = {-1, 1, 0, 0}, ny[4] = {0, 0, -1, 1};
+            int edge = 0, seam = 0;
+            for (int k = 0; k < 4; k++) {
+                int xx = x + nx[k], yy = y + ny[k];
+                if (xx < 0 || xx >= w || yy < 0 || yy >= h || !layer[L_ENEMY][yy][xx]) continue;
+                int bare = !layer[L_ACTION][yy][xx];
+                edge |= bare;
+                seam |= ENEMY_ART(layer[L_ENEMY][yy][xx], line)
+                        && (bare || sprite_root(parent, lines[yy].sprite_no[xx] & 127) != r);
+            }
+            obj_edge[r] += edge;
+            obj_seam[r] += seam;
         }
+#undef ENEMY_ART
     /* on the party: over someone's picture, or coming down on them (all the
      * way by the time it reaches the top of their head) */
     int any_near = 0;
+    static uint8_t obj_kind[128];                             /* (for the log: how an object was known for an enemy's) */
+    memset(obj_kind, 0, sizeof obj_kind);
+    for (int i = 0; i < OWN_SEEN; i++)
+        if (own_seen[i].ttl > 0) own_seen[i].ttl--;
     for (int r = 0; r < 128; r++) {
         if (closeup) break;                                   /* (a close-up: one camera, no sprite goes over to
                                                                * the party's -- an enemy's own would leave it) */
         if (ox1[r] < 0 || sprite_root(parent, r) != r || obj_ui[r]) continue;
+        /* an enemy's own: in its colours, flush against its picture (a part cut out of it, whatever else of the
+         * enemy's is drawn with it: the light in Xe-A-Thoul's hands lay over him, and for that the robe's sides
+         * he lifts went part of the way to the one stood below, sliding off him as the view turned). Its place
+         * is remembered: there, in those colours, it is still the enemy's while the join is hidden */
+        if (obj_seam[r] >= 16) {
+            int at = -1, old = 0;
+            for (int i = 0; i < OWN_SEEN; i++) {
+                int ix = (ox1[r] < own_seen[i].x1 ? ox1[r] : own_seen[i].x1) - (ox0[r] > own_seen[i].x0 ? ox0[r] : own_seen[i].x0) + 1;
+                int iy = (oy1[r] < own_seen[i].y1 ? oy1[r] : own_seen[i].y1) - (oy0[r] > own_seen[i].y0 ? oy0[r] : own_seen[i].y0) + 1;
+                if (own_seen[i].ttl > 0 && ix > 0 && iy > 0
+                    && (long)ix * iy * 2 >= (long)(own_seen[i].x1 - own_seen[i].x0 + 1) * (own_seen[i].y1 - own_seen[i].y0 + 1)) { at = i; break; }
+                if (own_seen[i].ttl < own_seen[old].ttl) old = i;
+            }
+            if (at < 0) at = old;                             /* (a new place: in the oldest one's) */
+            own_seen[at].x0 = ox0[r]; own_seen[at].y0 = oy0[r]; own_seen[at].x1 = ox1[r]; own_seen[at].y1 = oy1[r];
+            own_seen[at].ttl = OWN_TTL;
+            obj_kind[r] = 1;
+            continue;
+        }
+        if (en_lines >> sline[r] & 1) {
+            long area = (long)(ox1[r] - ox0[r] + 1) * (oy1[r] - oy0[r] + 1);
+            for (int i = 0; i < OWN_SEEN && !obj_kind[r]; i++) {
+                int ix = (ox1[r] < own_seen[i].x1 ? ox1[r] : own_seen[i].x1) - (ox0[r] > own_seen[i].x0 ? ox0[r] : own_seen[i].x0) + 1;
+                int iy = (oy1[r] < own_seen[i].y1 ? oy1[r] : own_seen[i].y1) - (oy0[r] > own_seen[i].y0 ? oy0[r] : own_seen[i].y0) + 1;
+                if (own_seen[i].ttl > 0 && ix > 0 && iy > 0 && (long)ix * iy * 2 >= area) {
+                    own_seen[i].ttl = OWN_TTL;                /* (its place stays where it was known: one that leaves
+                                                               * it, a fist thrown, is let go) */
+                    obj_kind[r] = 2;
+                }
+            }
+            if (obj_kind[r]) continue;
+        }
+        /* ... or, not on the party, in its colours and a good part of it on or against its picture (not a fist
+         * on its way to someone, a corner of it still over the arm) */
+        if (!obj_party[r] && obj_seam[r] + obj_own[r] >= 16 && (obj_seam[r] + obj_own[r]) * 4 >= obj_tot[r]) {
+            obj_kind[r] = 3;
+            continue;
+        }
         if (obj_edge[r] >= 16 && obj_over[r] * 2 < obj_edge[r]) continue;
         /* ... or lies on it, most of it over the enemy's own picture and none of it on the party (Xe-A-Thoul
          * raising his arms: his shoulders and his robe's upper part drawn as sprites over the rest of him; handed
@@ -1378,6 +1460,38 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         float wgt = obj_party[r] ? 1.0f : (float)(oy1[r] + 1 - (top - 16)) / 16.0f;
         obj_w[r] = wgt < 0.0f ? 0.0f : wgt > 1.0f ? 1.0f : wgt;
         any_near |= obj_w[r] > 0.0f;
+    }
+    {   /* PSIV_DEPTH_LOG=1: print each frame's objects of low-priority sprites (for sorting them) */
+        static int log_on = -1;
+        if (log_on < 0) { const char *v = getenv("PSIV_DEPTH_LOG"); log_on = v && *v == '1'; }
+        if (log_on) {
+            uint32_t sat = (uint32_t)(vdp.reg[5] & 0x7E) << 9;
+            int elo = 0x7FF, ehi = 0;                         /* the enemies' own tiles in plane A */
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int tile = lines[y].plane_a_tile[x] & 0x7FF;
+                    if (!layer[L_ENEMY][y][x] || (layer[L_ENEMY][y][x] & 0x80) || lines[y].win_in[x]) continue;
+                    if (tile < elo) elo = tile;
+                    if (tile > ehi) ehi = tile;
+                }
+            for (int r = 0; r < 128; r++) {
+                if (ox1[r] < 0 || sprite_root(parent, r) != r || !obj_tot[r]) continue;
+                int tlo = 0x7FF, thi = 0, n = 0, pl = 0;
+                for (int id = 0; id < 128; id++) {
+                    if (sx1[id] < 0 || sprite_root(parent, id) != r) continue;
+                    const uint8_t *sp = &vdp.vram[(sat + (uint32_t)id * 8) & 0xFFFF];
+                    int tile = (sp[4] << 8 | sp[5]) & 0x7FF;
+                    if (tile < tlo) tlo = tile;
+                    if (tile > thi) thi = tile;
+                    pl |= 1 << ((sp[4] >> 5) & 3);
+                    n++;
+                }
+                printf("depth L%llu pan %d %.1f obj %d box %d,%d-%d,%d sprites %d tiles %03X-%03X pal %X tot %d over %d edge %d party %d w %.2f seam %d own %d kind %d enemy lines %X tiles %03X-%03X\n",
+                       (unsigned long long)frame_logical, pan_m, pan_a, r, ox0[r], oy0[r], ox1[r], oy1[r], n, tlo, thi, pl,
+                       obj_tot[r], obj_over[r], obj_edge[r], obj_party[r], obj_w[r], obj_seam[r], obj_own[r], obj_kind[r],
+                       en_lines, elo, ehi);
+            }
+        }
     }
 
     /* the camera */
