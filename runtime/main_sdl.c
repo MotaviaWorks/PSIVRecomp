@@ -406,7 +406,7 @@ static Setting settings[] = {
     {"video.detail", "auto", "the port's own picture (battles, modern text and menus) is drawn at up to 4 times the game's size: auto = at 3 or 2 times on a machine that cannot draw it in a frame's time, so the game never slows down for it; full = always at the display's size"},
     {"video.fullscreen", "0", "1 = start fullscreen (F11 toggles)"},
     {"video.integer_scaling", INTEGER_SCALING_DEFAULT, "1 = whole-number scaling only (sharpest); 0 = fill the screen"},
-    {"video.widescreen", "1", "16:9 widescreen (other screens keep their shape): 0 off, 1 more map in exploration, 2 side panels with the party in exploration; battles are wide either way"},
+    {"video.widescreen", "1", "16:9 widescreen (other screens keep their shape): 0 off, 1 natural (more map in exploration), 2 side panels with the party in exploration; battles are wide either way"},
     {"video.aspect", "square", "square = square pixels; 4:3 = the console's TV shape (pixels a bit narrower)"},
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed; scale2x = the Scale2x / Scale3x filter: stair-steps rounded off, nothing blurred"},
     {"video.vsync", "off", "on = each picture waits for the display's refresh, so it never tears (on a display that refreshes 60 times a second or more); off = the game keeps its own time"},
@@ -432,7 +432,7 @@ static Setting settings[] = {
     {"cheat.weak", "off", "cheat: enemies have 1 HP: on / off"},
     {"enhance.voices", "on", "the party's voices in battle, from the optional voice pack once it is installed (or files of your own in the voices folder): shouts as they attack, grunts when hit, a breath as they cast: on / off"},
     {"enhance.scene_voices", "on", "the voiced story scenes, from the optional voice pack once it is installed: on / off"},
-    {"enhance.battle_camera", "on", "when an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping (needs battle depth): on / off"},
+    {"enhance.battle_camera", "on", "when an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping (needs battle depth); off: the one in the action steps forward, the rest step back: on / off"},
     {"enhance.battle_backdrops", "on", "backdrops the port draws itself in place of the game's battle background, where it has one (Zio's stage: a sea of blue fog flowing from his feet, to every edge of the view; with battle depth, fog, effects or widescreen on): on / off"},
     {"enhance.battle_strike", "on", "an experiment: when one of the party goes up to an enemy to strike it, the view cuts in close on them for as long as they are there, and back (with the modern battle menus, and battle depth, fog, effects or widescreen on): on / off"},
     {"enhance.battle_intro", "on", "a battle opens on a close-up of the enemies, in a flash, then the view draws back to the party (about a second; with battle depth, fog, effects or widescreen on): on / off"},
@@ -1944,9 +1944,9 @@ static const MenuItem GAME_ITEMS[] = {
 static const MenuItem DISPLAY_ITEMS[] = {
     {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0,
      "Fill the screen. F11 switches it too.", apply_video},
-    {"Widescreen", "video.widescreen", {"0", "1", "2"}, {"Off", "More map", "Side panels"}, 0, 0, 0, 1,
-     "16:9: more of the world on either side, or the party's cards in the margins while exploring. Battles "
-     "are wide either way.", apply_enhancements},
+    {"Widescreen", "video.widescreen", {"0", "1", "2"}, {"Off", "Natural", "Side panels"}, 0, 0, 0, 1,
+     "16:9. Natural: more of the world on either side. Side panels: the party's cards in the margins while "
+     "exploring. Battles are wide either way.", apply_enhancements},
     {"Pixel shape", "video.aspect", {"square", "4:3"}, {"Square", "4:3 TV"}, 0, 0, 0, 0,
      "4:3 TV: the slightly narrow pixels the console showed on a television.", apply_enhancements},
     {"Smoothing", "video.filter", {"nearest", "linear", "scale2x"}, {"Off", "Soft", "Scale2x"}, 0, 0, 0, 0,
@@ -1960,8 +1960,8 @@ static const MenuItem DISPLAY_ITEMS[] = {
     {"Trees", "enhance.trees", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "Trees sway in the breeze, more at their tops, with light flickering through the leaves.",
      apply_enhancements},
-    {"Integer scaling", "video.integer_scaling", {"1", "0"}, {"On", "Off"}, 0, 0, 0, 0,
-     "Scale by whole numbers only: the sharpest pixels, with a border round the picture.", NULL},
+    /* (Integer scaling taken out of the menu, 2026-11-19, PsiLok: "seems to be doing nothing" -- the window is
+     * already sized in whole steps; video.integer_scaling stays in psiv.ini, as it was) */
 };
 /* Scene voices switched: on, with a pack installed, someone has a word to say */
 static void apply_scene_voices(void) {
@@ -2014,7 +2014,8 @@ static const MenuItem BATTLE_ITEMS[] = {
     {"Fog", "enhance.battle_fog", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1,
      "Drifting mist between the enemies and the party. F8 switches it too.", apply_enhancements},
     {"Camera", "enhance.battle_camera", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
-     "When an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping.",
+     "When an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping. "
+     "Off: the one in the action steps forward and the rest step back.",
      apply_enhancements},
     {"Opening", "enhance.battle_intro", {"on", "off"}, {"Close-up", "Plain"}, 0, 0, 0, 1,
      "A battle opens on a close-up of the enemies, in a flash, then the view draws back to the party.",
@@ -3665,27 +3666,44 @@ static void menu_pad_repeat(void) {
  * with it as chosen (clip.h). Made once from the player's ROM -- the port ships nothing of the
  * game -- by the game itself, windowless (psiv --headless --preview-scene), one clip at a time
  * in the background at a low priority, into the player's folder (previews/). Then kept. */
-typedef struct { const char *name, *scene, *args; } PreviewSpec;
+/* (text: the modern text and battle menus at that scale; 0 none) */
+typedef struct { const char *name, *scene, *args; int text; } PreviewSpec;
 static const PreviewSpec PREVIEWS[] = {
-    {"battle", "battle", "--depth 1:1 --fog 1 --fx 1 --weather 0"},   /* (the defaults; no rain but Weather's own) */
-    {"depth0", "battle", "--depth 0:1 --fog 1 --fx 1 --weather 0"},
-    {"depth2", "battle", "--depth 2:1 --fog 1 --fx 1 --weather 0"},
-    {"fog0", "battle", "--depth 1:1 --fog 0 --fx 1 --weather 0"},
-    {"fog2", "battle", "--depth 1:1 --fog 2 --fx 1 --weather 0"},
-    {"fx0", "battle", "--depth 1:1 --fog 1 --fx 0 --weather 0"},
-    {"fx2", "battle", "--depth 1:1 --fog 1 --fx 2 --weather 0"},
-    {"cam0", "battle", "--depth 1:1 --fog 1 --fx 1 --weather 0 --no-pan"},
-    {"rain1", "battle", "--depth 1:1 --fog 1 --fx 1 --weather 1"},
-    {"rain2", "battle", "--depth 1:1 --fog 1 --fx 1 --weather 2"},
-    {"field", "field", "--water 1"},
-    {"nowater", "field", "--water 1 --no-water"},
-    {"notrees", "field", "--water 1 --no-trees"},
+    {"battle", "battle", "--depth 1:1 --fog 1 --fx 1 --weather 0", 1},   /* (the defaults; no rain but Weather's own) */
+    {"depth0", "battle", "--depth 0:1 --fog 1 --fx 1 --weather 0", 1},
+    {"depth2", "battle", "--depth 2:1 --fog 1 --fx 1 --weather 0", 1},
+    {"fog0", "battle", "--depth 1:1 --fog 0 --fx 1 --weather 0", 1},
+    {"fog2", "battle", "--depth 1:1 --fog 2 --fx 1 --weather 0", 1},
+    {"fx0", "battle", "--depth 1:1 --fog 1 --fx 0 --weather 0", 1},
+    {"fx2", "battle", "--depth 1:1 --fog 1 --fx 2 --weather 0", 1},
+    {"camstep", "battle", "--depth 1:1 --fog 1 --fx 1 --weather 0 --no-pan", 1},   /* (was cam0: the Camera off
+                                                                                   * now steps, 2026-11-19) */
+    {"rain1", "battle", "--depth 1:1 --fog 1 --fx 1 --weather 1", 1},
+    {"rain2", "battle", "--depth 1:1 --fog 1 --fx 1 --weather 2", 1},
+    {"field", "field", "--water 1", 0},
+    {"nowater", "field", "--water 1 --no-water", 0},
+    {"notrees", "field", "--water 1 --no-trees", 0},
+    /* (2026-11-19, PsiLok: a preview for every setting he named) */
+    {"nostrike", "battle", "--depth 1:1 --fog 1 --fx 1 --weather 0 --no-strike", 1},
+    {"opening", "opening", "--depth 1:1 --fog 1 --fx 1 --weather 0", 1},
+    {"opening0", "opening", "--depth 1:1 --fog 1 --fx 1 --weather 0 --no-intro", 1},
+    {"menus", "menus", "--depth 1:2 --fog 1 --fx 1 --weather 0", 2},
+    {"menus0", "menus", "--depth 1:2 --fog 1 --fx 1 --weather 0 --no-battle-ui", 2},
+    {"zio", "zio", "--depth 1:1 --fog 1 --fx 1 --weather 0", 1},
+    {"zio0", "zio", "--depth 1:1 --fog 1 --fx 1 --weather 0 --no-backdrops", 1},
+    {"fieldw", "field", "--water 1 --wide 40", 0},
+    {"fieldp", "field", "--water 1 --wide 40 --panels", 1},
 };
 #define N_PREVIEWS (int)(sizeof PREVIEWS / sizeof PREVIEWS[0])
 #define PREVIEWS_VERSION "2"                         /* in the files' names: a new one makes them again */
 /* each setting with a preview: the clip for each of its values, which value is off, and the one
  * shown beside Off while Off is chosen */
-typedef struct { const char *key; const char *clip[3]; int off, on, smooth; float cx, cy, cw; } PreviewOf;
+/* How a preview shows its clips. PK_CLIP: each fills its box (or the close-up). PK_FIT: each whole, at the box's
+ * height, the box as wide as the widest (Widescreen). The rest draw the field as the game shows it now (Widescreen
+ * as set) into a picture of their own: PK_TEAR the view panning, torn where V-Sync is off; PK_SCREEN a monitor,
+ * the game in a window or filling it. */
+enum { PK_CLIP, PK_FIT, PK_TEAR, PK_SCREEN };
+typedef struct { const char *key; const char *clip[3]; int off, on, smooth; float cx, cy, cw; int kind; } PreviewOf;
 /* (cx, cy, cw: a close-up, its centre and width as parts of the clip's; cw 0 = the whole clip) */
 static const PreviewOf PREVIEW_OF[] = {
     {"video.filter", {"field", "field", "field"}, 0, 1, 1},
@@ -3693,9 +3711,18 @@ static const PreviewOf PREVIEW_OF[] = {
     {"enhance.trees", {"field", "notrees"}, 1, 0, 0, 0.6625f, 0.57f, 0.4f},   /* close on the trees (PsiLok, 2026-11-19) */
     {"enhance.battle_depth", {"depth0", "battle", "depth2"}, 0, 1, 0},
     {"enhance.battle_fog", {"fog0", "battle", "fog2"}, 0, 1, 0},
-    {"enhance.battle_camera", {"battle", "cam0"}, 1, 0, 0},
+    {"enhance.battle_camera", {"battle", "camstep"}, 1, 0, 0},
     {"enhance.battle_weather", {"battle", "rain1", "rain2"}, 0, 1, 0},
     {"enhance.battle_fx", {"fx0", "battle", "fx2"}, 0, 1, 0},
+    /* (2026-11-19, PsiLok: "Menus, Opening, Strike Zoom, Backdrops, Widescreen, V-Sync, ... Fullscreen (a simple
+     * image of two monitors)") */
+    {"enhance.battle_ui", {"menus", "menus0"}, 1, 0, 0},
+    {"enhance.battle_intro", {"opening", "opening0"}, 1, 0, 0},
+    {"enhance.battle_strike", {"battle", "nostrike"}, 1, 0, 0},
+    {"enhance.battle_backdrops", {"zio", "zio0"}, 1, 0, 0},
+    {"video.widescreen", {"field", "fieldw", "fieldp"}, 0, 1, 0, 0, 0, 0, PK_FIT},
+    {"video.vsync", {"field", "field"}, 0, 1, 0, 0, 0, 0, PK_TEAR},
+    {"video.fullscreen", {"field", "field"}, 0, 1, 0, 0, 0, 0, PK_SCREEN},
 };
 static SDL_AtomicInt previews_made;                  /* bumped as the maker finishes each */
 static SDL_AtomicInt previews_busy;                  /* the maker at work */
@@ -3761,17 +3788,17 @@ static int SDLCALL previews_maker(void *ud) {
         args[n++] = maker_rom;
         args[n++] = "--preview-scene";
         args[n++] = PREVIEWS[i].scene;
+        if (maker_font[0] && PREVIEWS[i].text) {     /* the modern battle menus, as the game shows them */
+            snprintf(font, sizeof font, "%s:%d", maker_font, PREVIEWS[i].text);
+            args[n++] = "--text";
+            args[n++] = font;
+            args[n++] = "--battle-ui";               /* (before its words: --no-battle-ui goes after) */
+        }
         snprintf(argbuf, sizeof argbuf, "%s", PREVIEWS[i].args);
-        for (char *t = argbuf; *t && n < 30;) {      /* its words */
+        for (char *t = argbuf; *t && n < 34;) {      /* its words */
             args[n++] = t;
             while (*t && *t != ' ') t++;
             if (*t) *t++ = 0;
-        }
-        if (maker_font[0] && !strcmp(PREVIEWS[i].scene, "battle")) {   /* the modern battle menus, as the game shows them */
-            snprintf(font, sizeof font, "%s:1", maker_font);
-            args[n++] = "--text";
-            args[n++] = font;
-            args[n++] = "--battle-ui";
         }
         args[n++] = "--clip";
         args[n++] = part;
@@ -3855,10 +3882,34 @@ static struct {
     int on;
     int clip[2];                                     /* PREVIEWS indices */
     float x[2], y, w, h;                             /* the boxes */
+    float px[2], py[2], pw[2], ph[2];                /* where each clip goes (its box, or a picture in it) */
+    int kind;                                        /* PK_ */
     int smooth;                                      /* Smoothing: both close up, the second blended (1) or
                                                       * through Scale3x (2) */
     float cx, cy, cw;                                /* a close-up (PreviewOf) */
+    int tear[2];                                     /* PK_TEAR: this one torn (V-Sync off) */
 } prev_show;
+
+/* the game's picture as it is now (exploring: Widescreen and Pixel shape as set), in square pixels */
+static void preview_game_size(float *gw, float *gh) {
+    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / (320.0f / 224.0f);
+    *gw = (float)(320 + 2 * wide_margin()) * par;
+    *gh = 224.0f;
+}
+/* ... and the clip that shows it */
+static const char *preview_field_now(void) {
+    int ws = classic_mode() ? 0 : setting_int("video.widescreen");
+    return ws == 2 ? "fieldp" : ws ? "fieldw" : "field";
+}
+/* the biggest rectangle shaped w:h = aspect in (x, y, w, h), centred: out[4] */
+static void fit_rect(float x, float y, float w, float h, float aspect, float *out) {
+    float fw = w, fh = w / aspect;
+    if (fh > h) { fh = h; fw = h * aspect; }
+    out[0] = x + (w - fw) / 2;
+    out[1] = y + (h - fh) / 2;
+    out[2] = fw;
+    out[3] = fh;
+}
 
 static const PreviewOf *preview_of(const MenuItem *it) {
     for (size_t i = 0; it && it->key && i < sizeof PREVIEW_OF / sizeof PREVIEW_OF[0]; i++)
@@ -3881,28 +3932,70 @@ static void draw_previews(const MenuPage *pg, float x0, float x1, float y0, floa
     const PreviewOf *po = preview_of(it);
     m_text((x0 + x1) / 2, y0 + 5.0f, 3.6f, "Preview", C_SOFT, 2);
     float gap = 4.0f, w = (x1 - x0 - gap) / 2, top = y0 + 9.0f;
-    if (!po) {                                       /* a setting with none: which have one */
+    if (!po) {                                       /* a setting with none (Pixel shape) */
         m_box(x0, top, x1, top + 44.0f, 4.0f, 0x141C42, 0x101634, 255);
-        m_wrap(x0 + 6.0f, top + 17.0f, x1 - x0 - 12.0f, 7.0f, 4, 3.8f,
-               pg->items == BATTLE_ITEMS ? "Highlight Depth, Fog, Camera, Weather or Effects to see it here."
-                                         : "Highlight Smoothing, Water or Trees to see it here.", C_DIM, 1);
+        m_wrap(x0 + 6.0f, top + 20.0f, x1 - x0 - 12.0f, 7.0f, 4, 3.8f, "No preview for this one.", C_DIM, 1);
         return;
     }
     int nv = item_values(it), cur = 0;
     for (int k = 0; k < nv; k++)
         if (!SDL_strcasecmp(setting(it->key), it->values[k])) cur = k;
     int right = cur == po->off ? po->on : cur;       /* beside Off: what's chosen (or, Off chosen, the usual) */
-    int a = preview_index(po->clip[po->off]), b = preview_index(po->clip[right]);
+    int kind = po->kind, drawn = kind >= PK_TEAR;    /* (drawn: the field as the game shows it now) */
+    int a = preview_index(drawn ? preview_field_now() : po->clip[po->off]);
+    int b = drawn ? a : preview_index(po->clip[right]);
     const Clip *ca = preview_clip(a), *cb = preview_clip(b);
-    float h = w * (ca ? (float)ca->h / (float)ca->w : cb ? (float)cb->h / (float)cb->w : 164.0f / 320.0f);
-    if (po->smooth) h = w * 0.75f;                   /* (Smoothing: close up, 4:3) */
+    float gw, gh;
+    preview_game_size(&gw, &gh);
+    float ar = ca ? (float)ca->h / (float)ca->w : cb ? (float)cb->h / (float)cb->w : 164.0f / 320.0f;   /* the boxes' shape */
+    if (kind == PK_FIT) ar = fminf(ar, cb ? (float)cb->h / (float)cb->w : 224.0f / 400.0f);   /* (as wide as the widest) */
+    if (po->smooth) ar = 0.75f;                      /* (Smoothing: close up, 4:3) */
+    if (kind == PK_SCREEN) ar = 0.68f;               /* a monitor on its stand */
+    float h = w * ar;
     if (top + h + 10.0f > y1) h = y1 - top - 10.0f;
     for (int k = 0; k < 2; k++) {
         float bx = x0 + (float)k * (w + gap);
-        m_box(bx - 0.6f, top - 0.6f, bx + w + 0.6f, top + h + 0.6f, 1.2f, 0x2A3870, 0x2A3870, 255);
-        m_box(bx, top, bx + w, top + h, 0.8f, 0x080B1C, 0x080B1C, 255);
         int v = k ? right : po->off;
-        int mine = v == cur;
+        int mine = v == cur, set = v != po->off;     /* (set: the setting on, in this one) */
+        float p[4] = {bx, top, w, h};                /* where its clip goes */
+        if (kind != PK_SCREEN) {
+            m_box(bx - 0.6f, top - 0.6f, bx + w + 0.6f, top + h + 0.6f, 1.2f, 0x2A3870, 0x2A3870, 255);
+            m_box(bx, top, bx + w, top + h, 0.8f, 0x080B1C, 0x080B1C, 255);
+        }
+        const Clip *cc = k ? cb : ca;
+        if (kind == PK_FIT && cc) {                  /* whole, at the box's height */
+            fit_rect(bx, top, w, h, (float)cc->w / (float)cc->h, p);
+        } else if (kind == PK_SCREEN) {              /* a monitor: the game in a window on the desktop, or filling it */
+            float base = top + h - 1.4f, m[4];
+            fit_rect(bx + 1.0f, top + 0.5f, w - 2.0f, h - 6.0f, 16.0f / 9.0f, m);
+            float cx = m[0] + m[2] / 2, mb = m[1] + m[3];
+            m_box(cx - 2.6f, mb - 0.5f, cx + 2.6f, base, 0.6f, 0x3A4468, 0x262E4A, 255);           /* the stand */
+            m_box(cx - 10.0f, base - 0.4f, cx + 10.0f, base + 1.2f, 0.8f, 0x4A5680, 0x2A3252, 255);
+            m_box(m[0], m[1], m[0] + m[2], mb, 1.4f, 0x2E3656, 0x1A2038, 255);                    /* the bezel */
+            float sx = m[0] + 1.0f, sy = m[1] + 1.0f, sw = m[2] - 2.0f, sh = m[3] - 2.0f;
+            if (set) {
+                m_box(sx, sy, sx + sw, sy + sh, 0.3f, 0x000000, 0x000000, 255);
+                fit_rect(sx, sy, sw, sh, gw / gh, p);
+            } else {
+                m_box(sx, sy, sx + sw, sy + sh, 0.3f, 0x3A64B0, 0x1C3470, 255);                    /* the desktop */
+                m_box(sx, sy + sh - 2.2f, sx + sw, sy + sh, 0.2f, 0x18203C, 0x18203C, 230);         /* its taskbar */
+                float ww = sw * 0.6f, wh = ww * gh / gw, tb = 2.4f;
+                float wx = sx + (sw - ww) / 2, wy = sy + (sh - 2.2f - wh - tb) / 2;
+                m_box(wx - 0.4f, wy, wx + ww + 0.4f, wy + tb + wh + 0.4f, 0.6f, 0xDCE4F8, 0xB8C4E0, 255);   /* the window */
+                for (int d = 0; d < 3; d++)
+                    m_box(wx + ww - 1.6f - (float)d * 1.9f, wy + 0.8f, wx + ww - 0.6f - (float)d * 1.9f, wy + 1.8f,
+                          0.3f, d ? 0x7A86A8 : 0xE06A5A, d ? 0x7A86A8 : 0xE06A5A, 255);
+                p[0] = wx;
+                p[1] = wy + tb;
+                p[2] = ww;
+                p[3] = wh;
+            }
+        }
+        prev_show.px[k] = p[0];
+        prev_show.py[k] = p[1];
+        prev_show.pw[k] = p[2];
+        prev_show.ph[k] = p[3];
+        prev_show.tear[k] = kind == PK_TEAR && !set;
         m_text(bx + w / 2, top + h + 6.5f, 3.9f, it->names[v], mine ? C_GOLD : C_SOFT, 2);
     }
     if (ca && cb) {
@@ -3914,6 +4007,7 @@ static void draw_previews(const MenuPage *pg, float x0, float x1, float y0, floa
         prev_show.y = top;
         prev_show.w = w;
         prev_show.h = h;
+        prev_show.kind = kind;
         prev_show.smooth = !po->smooth ? 0 : !SDL_strcasecmp(it->values[right], "scale2x") ? 2 : 1;
         prev_show.cx = po->cx;
         prev_show.cy = po->cy;
@@ -3981,9 +4075,37 @@ static void previews_render(void) {
             SDL_UpdateTexture(tex, NULL, frame, c[j]->w * 2);
             SDL_SetTextureScaleMode(tex, prev_show.smooth && j ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
         }
-        SDL_FRect dst = {m_ox + prev_show.x[j] * m_S, m_oy + prev_show.y * m_S, prev_show.w * m_S, prev_show.h * m_S};
+        SDL_FRect dst = {m_ox + prev_show.px[j] * m_S, m_oy + prev_show.py[j] * m_S, prev_show.pw[j] * m_S,
+                         prev_show.ph[j] * m_S};
         SDL_FRect src = {0, 0, (float)c[j]->w, (float)c[j]->h};
-        if (prev_show.smooth) {                      /* close up on the party and the trees (the trees: PsiLok, 2026-11-19) */
+        if (up == 1.0f && dst.w < src.w * 0.98f)         /* (made bigger than it's shown: the menus) */
+            SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+        if (prev_show.kind == PK_TEAR) {                 /* V-Sync: the view panning; off, torn */
+            src.w = (float)c[j]->w * 0.64f;
+            src.h = fminf(src.w * dst.h / dst.w, (float)c[j]->h);
+            src.y = ((float)c[j]->h - src.h) / 2;
+            float room = (float)c[j]->w - src.w, t = (float)(SDL_GetTicks() % 240000u) / 1000.0f;
+            /* across and back at an even pace (1.8 s each way), so the tears show all the way */
+            #define PAN_AT(T) (room * fmaxf(0.0f, 1.0f - fabsf(fmodf((T) / 1.8f, 2.0f) - 1.0f)))
+            src.x = PAN_AT(t);
+            if (prev_show.tear[j]) {                     /* torn twice, each part a picture behind the one above, the
+                                                          * lines drifting (made plainer than a real tear, to be seen) */
+                float cut[4] = {0.0f, 0.18f + 0.22f * (0.5f + 0.5f * sinf(t * 1.1f)),
+                                0.58f + 0.22f * (0.5f + 0.5f * sinf(t * 0.8f + 2.0f)), 1.0f};
+                for (int s = 0; s < 3; s++) {
+                    SDL_FRect sp = src, dp = dst;
+                    sp.x = PAN_AT(t - 0.12f * (float)s);
+                    sp.y = src.y + src.h * cut[s];
+                    sp.h = src.h * (cut[s + 1] - cut[s]);
+                    dp.y = dst.y + dst.h * cut[s];
+                    dp.h = dst.h * (cut[s + 1] - cut[s]);
+                    SDL_RenderTexture(renderer, tex, &sp, &dp);
+                }
+                continue;
+            }
+            #undef PAN_AT
+        } else if (prev_show.kind != PK_CLIP) {          /* the whole picture, where the panel put it */
+        } else if (prev_show.smooth) {               /* close up on the party and the trees (the trees: PsiLok, 2026-11-19) */
             src.w = (float)c[j]->w * 0.3f;
             src.h = src.w * 0.75f;
             src.x = (float)c[j]->w * 0.62f - src.w * 0.5f;

@@ -163,6 +163,9 @@ static float t;                          /* seconds of battle shown */
 static float pan_x, pan_y, zoom_extra;   /* camera, eased */
 static float shake_amp, shake_t;
 static float pan_a;                      /* the camera pan (battleui_pan): pixels, eased */
+static float step_k;                     /* ... or with the Camera off, the step: 0..1, eased */
+#define STEP_UP   10.0f                  /* game pixels: the one stood there, up */
+#define STEP_DOWN 14.0f                  /* the others, down */
 /* the close-up this frame (the opening's, the strike's): every layer enlarged cl_z times more, the layers' point
  * (cl_x, cl_y_*) at their maps' centres; 1 and the centres themselves with none. For what is drawn over the picture
  * (the effects' sparks, the numbers by way of depth_to_screen) */
@@ -596,6 +599,8 @@ typedef struct {
     int out_stride, scale, ow;
     const uint32_t *pal, *tpal;
     int panning, t_out, a_out, lit, fog_on, tint_r, tint_g, tint_b;
+    int t_dy, a_dy, oh;                              /* the step (Camera off): the one stood there up, the others
+                                                      * down (output pixels), the others in front; the rows */
     const uint8_t *L[NLAYERS], *mi;                  /* the layers and the pan's picture, rows of ls */
     int ls, ui_div;                                  /* (ui_div: output pixels to a pixel of the windows' layer) */
     const int16_t *cb, *ce, *cp, *rb, *re, *rp;      /* the maps into them */
@@ -835,17 +840,27 @@ static void compose_rows(void *ctx, int y0, int y1) {
     const uint32_t *pal = q->pal, *tpal = q->tpal;
     int out_stride = q->out_stride, ow = q->ow;
     int panning = q->panning, t_out = q->t_out, a_out = q->a_out, lit = q->lit, fog_on = q->fog_on;
+    int t_dy = q->t_dy, a_dy = q->a_dy, step = t_dy || a_dy;
     int tint_r = q->tint_r, tint_g = q->tint_g, tint_b = q->tint_b;
     int ls = q->ls, ui_div = q->ui_div;
     const int16_t *cb = q->cb, *ce = q->ce, *cp = q->cp, *rb = q->rb, *re = q->re, *rp = q->rp;
     for (int Y = y0; Y < y1; Y++) {
         int vu = Y / ui_div, ve = row_en[Y], vp = row_pa[Y];
         int fe = re[Y], fp = rp[Y], fb = rb[Y];
+        /* the step: the one stood there read from lower down (drawn higher), the others from higher up */
+        int YT = Y - t_dy, YO = Y - a_dy;
+        int vpt = vp, fpt = fp, vpo = vp, fpo = fp;
+        if (step) {
+            vpt = YT >= 0 && YT < q->oh ? row_pa[YT] : -1;
+            fpt = YT >= 0 && YT < q->oh ? rp[YT] : 0;
+            vpo = YO >= 0 && YO < q->oh ? row_pa[YO] : -1;
+            fpo = YO >= 0 && YO < q->oh ? rp[YO] : 0;
+        }
         uint8_t *fr = front[Y];
         uint32_t *dst = out + (size_t)Y * (size_t)out_stride;
         const uint8_t *nrow1 = noise[fog_row1[Y]], *nrow2 = noise[fog_row2[Y]];
         int prof = fog_on ? fog_profile[Y] : 0;
-        if (Y > y0 && vu == (Y - 1) / ui_div && fe == re[Y - 1] && fp == rp[Y - 1] && fb == rb[Y - 1]
+        if (Y > y0 && !step && vu == (Y - 1) / ui_div && fe == re[Y - 1] && fp == rp[Y - 1] && fb == rb[Y - 1]
             && (!zf_on || zf_row[Y] == zf_row[Y - 1])
             && prof == (fog_on ? fog_profile[Y - 1] : 0)
             && (!prof || (fog_row1[Y] == fog_row1[Y - 1] && fog_row2[Y] == fog_row2[Y - 1]))) {
@@ -866,6 +881,8 @@ static void compose_rows(void *ctx, int y0, int y1) {
             l_pa = q->L[L_PARTY] + (size_t)fp * (size_t)ls;
             l_mi = q->mi + (size_t)fp * (size_t)ls;
         }
+        const uint8_t *l_pt = vpt >= 0 ? q->L[L_PARTY] + (size_t)fpt * (size_t)ls : NULL;   /* (the step's rows) */
+        const uint8_t *l_mo = vpo >= 0 ? q->mi + (size_t)fpo * (size_t)ls : NULL;
         for (int X = 0; X < ow; X++) {
             int u = -1, c;
             /* in front of the fog: cursor over an enemy, windows, party */
@@ -877,7 +894,10 @@ static void compose_rows(void *ctx, int y0, int y1) {
             if ((c = l_ui[X / ui_div]) != 0) { dst[X] = pal[c & 0x3F]; fr[X] = 3; continue; }
             int pu = 0;                                       /* the party here, and if put back (under action) */
             c = 0;
-            if (vp >= 0) {
+            if (step) {                                       /* the others in front, a step down; the one up */
+                if (l_mo && (u = col_pa[X]) >= 0 && (c = l_mo[cp[X]]) != 0) pu = 1;
+                if (!c && l_pt && (u = col_pa[X]) >= 0 && (c = l_pt[cp[X]]) != 0) pu = party_under[vpt][u];
+            } else if (vp >= 0) {
                 if (!panning) {
                     if ((u = col_pa[X]) >= 0 && (c = l_pa[cp[X]]) != 0) pu = party_under[vp][u];
                 } else {
@@ -957,7 +977,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         intro_t = intro_wait = intro_cast_t = intro_push = 0.0f;
         intro_k = 1.0f;
         intro_cast = 0;
-        ramp = t = pan_x = pan_y = zoom_extra = shake_amp = pan_a = 0.0f;
+        ramp = t = pan_x = pan_y = zoom_extra = shake_amp = pan_a = step_k = 0.0f;
         last_popups = 0;
         fog_tint_valid = 0;
         nparts = nhits = 0;
@@ -1238,11 +1258,19 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
      * place to it, everyone else slides the same way as one row, drawn whole
      * from the pictures kept at the menus (battleui.c), so no one overlaps;
      * and back again after. */
+    /* With the Camera off, the step instead (PsiLok, 2026-11-19: "have the attacking member step in front of the
+     * sitting member, sitting member or party could scoot back (pan south) during the attack"): the one stood
+     * there stays where the game put them but a step up, towards the enemies; everyone else a step down, back
+     * towards the windows, and in front of them; so the one in whose place they stand is still seen. */
     int pan_m = -1, pan_to = 0;
     battleui_pan(&pan_m, &pan_to);
+    int stepping = !battleui_pan_enabled();
+    if (stepping) pan_to = 0;
     ease(&pan_a, (float)pan_to, 1.0f - expf(-dt / 0.14f));
     if (pan_m < 0 && fabsf(pan_a) < 0.3f) pan_a = 0.0f;
-    int panning = pan_m >= 0 || pan_a != 0.0f;
+    ease(&step_k, stepping && pan_m >= 0 ? 1.0f : 0.0f, 1.0f - expf(-dt / 0.07f));
+    if (pan_m < 0 && step_k < 0.02f) step_k = 0.0f;
+    int panning = pan_m >= 0 || pan_a != 0.0f || step_k > 0.0f;
     int tx0 = 1 << 20, tx1 = -1, mx0 = 1 << 20, mx1 = -1;   /* columns: the one stood there; the others */
     if (panning) {
         for (int y = 0; y < h; y++)
@@ -1267,6 +1295,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     }
     int a_out = (int)lroundf(pan_a * (float)scale);                       /* the others' shift */
     int t_out = pan_m >= 0 ? (int)lroundf((pan_a - (float)pan_to) * (float)scale) : 0;   /* the one stood there */
+    int t_dy = (int)lroundf(-STEP_UP * step_k) * scale, a_dy = (int)lroundf(STEP_DOWN * step_k) * scale;   /* the step */
 
     /* objects: sprites that touch, or all but touch (an enemy's lunge, a
      * claw, a technique's burst), so no picture is ever split between layers */
@@ -1533,8 +1562,13 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
             obj_dy[r] = (int)lroundf((py - ey) * obj_w[r] * (float)scale);
             if (panning) {                                    /* with the one it is on, as the view turns */
                 int on_t = ox0[r] <= tx1 && ox1[r] >= tx0, on_m = ox0[r] <= mx1 && ox1[r] >= mx0;
-                if (on_t) obj_dx[r] += (int)lroundf((float)t_out * obj_w[r]);
-                else if (on_m) obj_dx[r] += (int)lroundf((float)a_out * obj_w[r]);
+                if (on_t) {
+                    obj_dx[r] += (int)lroundf((float)t_out * obj_w[r]);
+                    obj_dy[r] += (int)lroundf((float)t_dy * obj_w[r]);
+                } else if (on_m) {
+                    obj_dx[r] += (int)lroundf((float)a_out * obj_w[r]);
+                    obj_dy[r] += (int)lroundf((float)a_dy * obj_w[r]);
+                }
             }
         }
         for (int y = 0; y < h; y++)
@@ -1562,7 +1596,8 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     }
     bd_tint = tint;                                           /* (Zio's fog under the storm's light too) */
     bd_tm[0] = tmr; bd_tm[1] = tmg; bd_tm[2] = tmb; bd_ta[0] = tar; bd_ta[1] = tag; bd_ta[2] = tab;
-    Rows rows = {out, out_stride, scale, ow, pal, tpal, panning, t_out, a_out, lit, fog_on, tint_r, tint_g, tint_b};
+    Rows rows = {out, out_stride, scale, ow, pal, tpal, panning, t_out, a_out, lit, fog_on, tint_r, tint_g, tint_b,
+                 t_dy, a_dy, oh};
     const uint8_t *near_fine = NULL;                          /* (Scale2x: the sprites on the party, enlarged) */
     if (fine) {                                               /* every layer through the filter, now they are sorted */
         for (int n = 0; n < NLAYERS; n++) rows.L[n] = fine_make(n, layer[n], NULL, 0, w, h, fine);

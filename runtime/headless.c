@@ -92,8 +92,12 @@
  *     --bot-movie FILE   write the bot's input as a movie (--movie, movie.lua)
  *     --preview-scene S  a settings preview's scene (clip.h), with the party of the Boss
  *                        Arena's tenth fight: battle (a rainy fight on Uzo's grass, Motavia:
- *                        for Depth, Fog, Camera, Weather, Effects) or field (Uzo's coast:
- *                        Water, Trees, Smoothing); the settings as given (--depth L:1 ...)
+ *                        for Depth, Fog, Camera, Weather, Effects, Strike zoom), opening (its
+ *                        start), menus (its first turn, with the menus), field (Uzo's coast:
+ *                        Water, Trees, Smoothing, Widescreen ...) or zio (the Arena's fight with
+ *                        Zio at Nurvus: Backdrops); the settings as given (--depth L:1 ...)
+ *     --no-intro, --no-strike, --no-backdrops, --no-battle-ui
+ *                        Settings > Battles' Opening, Strike zoom, Backdrops and Menus off
  *     --clip FILE        with --preview-scene: its clip recorded into FILE, then stop
  *     --nice             run at a low priority (the game makes its previews this way)
  *     --worldmap L:PREFIX[:MODE]  the world map (worldmap.h; MODE 1 explored, 2 all of it: the
@@ -1134,16 +1138,29 @@ static void movie_add(uint64_t at, const char *keys, uint64_t len) {
  * Motavia: a random battle on its grass, fought by pressing on (Attack), the window recorded
  * holding the camera turning to the one attacked, hits, and the rain's lightning; or a walk
  * along its coast, random battles off. 1, or 0 for a scene not known. */
+/* (2026-11-19, more of them, PsiLok: "opening": the same battle from its start, the flash and the opening's close-up;
+ * "menus": its first turn, the whole picture with the menus; "zio": the Arena's fight with Zio at Nurvus, his stage --
+ * that one 2) */
 static int preview_scene(const char *name) {
     static const struct { uint64_t f; const char *k; uint64_t n; } CONT[] = {{290, "S", 4}, {460, "S", 4}, {560, "C", 2}, {620, "C", 2}};
-    int battle = !strcmp(name, "battle");
-    if (!battle && strcmp(name, "field")) return 0;
+    int opening = !strcmp(name, "opening"), menus = !strcmp(name, "menus"), zio = !strcmp(name, "zio");
+    int battle = !strcmp(name, "battle") || opening || menus;
+    if (!battle && !zio && strcmp(name, "field")) return 0;
     for (int k = 0; k < 4; k++) {                         /* Continue: by frame and by logical frame alike */
         presses[npress].frame = CONT[k].f;
         presses[npress].keys = parse_keys(CONT[k].k);
         presses[npress].len = CONT[k].n;
         npress++;
         movie_add(CONT[k].f, CONT[k].k, CONT[k].n);
+    }
+    if (zio) {                                            /* the Arena stages it; pressing on (Attack) */
+        for (uint64_t f = 900; f <= 3000; f += 30) movie_add(f, "C", 2);
+        clip_from = 1040;                                 /* his fog welling up, and Nightmare's face */
+        clip_to = 1288;
+        clip_h = 164;
+        clip_step = 4;
+        frame_limit = clip_to + 200;
+        return 2;
     }
     teleports[nteleport].frame = 700;
     teleports[nteleport].map = 0;
@@ -1160,9 +1177,9 @@ static int preview_scene(const char *name) {
             npoke++;
         }
         for (uint64_t f = 900; f <= 3400; f += 18) movie_add(f, "C", 2);
-        clip_from = 1092;
-        clip_to = 1340;
-        clip_h = 164;                                     /* the battle, above its menus */
+        clip_from = opening ? 764 : menus ? 840 : 1092;   /* (the battle starts at 784) */
+        clip_to = opening ? 960 : menus ? 1104 : 1340;
+        clip_h = menus ? 0 : 164;                         /* the battle, above its menus; or with them */
     } else {
         pokes[npoke].from = 720;                          /* Random_Battles_Flag: none */
         pokes[npoke].to = 1000;
@@ -1173,7 +1190,7 @@ static int preview_scene(const char *name) {
         clip_to = 1008;                                   /* (PsiLok, 2026-11-19: no walking in these) */
         clip_h = 0;
     }
-    clip_step = 4;
+    clip_step = menus ? 6 : 4;                            /* (the menus: made at twice the size, fewer frames) */
     frame_limit = clip_to + 200;
     return 1;
 }
@@ -1290,9 +1307,10 @@ int main(int argc, char **argv) {
             if (*e == ':') vehicle = atoi(e + 1);
             testbot_start(seed, walk, battles, vehicle);
         } else if (!strcmp(argv[i], "--preview-scene") && i + 1 < argc) {
-            if (!preview_scene(argv[++i])) { fprintf(stderr, "--preview-scene: battle or field\n"); return 2; }
-            arena_pick = 9;
-            preview_party = 1;
+            int s = preview_scene(argv[++i]);
+            if (!s) { fprintf(stderr, "--preview-scene: battle, opening, menus, zio or field\n"); return 2; }
+            arena_pick = s == 2 ? 5 : 9;                   /* (zio: the Arena's fight itself) */
+            preview_party = s != 2;
         } else if (!strcmp(argv[i], "--worldmap") && i + 1 < argc) {
             char *e;
             wm_at = strtoull(argv[++i], &e, 10);
@@ -1431,6 +1449,14 @@ int main(int argc, char **argv) {
             cheats_set(k, v);
         } else if (!strcmp(argv[i], "--no-pan")) {
             battleui_set_pan(0);
+        } else if (!strcmp(argv[i], "--no-intro")) {
+            depth_set_intro(0);                            /* Settings > Battles' Opening, Strike zoom, Backdrops off */
+        } else if (!strcmp(argv[i], "--no-strike")) {
+            depth_set_strike(0);
+        } else if (!strcmp(argv[i], "--no-backdrops")) {
+            depth_set_backdrops(0);
+        } else if (!strcmp(argv[i], "--no-battle-ui")) {
+            battleui_set_enabled(0);                       /* (after --battle-ui: the game's own windows) */
         } else if (!strcmp(argv[i], "--no-trees")) {
             fieldfx_set_trees(0);
         } else if (!strcmp(argv[i], "--no-water")) {

@@ -548,17 +548,18 @@ static void party_frame(void) {
     restore = standing & alive & ~out;
     if (!keep) restore &= ~present;                   /* the ones the game draws are its own */
     shown = restore | present;
-    /* the pan: the first one the game stood away from their place */
+    /* the pan: the first one the game stood away from their place (the Camera off too: depth.c steps them
+     * forward instead of turning to them) */
     pan_member = -1;
     pan_dx = 0;
-    if (pan_on && !keep && !results)
+    if (!keep && !results)
         for (int k = 0; k < 5; k++)
             if ((moved >> k & 1) && members[k].valid) { pan_member = k; pan_dx = (now_col[k] - members[k].col0) * 8; break; }
     /* a blow that fells the one stood there makes them blink, in the picture one frame in two: still
      * stood there in between, or the view turns back and forth with it */
     static int hold_member = -1, hold_dx, hold_left;
     if (pan_member >= 0) { hold_member = pan_member; hold_dx = pan_dx; hold_left = 6; }
-    else if (hold_member >= 0 && hold_left > 0 && pan_on && !keep && !results && members[hold_member].valid
+    else if (hold_member >= 0 && hold_left > 0 && !keep && !results && members[hold_member].valid
              && !((present | alive) >> hold_member & 1)) {
         hold_left--;
         pan_member = hold_member;
