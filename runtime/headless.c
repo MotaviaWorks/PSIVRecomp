@@ -1169,11 +1169,8 @@ static int preview_scene(const char *name) {
         pokes[npoke].addr = 0xECE7;
         pokes[npoke].val = 0;
         npoke++;
-        movie_add(770, "D", 48);
-        movie_add(830, "R", 40);
-        movie_add(885, "U", 40);
-        clip_from = 712;
-        clip_to = 960;
+        clip_from = 760;                                  /* the party stands still: only the water and the trees move */
+        clip_to = 1008;                                   /* (PsiLok, 2026-11-19: no walking in these) */
         clip_h = 0;
     }
     clip_step = 4;
@@ -1489,6 +1486,9 @@ int main(int argc, char **argv) {
             fieldmenu_set_enabled(1);                      /* the field menu, redrawn (needs --text FONT) */
         } else if (!strcmp(argv[i], "--battle-ui")) {
             battleui_set_enabled(1);                       /* modern battle menus (needs --text FONT) */
+        } else if (!strcmp(argv[i], "--no-group-items")) {
+            battleui_set_group_items(0);                   /* items one row each, as the game lists them (the battle */
+            fieldmenu_set_group_items(0);                  /* check's movies pick items by their row in that list) */
         } else if (!strcmp(argv[i], "--panels")) {
             panels_on = 1;                                 /* with --wide: side panels in exploration */
             frame_wide_field = 0;

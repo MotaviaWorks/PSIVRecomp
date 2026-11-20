@@ -35,10 +35,12 @@ import battle_probe as bp                      # noqa: E402
 ROOT = bp.ROOT
 EXE = bp.EXE
 FONT = 'C:/Windows/Fonts/segoeui.ttf' if os.name == 'nt' else str(ROOT / 'res' / 'fonts' / 'NotoSans-Regular.ttf')
+# (--no-group-items: the movies pick items by their row in the game's own list; one row a kind of item, 0.6's
+# default, puts another item on that row, and the battle goes otherwise. Found 2026-11-19: 24 of 36 saves.)
 ENHANCED = {
     'e1': ['--depth', '2:2', '--fog', '1', '--fx', '1', '--text', f'{FONT}:2', '--battle-ui', '--wide', '52',
-           '--sfx-synth'] + (['--custom-music', str(ROOT / 'music')] if (ROOT / 'music').is_dir() else []),
-    'e2': ['--text', f'{FONT}:2', '--battle-ui', '--wide', '52', '--panels', '--algol', '--sfx-synth'],
+           '--sfx-synth', '--no-group-items'] + (['--custom-music', str(ROOT / 'music')] if (ROOT / 'music').is_dir() else []),
+    'e2': ['--text', f'{FONT}:2', '--battle-ui', '--wide', '52', '--panels', '--algol', '--sfx-synth', '--no-group-items'],
 }
 SLOT = 0x100                                   # slot 1 in the port's save
 

@@ -478,32 +478,17 @@ static void fx_draw(uint32_t *out, int stride, int w, int h, int scale, float ca
             break;
         }
     }
-    /* lens flare when the effects are bright: a horizontal streak through the
-     * light and faint ghosts mirrored through the screen centre */
+    /* lens flare when the effects are bright: faint ghosts mirrored through the screen centre. (There was a
+     * horizontal streak through the light too: across an enemy casting, a bright line straight through its
+     * picture, it read as the picture torn in two -- PsiLok saw it on Xe-A-Thoul, 2026-11-19. Gone.) */
     float flare = (light_amount - 40.0f) / 160.0f;
     if (flare <= 0.0f) return;
     if (flare > 1.0f) flare = 1.0f;
     flare *= strength * 0.8f;
-    float lx = (cxs + (light_cx - cxs - F_ENEMY * cam_x) * s) * (float)scale;
-    float ly = (cys + (light_cy - cys - F_ENEMY * cam_y) * s) * (float)scale;
+    float lx = (cxs + (light_cx - cl_x - F_ENEMY * cam_x) * s) * (float)scale;
+    float ly = (cys + (light_cy - cl_y_en - F_ENEMY * cam_y) * s) * (float)scale;
     float m = fmaxf(light_rgb[0], fmaxf(light_rgb[1], light_rgb[2]));
     float tr = m > 0 ? light_rgb[0] / m : 1, tg = m > 0 ? light_rgb[1] / m : 1, tb = m > 0 ? light_rgb[2] / m : 1;
-    float len = 150.0f * (float)scale, thick = 1.4f * (float)scale;
-    int y0 = (int)(ly - thick * 4), y1 = (int)(ly + thick * 4);
-    for (int y = y0 < 0 ? 0 : y0; y <= y1 && y < oh; y++) {
-        float vy = ((float)y - ly) / thick, fy = expf(-vy * vy);
-        for (int x = (int)(lx - len) < 0 ? 0 : (int)(lx - len); x < ow && x <= (int)(lx + len); x++) {
-            if (layer[L_UI][y / scale][x / scale]) continue;
-            float fx = 1.0f - fabsf((float)x - lx) / len;
-            float a = fx * fx * fy * flare * 110.0f;
-            uint32_t c = out[(size_t)y * (size_t)stride + (size_t)x];
-            int cr = (int)(c >> 16 & 255) + (int)(a * (0.5f + 0.5f * tr)), cg = (int)(c >> 8 & 255) + (int)(a * (0.5f + 0.5f * tg)),
-                cb = (int)(c & 255) + (int)(a * (0.6f + 0.4f * tb));
-            out[(size_t)y * (size_t)stride + (size_t)x] = 0xFF000000u | (uint32_t)(cr > 255 ? 255 : cr) << 16 |
-                                                          (uint32_t)(cg > 255 ? 255 : cg) << 8 |
-                                                          (uint32_t)(cb > 255 ? 255 : cb);
-        }
-    }
     float ccx = (float)ow / 2.0f, ccy = (float)oh / 2.0f;
     static const float pos[3] = {0.55f, 1.25f, 1.7f}, rad[3] = {9.0f, 15.0f, 5.0f};
     for (int i = 0; i < 3; i++) {
@@ -1329,13 +1314,15 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
      * an object lies along the enemy's picture and not over it (an effect on an enemy is drawn over
      * it): it stays with the enemies whoever stands below, or the enemy comes apart (Xe-A-Thoul's
      * Giwat, with the one it is cast on stood under it and the view turned) */
-    static int obj_edge[128], obj_over[128];
+    static int obj_edge[128], obj_over[128], obj_tot[128];
     memset(obj_edge, 0, sizeof obj_edge);
     memset(obj_over, 0, sizeof obj_over);
+    memset(obj_tot, 0, sizeof obj_tot);
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
             if (!layer[L_ACTION][y][x]) continue;
             int r = sprite_root(parent, lines[y].sprite_no[x] & 127);
+            obj_tot[r]++;
             if (layer[L_ENEMY][y][x]) obj_over[r]++;
             else if ((x > 0 && layer[L_ENEMY][y][x - 1] && !layer[L_ACTION][y][x - 1])
                      || (x + 1 < w && layer[L_ENEMY][y][x + 1] && !layer[L_ACTION][y][x + 1])
@@ -1351,6 +1338,10 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                                                                * the party's -- an enemy's own would leave it) */
         if (ox1[r] < 0 || sprite_root(parent, r) != r || obj_ui[r]) continue;
         if (obj_edge[r] >= 16 && obj_over[r] * 2 < obj_edge[r]) continue;
+        /* ... or lies on it, most of it over the enemy's own picture and none of it on the party (Xe-A-Thoul
+         * raising his arms: his shoulders and his robe's upper part drawn as sprites over the rest of him; handed
+         * to the party's camera they slid off him, and came out of the fog) */
+        if (!obj_party[r] && obj_over[r] >= 16 && obj_over[r] * 2 >= obj_tot[r]) continue;
         int top = h;
         for (int x = ox0[r] < 0 ? 0 : ox0[r]; x <= ox1[r] && x < w; x++)
             if (ptop_col[x] < top) top = ptop_col[x];

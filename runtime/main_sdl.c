@@ -1950,8 +1950,8 @@ static const MenuItem DISPLAY_ITEMS[] = {
     {"Pixel shape", "video.aspect", {"square", "4:3"}, {"Square", "4:3 TV"}, 0, 0, 0, 0,
      "4:3 TV: the slightly narrow pixels the console showed on a television.", apply_enhancements},
     {"Smoothing", "video.filter", {"nearest", "linear", "scale2x"}, {"Off", "Soft", "Scale2x"}, 0, 0, 0, 0,
-     "Off keeps every pixel sharp. Soft blends them where the picture is scaled. Scale2x rounds off the "
-     "stair-steps and blurs nothing.", apply_video},
+     "Off keeps every pixel sharp. Soft blends them where the picture is scaled. Scale2x smooths the "
+     "whole picture, its edges, curves and outlines, and stays crisp, with no blur.", apply_video},
     {"V-Sync", "video.vsync", {"off", "on"}, {"Off", "On"}, 0, 0, 0, 0,
      "On: each picture waits for the display, so it never tears. Off: the game keeps its own time.", NULL},
     {"Water", "enhance.water", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
@@ -3682,14 +3682,15 @@ static const PreviewSpec PREVIEWS[] = {
     {"notrees", "field", "--water 1 --no-trees"},
 };
 #define N_PREVIEWS (int)(sizeof PREVIEWS / sizeof PREVIEWS[0])
-#define PREVIEWS_VERSION "1"                         /* in the files' names: a new one makes them again */
+#define PREVIEWS_VERSION "2"                         /* in the files' names: a new one makes them again */
 /* each setting with a preview: the clip for each of its values, which value is off, and the one
  * shown beside Off while Off is chosen */
-typedef struct { const char *key; const char *clip[3]; int off, on, smooth; } PreviewOf;
+typedef struct { const char *key; const char *clip[3]; int off, on, smooth; float cx, cy, cw; } PreviewOf;
+/* (cx, cy, cw: a close-up, its centre and width as parts of the clip's; cw 0 = the whole clip) */
 static const PreviewOf PREVIEW_OF[] = {
     {"video.filter", {"field", "field", "field"}, 0, 1, 1},
     {"enhance.water", {"field", "nowater"}, 1, 0, 0},
-    {"enhance.trees", {"field", "notrees"}, 1, 0, 0},
+    {"enhance.trees", {"field", "notrees"}, 1, 0, 0, 0.6625f, 0.57f, 0.4f},   /* close on the trees (PsiLok, 2026-11-19) */
     {"enhance.battle_depth", {"depth0", "battle", "depth2"}, 0, 1, 0},
     {"enhance.battle_fog", {"fog0", "battle", "fog2"}, 0, 1, 0},
     {"enhance.battle_camera", {"battle", "cam0"}, 1, 0, 0},
@@ -3856,6 +3857,7 @@ static struct {
     float x[2], y, w, h;                             /* the boxes */
     int smooth;                                      /* Smoothing: both close up, the second blended (1) or
                                                       * through Scale3x (2) */
+    float cx, cy, cw;                                /* a close-up (PreviewOf) */
 } prev_show;
 
 static const PreviewOf *preview_of(const MenuItem *it) {
@@ -3913,6 +3915,9 @@ static void draw_previews(const MenuPage *pg, float x0, float x1, float y0, floa
         prev_show.w = w;
         prev_show.h = h;
         prev_show.smooth = !po->smooth ? 0 : !SDL_strcasecmp(it->values[right], "scale2x") ? 2 : 1;
+        prev_show.cx = po->cx;
+        prev_show.cy = po->cy;
+        prev_show.cw = po->cw;
     } else {                                         /* not made yet */
         int made = previews_count();
         char t[120];
@@ -3978,11 +3983,18 @@ static void previews_render(void) {
         }
         SDL_FRect dst = {m_ox + prev_show.x[j] * m_S, m_oy + prev_show.y * m_S, prev_show.w * m_S, prev_show.h * m_S};
         SDL_FRect src = {0, 0, (float)c[j]->w, (float)c[j]->h};
-        if (prev_show.smooth) {                      /* close up on the party and the shore */
+        if (prev_show.smooth) {                      /* close up on the party and the trees (the trees: PsiLok, 2026-11-19) */
             src.w = (float)c[j]->w * 0.3f;
             src.h = src.w * 0.75f;
-            src.x = (float)c[j]->w * 0.5f - src.w * 0.55f;
-            src.y = (float)c[j]->h * 0.46f - src.h * 0.5f;
+            src.x = (float)c[j]->w * 0.62f - src.w * 0.5f;
+            src.y = (float)c[j]->h * 0.56f - src.h * 0.5f;
+        } else if (prev_show.cw > 0) {               /* a close-up, shaped as its box */
+            src.w = (float)c[j]->w * prev_show.cw;
+            src.h = src.w * dst.h / dst.w;
+            src.x = (float)c[j]->w * prev_show.cx - src.w * 0.5f;
+            src.y = (float)c[j]->h * prev_show.cy - src.h * 0.5f;
+            if (src.y < 0) src.y = 0;
+            if (src.y + src.h > (float)c[j]->h) src.y = (float)c[j]->h - src.h;
         } else if (dst.w / dst.h > src.w / src.h + 0.01f) {   /* (squeezed: the middle, whole height) */
             float sw = src.h * dst.w / dst.h;
             src.x = (src.w - sw) / 2;
