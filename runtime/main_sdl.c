@@ -1228,6 +1228,34 @@ static const char *test_capture_path;
 static struct { uint64_t frame, len; uint8_t keys; } test_keys[4096]; /* --test-keys */
 static int n_test_keys;
 static uint64_t test_rewind_frame;    /* --test-rewind F: a rewind asked for at frame F */
+static int test_surprise;             /* --test-surprise: every battle starts as the party's surprise attack */
+
+/* "Surprise Attack!": the game's word, at a battle's start, that the party has caught the enemies (they do not act
+ * in the first round). It is a window the game keeps up for (battle speed + 1) x 12 frames, 36 as a rule: the very
+ * frames of the opening's close-up, when the windows are out of the picture. So no one saw it (QueeQueg, on
+ * 0.6.0-beta: a round played before working out why the enemies had stood still). While the opening runs, that
+ * window's timer does not: the message has its own time once the view is back.
+ * RAM, from the disassembly: Battle_Routine $FF4100, Battle_Routine_2 $FF4108 (bit 15: the window still opening),
+ * $21 / $22 = Battle_SurpriseAttack / ...Msg, which counts $FFEE46 down from $FFEE66; Battle_Priority $FFEE45 (1:
+ * the party's surprise attack, $FF: an ambush). */
+static void battle_opening_message(void) {
+    static int tested;
+    if ((m68k_ram[0xEF00] << 8 | m68k_ram[0xEF01]) / 4 != 5) { tested = 0; return; }   /* (not in a battle) */
+    /* testing: the game works out who has the first round and acts on it within one frame (the end of
+     * GameMode_LoadBattle, then loc_52D6), so there is no setting Battle_Priority for it to find. Instead, what
+     * loc_52D6 does when the party has it, done after it: it has just set routine 2, to wait 8 frames for $1C */
+    if (test_surprise && !tested && !m68k_ram[0xEE45] && m68k_ram[0x4101] == 2 && m68k_ram[0x4103] == 0x1C
+        && m68k_ram[0x4105] == 8 && !m68k_ram[0x4108] && !m68k_ram[0x4109]) {
+        tested = 1;
+        m68k_ram[0xEE45] = 1;
+        m68k_ram[0x4101] = 0;
+        m68k_ram[0x4109] = 0x21;
+    }
+    if (depth_intro() <= 0.02f) return;
+    if (((m68k_ram[0x4108] << 8 | m68k_ram[0x4109]) & 0x7FFF) != 0x22) return;
+    m68k_ram[0xEE46] = m68k_ram[0xEE66];
+    m68k_ram[0xEE47] = m68k_ram[0xEE67];
+}
 static uint64_t test_click_frame;                                     /* --test-click */
 static float test_click_x, test_click_y;
 static uint64_t test_hover_frame;                                     /* --test-hover */
@@ -7263,6 +7291,7 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
     for (int i = 0; i < n_test_keys; i++)                /* testing: scripted keys */
         if (frame_count >= test_keys[i].frame && frame_count < test_keys[i].frame + test_keys[i].len) user |= test_keys[i].keys;
     if (depth_intro() > 0.25f) user = 0;                 /* a battle's opening: the menu is not in view yet */
+    battle_opening_message();                            /* ... nor the game's "Surprise Attack!" */
     {   /* the Esc menu over the running game: what the player holds is the menu's, until it is let go after */
         static int menu_hold;
         if (menu_live()) { menu_hold = 1; user = 0; }
@@ -8091,6 +8120,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--no-dialogs")) no_dialogs = 1;
         /* testing the rumble: --test-rumble F (see test_pad_rumble) */
         else if (!strcmp(argv[i], "--test-rumble") && i + 1 < argc) test_rumble_frame = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--test-surprise")) test_surprise = 1;
         else if (!strcmp(argv[i], "--test-ff") && i + 1 < argc) {   /* F:N: fast forward held N frames from F */
             char *e;
             test_ff_frame = strtoull(argv[++i], &e, 10);
