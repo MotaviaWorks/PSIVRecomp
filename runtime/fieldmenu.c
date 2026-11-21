@@ -42,7 +42,9 @@
 #define EQUIP_LIST      0xE380u   /* what the member could put on: item IDs */
 #define EQUIP_COUNT     0xE3A8u
 #define EQUIP_PAGE      0xE3E4u   /* 8 to a page */
-#define EQUIP_FLAGS     0xE3FDu   /* bit 0: the cursor is on the slots */
+#define EQUIP_FLAGS     0xE3FDu   /* bit 0: the cursor is on the slots, come from "No equippable item"; bit 1:
+                                     something was put on or taken off, the list is being made again */
+#define EQUIP_MEMBERS   0xE3F0u   /* how many are in the menu's party */
 #define MACRO_DATA      0xF444u   /* 8 macros of 5 turns: who (character ID), what (1 attack, 2 technique,
                                      3 skill, 4 item, 5 defend; 0 = no turn), which (its ID), a spare byte */
 #define MACRO_WORK      0xE310u   /* the macro being set up, the same way */
@@ -1752,7 +1754,15 @@ static int equip_focus(void) {
     if (now == R_MEMBERS) return F_MEMBER;
     if (now == R_NOTHING) return F_NOTHING;
     if (now == R_FULL) return F_FULL;
-    if (now == R_SLOTS && (r8(EQUIP_FLAGS) & 1)) return F_SLOTS;
+    if (now == R_SLOTS) {
+        /* The game's own test (Win_EquippedItems) of whether its cursor is on the slots. There are two ways
+         * onto them: Left at "No equippable item" (bit 0), and Left on the list's first page, which sets no
+         * flag: the list is still open, and the game tells by the windows it has open (7, or 6 with one in
+         * the party and so no window of names). The second was taken for the list here: the bar stayed on
+         * the list while Up and Down went through what is worn, and OK took it off (boredhermit, 0.6.0-beta) */
+        unsigned flags = r8(EQUIP_FLAGS);
+        if (!(flags & 2) && ((flags & 1) || r8(WINDOWS_OPENED) >= (r16(EQUIP_MEMBERS) == 1 ? 6u : 7u))) return F_SLOTS;
+    }
     if (now == R_LIST && (r16(RED_CURSOR) & 0x7FFC) == 0x34) {
         /* asked which hand, the game puts its cursor back on the slots ($A0 across) */
         int x = (int)r16(RED_CURSOR + 0x2C) + (int)(r16(CAMERA_X) & 7);
