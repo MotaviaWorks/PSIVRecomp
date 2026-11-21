@@ -1229,6 +1229,7 @@ static const char *test_capture_path;
 static struct { uint64_t frame, len; uint8_t keys; } test_keys[4096]; /* --test-keys */
 static int n_test_keys;
 static uint64_t test_rewind_frame;    /* --test-rewind F: a rewind asked for at frame F */
+static uint64_t test_rewind_menu;     /* --test-rewind-menu F: the rewind button held at frame F (its menu) */
 static int test_surprise;             /* --test-surprise: every battle starts as the party's surprise attack */
 
 /* "Surprise Attack!": the game's word, at a battle's start, that the party has caught the enemies (they do not act
@@ -1416,6 +1417,71 @@ static void rewind_now(void) {
     SDL_snprintf(rewind_msg, sizeof rewind_msg, "%s",
                  rewind_enabled() ? "Nothing to go back to yet" : "Rewind is off (Settings, Game)");
     rewind_msg_until = SDL_GetTicks() + 1800;
+}
+
+/* The rewind menu (PsiLok, 2026-11-20: "Holding rewind bring a rewind menu giving the player the option how far
+ * back they wish to go back with preview thumbnails"; a quick press still goes back ten seconds, as before). Each
+ * state rewind.c keeps (every ten seconds, two minutes of them) gets a picture: the next frame shown, as shown
+ * (battle depth, menus and all), made small. Held half a second, the rewind button opens a screen of them
+ * (MENU_REWIND, the game held under it); one chosen goes back there by the usual fade. */
+#define RW_HOLD_MS  450                  /* held this long: the menu, not a quick rewind */
+#define RW_THUMB_W  320                  /* a picture's width, in pixels */
+#define RW_THUMBS   16                   /* (rewind.c keeps 12) */
+#define RW_COLS     4
+static struct { uint64_t frame; int used; UiImage im; } rw_thumbs[RW_THUMBS];
+static uint64_t rw_want;                 /* a state was kept at this game frame: its picture is wanted */
+static int rw_wanted;
+static uint64_t rw_hold_since;           /* the rewind button went down then (SDL ticks); 0: not held */
+static int rw_hold_pad;                  /* ... and it was the gamepad's */
+static uint64_t rw_pts[RW_THUMBS];       /* the menu: the states it offers, newest first */
+static int rw_n;
+static uint64_t rw_now;                  /* ... and the game frame it was opened at */
+
+static void rw_on_keep(uint64_t frame) { rw_want = frame; rw_wanted = 1; }
+
+/* the picture just composed (src: sw x sh, a row every stride pixels), small, for the state kept */
+static void rw_thumb_take(const uint32_t *src, int sw, int sh, int stride) {
+    rw_wanted = 0;
+    if (!src || sw < 8 || sh < 8) return;
+    int k = -1;
+    for (int i = 0; i < RW_THUMBS && k < 0; i++) if (rw_thumbs[i].used && rw_thumbs[i].frame == rw_want) k = i;
+    for (int i = 0; i < RW_THUMBS && k < 0; i++) if (!rw_thumbs[i].used) k = i;
+    if (k < 0) {                                     /* the oldest goes */
+        k = 0;
+        for (int i = 1; i < RW_THUMBS; i++) if (rw_thumbs[i].frame < rw_thumbs[k].frame) k = i;
+    }
+    int tw = sw < RW_THUMB_W ? sw : RW_THUMB_W, th = (int)((int64_t)sh * tw / sw);
+    UiImage *im = &rw_thumbs[k].im;
+    if (im->w != tw || im->h != th || !im->rgba) {
+        free(im->rgba);
+        im->rgba = malloc((size_t)tw * (size_t)th * 4);
+        if (!im->rgba) { rw_thumbs[k].used = 0; im->w = im->h = 0; return; }
+        im->w = tw;
+        im->h = th;
+    }
+    for (int y = 0; y < th; y++) {                   /* each pixel the average of (a few points of) its box */
+        int y0 = y * sh / th, y1 = (y + 1) * sh / th;
+        if (y1 <= y0) y1 = y0 + 1;
+        for (int x = 0; x < tw; x++) {
+            int x0 = x * sw / tw, x1 = (x + 1) * sw / tw;
+            if (x1 <= x0) x1 = x0 + 1;
+            uint32_t r = 0, g = 0, b = 0, c = 0;
+            for (int yy = y0; yy < y1; yy += 1 + (y1 - y0) / 4)
+                for (int xx = x0; xx < x1; xx += 1 + (x1 - x0) / 4) {
+                    uint32_t q = src[(size_t)yy * (size_t)stride + (size_t)xx];
+                    r += q >> 16 & 255; g += q >> 8 & 255; b += q & 255; c++;
+                }
+            uint8_t *o = &im->rgba[((size_t)y * (size_t)tw + (size_t)x) * 4];
+            o[0] = (uint8_t)(r / c); o[1] = (uint8_t)(g / c); o[2] = (uint8_t)(b / c); o[3] = 255;
+        }
+    }
+    rw_thumbs[k].frame = rw_want;
+    rw_thumbs[k].used = 1;
+}
+
+static const UiImage *rw_thumb(uint64_t frame) {
+    for (int i = 0; i < RW_THUMBS; i++) if (rw_thumbs[i].used && rw_thumbs[i].frame == frame) return &rw_thumbs[i].im;
+    return NULL;
 }
 
 /* auto-advance in voiced scenes (scenevox.h): on or off, remembered, and said */
@@ -1722,6 +1788,10 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
         perf_begin(PERF_UPLOAD);
         SDL_UpdateTexture(texture, NULL, pixels, VDP_MAX_W * 4);
         perf_end(PERF_UPLOAD);
+    }
+    if (rw_wanted && compose) {                          /* a rewind state was kept: its picture (the rewind menu) */
+        if (depth_shown) rw_thumb_take(depth_pixels, depth_tex_w, depth_tex_h, depth_tex_w);
+        else rw_thumb_take(pixels, w, h, VDP_MAX_W);
     }
     perf_begin(PERF_PRESENT);
     /* round a picture that doesn't fill the window: the backdrop colour, as a
@@ -2123,7 +2193,8 @@ static const char *const *main_labels(void) {
 static const char *const CLASSIC_NOTE = "Off in Classic mode. Set Mode to Enhanced, on the Game page, to use it.";
 
 enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT, MENU_LAUNCHER, MENU_JOURNAL, MENU_LOAD, MENU_ARENA,
-       MENU_ARENA_PREP, MENU_ARENA_TPL, MENU_WAVE, MENU_WAVE_SETUP, MENU_WAVE_RESULT, MENU_BONUS, MENU_JUKEBOX };
+       MENU_ARENA_PREP, MENU_ARENA_TPL, MENU_WAVE, MENU_WAVE_SETUP, MENU_WAVE_RESULT, MENU_BONUS, MENU_JUKEBOX,
+       MENU_REWIND };
 static int menu_screen, menu_sel;     /* in Settings, -1 = the page bar */
 static int in_launcher;               /* the launcher is up: the game hasn't started */
 static int launcher_go;               /* its Start game was chosen */
@@ -3101,7 +3172,8 @@ static int menu_is_open(void) { return menu_screen != MENU_CLOSED; }
  * reaching it, and a voiced scene's auto-advance waiting. Not in the Boss Arena or Wave Mode (timed), not with F10,
  * not in the launcher; Settings > Game > This menu has the old way. */
 static int menu_live(void) {
-    return menu_is_open() && !menu_pauses && !paused && !in_launcher && !arena_mode && !wave_mode && !arena_scanning;
+    return menu_is_open() && !menu_pauses && !paused && !in_launcher && !arena_mode && !wave_mode && !arena_scanning
+        && menu_screen != MENU_REWIND;               /* (the rewind menu holds it: what it shows stays the newest) */
 }
 
 static const MenuPage *page_now(void) { return &PAGES[menu_page]; }
@@ -3214,6 +3286,35 @@ static void menu_turn_page(int dir) {
     if (menu_sel >= page_now()->n) menu_sel = page_now()->n - 1;
 }
 
+/* the rewind button held: the menu of where to go back to (or, with nothing to show, what a press says) */
+static void rewind_menu_open(void) {
+    rw_hold_since = 0;
+    if (arena_mode || arena_scanning || !rewind_enabled() || menu_is_open() || map_open) { rewind_now(); return; }
+    rw_n = rewind_points(rw_pts, RW_THUMBS);
+    if (!rw_n) { rewind_now(); return; }
+    rw_now = rewind_game_frame();
+    menu_open();
+    menu_screen = MENU_REWIND;
+    menu_sel = 0;
+}
+static void rewind_menu_go(void) {
+    if (menu_sel < 0 || menu_sel >= rw_n) return;
+    uint64_t f = rw_pts[menu_sel];
+    menu_close();
+    if (!rewind_go_to(f)) rewind_now();
+}
+/* the rewind button: down starts the hold; let go before RW_HOLD_MS, a quick rewind (platform_frame opens the
+ * menu once it has been held that long) */
+static void rewind_button(int down, int is_pad) {
+    if (down) {
+        if (!rw_hold_since) { rw_hold_since = SDL_GetTicks(); if (!rw_hold_since) rw_hold_since = 1; }
+        rw_hold_pad = is_pad;
+    } else if (rw_hold_since && rw_hold_pad == is_pad) {
+        rw_hold_since = 0;
+        rewind_now();
+    }
+}
+
 /* one key or button press while the menu is open */
 static void menu_input(int up, int down, int left, int right, int ok, int back) {
     if (back) {
@@ -3221,6 +3322,7 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
         else if (menu_screen == MENU_MAIN) menu_close();
         else if (menu_screen == MENU_SETTINGS && in_launcher) { menu_screen = MENU_LAUNCHER; menu_sel = L_SETTINGS; }
         else if (menu_screen == MENU_LOAD) { menu_screen = MENU_LAUNCHER; menu_sel = L_LOAD; }
+        else if (menu_screen == MENU_REWIND) menu_close();
         else if (menu_screen == MENU_ARENA_TPL) menu_screen = MENU_ARENA_PREP;
         else if (menu_screen == MENU_ARENA_PREP && prep_pick >= 0) prep_pick = -1;
         else if (menu_screen == MENU_ARENA_PREP && prep_copy >= 0) { prep_slot = prep_copy; prep_copy = -1; prep_say("Copy cancelled"); }
@@ -3243,6 +3345,14 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
     }
     if (menu_screen == MENU_JOURNAL) {
         journal_input(up, down, left, right, ok);
+        return;
+    }
+    if (menu_screen == MENU_REWIND) {                 /* newest first: Left / Right a step, Up / Down a row */
+        if (left && menu_sel > 0) menu_sel--;
+        if (right && menu_sel < rw_n - 1) menu_sel++;
+        if (up && menu_sel >= RW_COLS) menu_sel -= RW_COLS;
+        if (down && menu_sel + RW_COLS < rw_n) menu_sel += RW_COLS;
+        if (ok) rewind_menu_go();
         return;
     }
     if (menu_screen == MENU_ARENA_PREP) {             /* the macro bar, the turns, the buttons */
@@ -3511,6 +3621,14 @@ static const char *pad_shoulder_names(void) {
 static void menu_hint(char *out, size_t n) {
     const char *sep = m_ttf ? "   \xC2\xB7   " : "   ";
     int settings_screen = menu_screen == MENU_SETTINGS;
+    if (menu_screen == MENU_REWIND) {
+        int pad_in = menu_last_pad && pad;
+        if (touch_visible()) snprintf(out, n, "Tap a picture to go back there%sTap outside to stay", sep);
+        else if (pad_in) snprintf(out, n, "Choose%s%s go back there%s%s stay", sep, pad_button_name(pad_of[IN_C]), sep,
+                                  pad_button_name(pad_of[IN_B]));
+        else snprintf(out, n, "Arrows choose%sEnter go back there%sEsc stay", sep, sep);
+        return;
+    }
     if (menu_screen == MENU_JOURNAL) {                   /* the pages; scroll, choose, a hint */
         int pad_in = menu_last_pad && pad;
         char what[64];
@@ -5694,6 +5812,48 @@ static void wave_menu_tap(int kind, int index) {
     else { menu_sel = w->nroster; wave_setup_btn = index - 100; wave_menu_input(0, 0, 0, 0, 1); }
 }
 
+/* The rewind menu: the pictures, four a row, newest first, each with how long ago it was; the one chosen lit.
+ * (W, its panel's width: the pictures' shape is the game's, wide or not, so the panel is as tall as it needs) */
+#define RW_TOP  27.0f
+#define RW_GAP  6.0f
+#define RW_LBL  11.0f
+static float rewind_cell_w(float W) { return (W - 24.0f - RW_GAP * (RW_COLS - 1)) / RW_COLS; }
+static float rewind_cell_h(float W) {
+    const UiImage *im = rw_n ? rw_thumb(rw_pts[0]) : NULL;
+    return rewind_cell_w(W) * (im && im->w ? (float)im->h / (float)im->w : 0.5625f);
+}
+static float rewind_menu_h(float W) {
+    int rows = (rw_n + RW_COLS - 1) / RW_COLS;
+    if (rows < 1) rows = 1;
+    return RW_TOP + (float)rows * (rewind_cell_h(W) + RW_LBL) + 16.0f;
+}
+static void rewind_ago(char *out, size_t n, uint64_t frame) {
+    int secs = (int)((rw_now > frame ? rw_now - frame : 0) + 30) / 60;
+    if (secs < 60) snprintf(out, n, "%d seconds ago", secs);
+    else snprintf(out, n, "%d:%02d ago", secs / 60, secs % 60);
+}
+static void draw_rewind(float W, float H, const char *hint) {
+    m_text(12.0f, 17.0f, 6.4f, "Go back", C_GOLD, 0);
+    m_text(W - 12.0f, 17.0f, 4.0f, "How far? The game waits.", C_SOFT, 1);
+    float cw = rewind_cell_w(W), chh = rewind_cell_h(W);
+    for (int i = 0; i < rw_n; i++) {
+        float x0 = 12.0f + (float)(i % RW_COLS) * (cw + RW_GAP), y0 = RW_TOP + (float)(i / RW_COLS) * (chh + RW_LBL);
+        int sel = i == menu_sel;
+        if (sel) m_box(x0 - 2.0f, y0 - 2.0f, x0 + cw + 2.0f, y0 + chh + RW_LBL - 1.0f, 3.5f, C_GOLD, C_GOLD_LOW, 255);
+        const UiImage *im = rw_thumb(rw_pts[i]);
+        if (im && m_ttf) ui_sprite(&m_cv, im, x0 * m_S, y0 * m_S, cw * m_S, chh * m_S, sel ? 255 : 200);
+        else {
+            m_box(x0, y0, x0 + cw, y0 + chh, 2.0f, 0x0C1440, 0x0C1440, 255);
+            m_text(x0 + cw / 2.0f, y0 + chh / 2.0f + 2.0f, 5.0f, "?", C_DIM, 2);
+        }
+        char t[40];
+        rewind_ago(t, sizeof t, rw_pts[i]);
+        m_text(x0 + cw / 2.0f, y0 + chh + 7.4f, 3.8f, t, sel ? C_INK : C_SOFT, 2);
+        m_hit(x0 - 2.0f, y0 - 2.0f, x0 + cw + 2.0f, y0 + chh + RW_LBL - 1.0f, HIT_ROW, i);
+    }
+    m_text(12.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
+}
+
 static void menu_layout(float W, float H) {
     char hint[200];
     menu_hint(hint, sizeof hint);
@@ -5725,6 +5885,8 @@ static void menu_layout(float W, float H) {
         draw_settings(W, H, hint);
     } else if (menu_screen == MENU_JOURNAL) {
         draw_journal(W, H, hint);
+    } else if (menu_screen == MENU_REWIND) {
+        draw_rewind(W, H, hint);
     } else if (menu_screen == MENU_MAIN) {
         m_text(12.0f, 17.0f, 6.4f, menu_live() ? "Menu" : "Paused", C_GOLD, 0);   /* (the game goes on under it, or not) */
         rows_off = arena_mode ? 1u << M_REWIND : 0;
@@ -5768,7 +5930,8 @@ static uint64_t menu_signature(int ow, int oh) {
                         (uint64_t)(prep_boss + 2), (uint64_t)prep_slot, (uint64_t)(prep_row + 2), (uint64_t)prep_btn,
                         (uint64_t)(prep_grab + 2), (uint64_t)tpl_btn, prep_sig(), wave_menu_sig(),
                         (uint64_t)jukebox_song, (uint64_t)jukebox_top, (uint64_t)in_launcher, (uint64_t)(jukebox_src + 2),
-                        (uint64_t)jukebox_files, (uint64_t)settings_top, (uint64_t)launcher_song(), previews_sig()};
+                        (uint64_t)jukebox_files, (uint64_t)settings_top, (uint64_t)launcher_song(), previews_sig(),
+                        (uint64_t)rw_n, rw_n ? rw_pts[0] : 0};
     uint64_t h = 1469598103934665603ull;
     for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) h = (h ^ parts[i]) * 1099511628211ull;
     for (int i = 0; i < NSETTINGS; i++)
@@ -5802,10 +5965,10 @@ static void menu_draw(void) {
                    || menu_screen == MENU_ARENA_PREP || menu_screen == MENU_ARENA_TPL || menu_screen == MENU_WAVE
                    || menu_screen == MENU_WAVE_SETUP || menu_screen == MENU_WAVE_RESULT || menu_screen == MENU_BONUS
                    || menu_screen == MENU_JUKEBOX;
-        int big = settings || load || menu_screen == MENU_JOURNAL;
+        int big = settings || load || menu_screen == MENU_JOURNAL || menu_screen == MENU_REWIND;
         W = big ? 288.0f : menu_screen == MENU_QUIT ? 176.0f : 168.0f;
-        H = settings ? SETTINGS_H : load ? LOAD_H : big ? 168.0f : menu_screen == MENU_QUIT ? 86.0f
-          : 26.0f + 16.0f * N_MAIN + 26.0f;
+        H = settings ? SETTINGS_H : load ? LOAD_H : menu_screen == MENU_REWIND ? rewind_menu_h(W) : big ? 168.0f
+          : menu_screen == MENU_QUIT ? 86.0f : 26.0f + 16.0f * N_MAIN + 26.0f;
         /* about the game's own scale, small enough that Settings (the
          * tallest) always fits; the other menus keep the same scale */
         m_S = fminf(fminf((float)ow / 320.0f, (float)oh / 224.0f),
@@ -5926,6 +6089,8 @@ static void menu_tap(float rx, float ry) {
             else if (ix >= 600 && ix < 700 && prep_pick >= 0) { prep_pick_sel = ix - 600; prep_pick_set(); }
             else if (ix == 700 && prep_pick >= 0) prep_pick_move(-PICK_ROWS);
             else if (ix == 701 && prep_pick >= 0) prep_pick_move(PICK_ROWS);
+        } else if (menu_screen == MENU_REWIND) {       /* a picture: back there */
+            if (h->kind == HIT_ROW) { menu_sel = h->index; rewind_menu_go(); }
         } else if (menu_screen == MENU_ARENA_TPL) {    /* a template's Load or Save */
             if (h->index >= 500) { menu_sel = (h->index - 500) / 2; tpl_btn = (h->index - 500) % 2; tpl_ok(); }
         } else if (menu_screen == MENU_WAVE || menu_screen == MENU_WAVE_SETUP || menu_screen == MENU_WAVE_RESULT
@@ -6949,7 +7114,7 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
                 else screenshot_any(pixels, w, h, VDP_MAX_W);
             }
             if (e.key.key == SDLK_F10) paused = !paused;
-            if (sc == key_of[IN_REWIND]) rewind_now();
+            if (sc == key_of[IN_REWIND] && !in_launcher) rewind_button(1, 0);
             if (sc == key_of[IN_AUTO] && !in_launcher) toggle_auto_text();
             if (sc == key_of[IN_ENCOUNTERS] && !in_launcher) toggle_encounters();
             if (sc == key_of[IN_MAP] && !in_launcher) map_toggle();
@@ -6957,6 +7122,12 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             if (e.key.key == SDLK_F8) cycle_battle_fog();
             break;
         }
+        case SDL_EVENT_KEY_UP:                           /* the rewind button let go: a quick rewind, if it was quick */
+            if (e.key.scancode == key_of[IN_REWIND]) rewind_button(0, 0);
+            break;
+        case SDL_EVENT_GAMEPAD_BUTTON_UP:
+            if ((SDL_GamepadButton)e.gbutton.button == pad_of[IN_REWIND]) rewind_button(0, 1);
+            break;
         case SDL_EVENT_MOUSE_WHEEL:                      /* the field menu: the cursor a row on, or back */
             if (!menu_is_open() && !paused && walkto_enabled() && fieldmenu_active() && e.wheel.y != 0.0f)
                 fieldmenu_wheel(e.wheel.y < 0.0f);
@@ -6973,7 +7144,7 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
                 break;
             }
             if (!menu_is_open()) {
-                if (b == pad_of[IN_REWIND] && !in_launcher) rewind_now();
+                if (b == pad_of[IN_REWIND] && !in_launcher) rewind_button(1, 1);
                 if (b == pad_of[IN_AUTO] && !in_launcher) toggle_auto_text();
                 if (b == pad_of[IN_ENCOUNTERS] && !in_launcher) toggle_encounters();
                 if (b == pad_of[IN_MAP] && !in_launcher) map_toggle();
@@ -7136,6 +7307,12 @@ static void script_do(const char *tok) {
         e.gbutton.button = (Uint8)SDL_GetGamepadButtonFromString(tok + 4);
         e.gbutton.down = true;
         SDL_PushEvent(&e);
+    } else if (!strncmp(tok, "up:", 3)) {               /* up:KEY: the key let go (the rewind button's tap) */
+        e.type = SDL_EVENT_KEY_UP;
+        e.key.scancode = SDL_GetScancodeFromName(tok + 3);
+        e.key.key = SDL_GetKeyFromScancode(e.key.scancode, SDL_KMOD_NONE, false);
+        e.key.windowID = SDL_GetWindowID(window);
+        SDL_PushEvent(&e);
     } else {
         int shift = !strncmp(tok, "Shift+", 6);
         SDL_Scancode sc = SDL_GetScancodeFromName(shift ? tok + 6 : tok);
@@ -7285,6 +7462,7 @@ static void back_to_launcher(void);
 void platform_frame(const uint32_t *pixels, int w, int h) {
     if (headless_mode) { headless_platform_frame(pixels, w, h); return; }
     handle_events(pixels, w, h);
+    if (rw_hold_since && SDL_GetTicks() - rw_hold_since >= RW_HOLD_MS) rewind_menu_open();   /* held: the rewind menu */
     if (test_menu_frame && frame_count == test_menu_frame) {
         menu_open();
         menu_opened = 0;                                 /* no fade: a capture shows it at once */
@@ -7334,6 +7512,7 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
     }
     if (test_rumble_frame && frame_count == test_rumble_frame) rumble_test();
     if (test_rewind_frame && frame_count == test_rewind_frame) rewind_now();   /* testing: Backspace then */
+    if (test_rewind_menu && frame_count == test_rewind_menu) { rewind_menu_open(); menu_opened = 0; }   /* ... held */
     rumble_output();
     uint8_t user = read_input() | touch_pad();
     for (int i = 0; i < n_test_keys; i++)                /* testing: scripted keys */
@@ -8059,6 +8238,7 @@ int main(int argc, char **argv) {
         return headless_main(argc - 1, argv + 1);
     }
     int play_now = 0;
+    rewind_on_keep = rw_on_keep;                         /* (each state's picture, for the rewind menu) */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--rom") && i + 1 < argc) rom_arg = argv[++i];
         else if (!strcmp(argv[i], "--save") && i + 1 < argc) save_arg = argv[++i];
@@ -8125,6 +8305,8 @@ int main(int argc, char **argv) {
             test_capture_path = *e == ':' ? e + 1 : "capture.bmp";
         } else if (!strcmp(argv[i], "--test-rewind") && i + 1 < argc) {
             test_rewind_frame = strtoull(argv[++i], NULL, 10);
+        } else if (!strcmp(argv[i], "--test-rewind-menu") && i + 1 < argc) {
+            test_rewind_menu = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--test-keys") && i + 1 < argc) {
             /* F:KEYS:N,... -- keys held from frame F for N frames (UDLRABCS) */
             char *s = argv[++i];

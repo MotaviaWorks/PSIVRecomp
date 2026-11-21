@@ -47,6 +47,12 @@ void rewind_keep_now(void);
 int  rewind_restore_frame(uint64_t game_frame);
 /* the game's own frame count (logical frames), which goes back with a rewind */
 uint64_t rewind_game_frame(void);
+/* The rewind menu (main_sdl.c, PsiLok 2026-11-20: the rewind held down): told of each state as it is kept
+ * (the program takes a picture of the frame for it); the states that can be gone back to (three seconds old at
+ * least), newest first, as game frames; and a rewind to one of them, by the same fade (0: no such state). */
+extern void (*rewind_on_keep)(uint64_t game_frame);
+int rewind_points(uint64_t *frames, int max);
+int rewind_go_to(uint64_t frame);
 /* the front end's own counters go back too: called after a state is put back */
 extern void (*rewind_on_restore)(uint64_t game_frame);
 

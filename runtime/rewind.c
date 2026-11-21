@@ -39,6 +39,7 @@ static int show_w, show_h;
 static uint64_t game_frame;             /* the game's logical frames: they go back with it */
 static uint64_t next_keep = EVERY;
 void (*rewind_on_restore)(uint64_t game_frame);
+void (*rewind_on_keep)(uint64_t game_frame);
 
 typedef struct {
     uint64_t frame;
@@ -128,6 +129,7 @@ static void keep_state(void) {
     s->stack_len = slen;
     s->machine_len = mlen;
     s->data = data;
+    if (rewind_on_keep) rewind_on_keep(game_frame);
 }
 
 static void put_back(int i) {
@@ -171,6 +173,24 @@ int rewind_request(void) {
     target = i;
     phase = OUT;
     return 1;
+}
+
+int rewind_points(uint64_t *frames, int max) {
+    int n = 0;
+    if (!enabled || !running) return 0;
+    for (int i = pick(); i >= 0 && n < max; i--) frames[n++] = states[i].frame;
+    return n;
+}
+
+int rewind_go_to(uint64_t frame) {
+    if (!enabled || !running || phase == OUT || phase == HELD) return 0;
+    for (int i = 0; i < nstates; i++)
+        if (states[i].frame == frame) {
+            target = i;
+            phase = OUT;
+            return 1;
+        }
+    return 0;
 }
 
 void rewind_restart(void) { to_boot = 1; }
