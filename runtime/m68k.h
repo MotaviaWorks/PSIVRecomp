@@ -74,8 +74,18 @@ static inline void wr32(uint32_t a, uint32_t v) {
 /* ------------------------------------------------------------------ registers */
 #define SETB(r, v) ((r) = ((r) & 0xFFFFFF00u) | ((uint32_t)(v) & 0xFFu))
 #define SETW(r, v) ((r) = ((r) & 0xFFFF0000u) | ((uint32_t)(v) & 0xFFFFu))
+/* Sign extension. Visual Studio 2019's compiler (MSVC 19.29) loses the cast's extension where a
+ * register's low byte has just been set: `move.b (a1)+, d0` / `ext.w d0` came out zero-extended,
+ * and the sprite builders put every piece with a negative offset 256 lines down -- no one on the
+ * field (tatiukr's own build of 0.6.0-beta). A compiler older than the one the port is built and
+ * tested with (MSVC 19.44) gets the same value by arithmetic, with no cast to fold away. */
+#if defined(_MSC_VER) && _MSC_VER < 1944
+#define SX8(v)  ((((uint32_t)(v) & 0xFFu) ^ 0x80u) - 0x80u)
+#define SX16(v) ((((uint32_t)(v) & 0xFFFFu) ^ 0x8000u) - 0x8000u)
+#else
 #define SX8(v)  ((uint32_t)(int32_t)(int8_t)(v))
 #define SX16(v) ((uint32_t)(int32_t)(int16_t)(v))
+#endif
 
 static inline void PUSH16(uint32_t v) { A(7) -= 2; wr16(A(7), v); }
 static inline void PUSH32(uint32_t v) { A(7) -= 4; wr32(A(7), v); }
