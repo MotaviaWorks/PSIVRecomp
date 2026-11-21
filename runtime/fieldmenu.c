@@ -211,6 +211,16 @@ static void aside(const char *why, unsigned a, unsigned b) {
     if (on) fprintf(stderr, "fieldmenu: aside: %s (%X, %X); %u windows open\n", why, a, b, ui_ram8(WINDOWS_OPENED));
 }
 
+/* PSIV_FIELDMENU_LOG=1 too: each set of open windows in which one was read from under a later one,
+ * once -- their routines, bottom to top, and how many of each one's cells were not as the plane has them */
+static int covered[MAX_WINS];
+static int covered_log_on(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("PSIV_FIELDMENU_LOG") != NULL;
+    return on;
+}
+static void covered_log(int n);
+
 void fieldmenu_set_enabled(int on) { enabled = on; }
 int  fieldmenu_system_up(void) { return active && screen == SCR_SYSTEM; }
 int  fieldmenu_enabled(void) { return enabled; }
@@ -589,6 +599,38 @@ uint8_t fieldmenu_pad(uint8_t pad) {
     return out;
 }
 
+static void covered_log(int n) {
+    static uint32_t seen[64];
+    static int nseen;
+    int any = 0;
+    uint32_t key = 2166136261u;
+    for (int i = 0; i < n; i++) {
+        key = ((key ^ wins[i].routine) * 16777619u ^ (uint32_t)(covered[i] > 0)) * 16777619u;
+        any |= covered[i] > 0;
+    }
+    for (int i = 0; i < nseen && any; i++)
+        if (seen[i] == key) any = 0;
+    if (any) {
+        if (nseen < 64) seen[nseen++] = key;
+        fprintf(stderr, "fieldmenu: read from under a later window:");
+        for (int i = 0; i < n; i++)
+            fprintf(stderr, " %05X(%d,%d %dx%d; %d)", (unsigned)wins[i].routine, wins[i].x, wins[i].y, wins[i].w, wins[i].h, covered[i]);
+        fputc('\n', stderr);
+    }
+    memset(covered, 0, sizeof covered);
+}
+
+/* a window drawn as it stands, with the game's own words (the frames the equipment and macro screens
+ * stand in are the game's plain ones, and the status page's portrait, profile, stats and equipment:
+ * theirs to draw) */
+static int stands_plain(const Win *w) {
+    int k = kind_of(w->routine);
+    int own_frame = w->routine == R_GENERIC
+                    && (screen == SCR_EQUIP || screen == SCR_MACROS || screen == SCR_SHOP
+                        || (screen == SCR_STATUS && w->index >= 0xC9 && w->index <= 0xCC));
+    return screen == SCR_PLAIN || screen == SCR_CHEST || k == K_OTHER || (k == K_NOTE && !own_frame);
+}
+
 void fieldmenu_frame(void) {
     active = 0;
     sideways = 0;
@@ -603,9 +645,10 @@ void fieldmenu_frame(void) {
     if (n > MAX_WINS) { aside("too many windows", (unsigned)n, 0); return; }
     if (!(vdp.reg[1] & 0x40) || (vdp.reg[16] & 3) != 1) { aside("display", vdp.reg[1], vdp.reg[16]); return; }   /* display on, 64-cell planes */
 
-    /* the windows the game has open, and what stands in each */
+    /* the windows the game has open ... */
     int col0 = (int)(r16(CAMERA_X) >> 3), row0 = (int)(r16(CAMERA_Y) >> 3);
     int kinds = 0;
+    unsigned recs[MAX_WINS];
     for (int i = 0; i < n; i++) {
         unsigned p = r16(WIN_STACK + (unsigned)i * 2u);
         if (p < 0x6040 || p >= 0x8000) { aside("record", (unsigned)i, p); return; }
@@ -619,6 +662,29 @@ void fieldmenu_frame(void) {
         w->routine = ui_rom32(rec + 4);
         if (w->w < 3 || w->h < 3 || w->w > 42 || w->h > 30) { aside("size", (unsigned)w->w, (unsigned)w->h); return; }
         kinds |= 1 << kind_of(w->routine);
+        recs[i] = p;
+    }
+    nwins = n;
+    screen = group == WINGROUP_CHEST ? SCR_CHEST : kinds >> K_OTHER & 1 ? SCR_PLAIN
+           : group == WINGROUP_SYSTEM ? SCR_SYSTEM : group == WINGROUP_SHOP ? SCR_SHOP
+           : kinds >> K_EQUIP & 1 ? SCR_EQUIP : kinds >> K_ITEMS & 1 ? SCR_ITEMS
+           : kinds >> K_MACROS & 1 ? SCR_MACROS : kinds >> K_TECHS & 1 ? SCR_TECHS : kinds >> K_SKILLS & 1 ? SCR_SKILLS
+           : kinds >> K_STATUS & 1 ? SCR_STATUS : SCR_MAIN;
+    /* ... and what stands in each. The game opens one window over another (in its record: what was
+     * under it), and on a screen laid out anew a window drawn as it stands does not keep its place to
+     * the one opened over it: a message goes to the foot while the list it came up over stays in the
+     * middle. Ryuka's list of places and the Telepipe's showed a word of "Somehow the body has become
+     * lighter." in their last row, where a town's name had been (QueeQueg, 0.6.0-beta). Such a window
+     * is read as it stood before the later ones opened: from the last opened down, each is taken off
+     * a copy of the plane. The others are read from the plane as it is (a screen can count on that:
+     * the shop's "who can use it" list over the keeper). */
+    static uint16_t plane[64 * 32];
+    for (unsigned c = 0; c < 64 * 32; c++) plane[c] = (uint16_t)r16(PLANE_A_BUFFER + c * 2u);
+    int moved = screen != SCR_PLAIN && screen != SCR_CHEST;   /* (those two: every window where the game has it) */
+    for (int i = n - 1; i >= 0; i--) {
+        Win *w = &wins[i];
+        w->plain = stands_plain(w);
+        int before = moved && w->plain;
         memset(w->ch, 0, sizeof w->ch);
         memset(w->pal, 0, sizeof w->pal);
         memset(w->tall, 0, sizeof w->tall);
@@ -627,8 +693,10 @@ void fieldmenu_frame(void) {
         int in_pal[4] = {0};
         for (int cy = 0; cy < w->h; cy++)
             for (int cx = 0; cx < w->w; cx++) {
-                unsigned e = r16(PLANE_A_BUFFER + (unsigned)(((row0 + w->y + cy) & 31) * 64 + ((col0 + w->x + cx) & 63)) * 2u);
+                unsigned cell = (unsigned)(((row0 + w->y + cy) & 31) * 64 + ((col0 + w->x + cx) & 63));
+                unsigned live = r16(PLANE_A_BUFFER + cell * 2u), e = before ? plane[cell] : live;
                 int t = (int)(e & 0x7FF), inside = cy > 0 && cx > 0 && cy < w->h - 1 && cx < w->w - 1;
+                covered[i] += e != live;
                 uint32_t cp = 0;
                 int is_pic = 0, is_tall = 0;
                 w->raw[cy][cx] = (uint16_t)e;
@@ -659,25 +727,20 @@ void fieldmenu_frame(void) {
         w->usual = 0;
         for (int k = 1; k < 4; k++)
             if (in_pal[k] > in_pal[w->usual]) w->usual = k;
+        unsigned p = recs[i];
+        if (p + 4u + (unsigned)(w->w * w->h) * 2u > 0x8000u) continue;
+        for (int cy = 0; cy < w->h; cy++)
+            for (int cx = 0; cx < w->w; cx++)
+                plane[((row0 + w->y + cy) & 31) * 64 + ((col0 + w->x + cx) & 63)] =
+                    (uint16_t)r16(p + 4u + (unsigned)(cy * w->w + cx) * 2u);
     }
-    nwins = n;
-    screen = group == WINGROUP_CHEST ? SCR_CHEST : kinds >> K_OTHER & 1 ? SCR_PLAIN
-           : group == WINGROUP_SYSTEM ? SCR_SYSTEM : group == WINGROUP_SHOP ? SCR_SHOP
-           : kinds >> K_EQUIP & 1 ? SCR_EQUIP : kinds >> K_ITEMS & 1 ? SCR_ITEMS
-           : kinds >> K_MACROS & 1 ? SCR_MACROS : kinds >> K_TECHS & 1 ? SCR_TECHS : kinds >> K_SKILLS & 1 ? SCR_SKILLS
-           : kinds >> K_STATUS & 1 ? SCR_STATUS : SCR_MAIN;
+    if (covered_log_on()) covered_log(n);
+    else memset(covered, 0, sizeof covered);
     memset(healed, 0, sizeof healed);
     if (screen == SCR_PLAIN)                             /* (PSIV_FIELDMENU_LOG: which window is not laid out anew) */
         for (int i = 0; i < n; i++)
             if (kind_of(wins[i].routine) == K_OTHER) { aside("plain", (unsigned)wins[i].routine, r16(r16(WIN_STACK + (unsigned)i * 2u))); break; }
     for (int i = 0; i < n; i++) {
-        int k = kind_of(wins[i].routine);
-        /* (the frames the equipment and macro screens stand in are the game's plain ones, and the
-         * status page's portrait, profile, stats and equipment: theirs to draw) */
-        int own_frame = wins[i].routine == R_GENERIC
-                        && (screen == SCR_EQUIP || screen == SCR_MACROS || screen == SCR_SHOP
-                            || (screen == SCR_STATUS && wins[i].index >= 0xC9 && wins[i].index <= 0xCC));
-        wins[i].plain = screen == SCR_PLAIN || screen == SCR_CHEST || k == K_OTHER || (k == K_NOTE && !own_frame);
         /* the amount an item, a technique or a skill restored: a little window the game puts beside
          * the member's HP (one of five places) -- here it goes into the member's row */
         if (wins[i].plain && wins[i].routine == R_GENERIC && wins[i].w == 5 && wins[i].h == 3 && wins[i].x == 22
