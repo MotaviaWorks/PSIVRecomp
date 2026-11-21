@@ -422,7 +422,7 @@ static Setting settings[] = {
     {"enhance.battle_fog", "1", "drifting mist between the enemies and the party in battles: 0 off, 1 light, 2 heavy (F8 cycles)"},
     {"enhance.autosave", "on", "auto save: the game saved for you as you go -- each time the party comes to another place, and every few minutes on the way -- in a save of its own (saves/psiv-auto.srm) that the launcher's Continue and Load game take; your own saves are never touched: on / off"},
     {"enhance.menu_pause", "off", "the Esc menu holds the game: off = in the story the game goes on under the menu, its music with it (nothing you press reaches it, and a voiced scene waits on its page); on = the game and its sound stop while the menu is up. The Boss Arena and Wave Mode always stop: their fights are timed"},
-    {"enhance.rewind", "on", "rewind: Backspace or the left shoulder fades to white and back to about ten seconds before (a state kept every ten seconds, the last two minutes): on / off"},
+    {"enhance.rewind", "on", "rewind: Backspace or the left shoulder fades to white and back to about ten seconds before; held half a second, it opens a menu of how far back, with a picture of each moment (a state kept every ten seconds, the last two minutes): on / off"},
     {"enhance.trees", "on", "trees on the field sway in the breeze, light flickering through their leaves: on / off"},
     {"enhance.water", "on", "the field's living water: ripples, light, glints and foam drawn over the sea, rivers and pools: on / off"},
     {"cheat.hp", "off", "cheat: everyone's HP kept full: on / off"},
@@ -460,7 +460,7 @@ static Setting settings[] = {
     {"keys.c", "C", ""},
     {"keys.start", "Return", ""},
     {"keys.fast_forward", "Tab", "hold to run unthrottled"},
-    {"keys.rewind", "Backspace", "go back about ten seconds (enhance.rewind)"},
+    {"keys.rewind", "Backspace", "go back about ten seconds; held, the menu of how far back (enhance.rewind)"},
     {"keys.auto_text", "V", "turn auto-advance on or off: voiced scenes move on by themselves once each line is said"},
     {"keys.encounters", "E", "random battles off, or on again (the No random battles cheat; never in the Bonus Modes)"},
     {"keys.map", "M", "the world map, and away again (enhance.world_map)"},
@@ -2027,7 +2027,8 @@ static const MenuItem GAME_ITEMS[] = {
      "Saves for you as you go, each time you come to a new place: a save of its own, for the launcher's Continue "
      "and Load game. Your own saves are never touched.", apply_enhancements},
     {"Rewind", "enhance.rewind", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 0,
-     "Backspace or the left shoulder goes back about ten seconds: a fade to white and back.",
+     "Backspace or the left shoulder goes back about ten seconds: a fade to white and back. Held, it opens a menu "
+     "of how far back to go, with a picture of each moment.",
      apply_enhancements},
     {"This menu", "enhance.menu_pause", {"off", "on"}, {"Music plays on", "Pauses the game"}, 0, 0, 0, 0,
      "With this menu up the game goes on under it, its music with it; nothing you press reaches it. Or the game "

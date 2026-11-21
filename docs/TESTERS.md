@@ -69,7 +69,7 @@ Controls
 | | |
 |---|---|
 | Keyboard | arrows = D-pad, Z / X / C = A / B / C, Enter = Start |
-| | Esc = menu, Tab (hold) = fast forward, Backspace = go back 10 seconds, F11 = fullscreen, F12 = screenshot |
+| | Esc = menu, Tab (hold) = fast forward, Backspace = go back 10 seconds (hold it: choose how far), F11 = fullscreen, F12 = screenshot |
 | Gamepad | D-pad or left stick; west / south / east buttons = A / B / C; Start |
 | | Select / Back = menu, right shoulder (hold) = fast forward, left shoulder = go back 10 seconds |
 | Mouse | click to walk there; click a person or chest to walk up and talk or open it |
@@ -77,7 +77,8 @@ Controls
 | Touch | the on-screen pad; tap like a mouse click; the ≡ button = menu |
 | Android | Back = menu |
 
-The launcher has **Continue** and **Load game** once you have a save (Load
+The launcher has **Continue** and **Load game** once you have a save (your
+party stands under the logo; Load
 game shows every save with the party's faces, and the auto save on a tab of
 its own), **Start game**, **Bonus Modes** (the Boss Arena: the story's boss
 fights again with the party you had then, each on the clock; Wave Mode: five
@@ -110,7 +111,8 @@ speed, buttons) in the new look.
 New in battles (Battles page): a battle **opens** on a close-up of the
 enemies and the view draws back to the party; **Strike zoom**, an experiment,
 cuts in close when one of the party goes up to an enemy; Zio's stage has a
-new **backdrop**, a sea of fog drawn by the port. Each has a switch. And the
+new **backdrop**, a sea of fog drawn by the port, and the Hydrofoil's battles
+have the open sea. Each has a switch. And the
 menu (Esc) no longer stops the game in the story: its music plays on, and
 nothing you press reaches the game (Game page > This menu, for the old way;
 the Boss Arena and Wave Mode still stop under it).
@@ -161,7 +163,8 @@ Not in this beta
 
 - Intel Macs.
 - Save states: the game's own saves only. (Rewind goes back up to two minutes, ten
-  seconds a press: Backspace, the left shoulder, or "Go back 10 seconds" in the menu.)
+  seconds a press: Backspace, the left shoulder, or "Go back 10 seconds" in the menu.
+  Hold the key or the button and a menu shows how far back you can go, with a picture of each moment.)
 - Algol, the chip remastered, and Proto Algol, the first Algol, are new (Settings > Sound > Music).
 - Voices and remixed music: optional packs, separate downloads. The voice
   pack has the voiced story scenes and the party's voices in battle (those

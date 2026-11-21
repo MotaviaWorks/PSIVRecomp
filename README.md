@@ -146,7 +146,10 @@ Esc menu; Settings > Game > Rewind; PsiLok's design): the picture and the
 sound fade to white, and fade back in on the game as it was about ten
 seconds before -- one state kept every ten seconds, the last two minutes of
 them; again while it fades back in, ten seconds more. A note in the corner
-says how far it went. A state is the whole machine (the 68000 and its RAM,
+says how far it went. Held half a second, the key or the button opens
+**Go back** instead: those states, newest first, each with a small picture
+of the game at that moment and how long ago it was; one chosen goes back
+there by the same fade, and Esc stays (the game waits under it). A state is the whole machine (the 68000 and its RAM,
 the VDP, the Z80, the YM2612 and the PSG, the bus) and the game's own C
 stack: the recompiled game keeps its place in the C call chain, so it runs
 on a stack of its own (`runtime/coro.h`: a routine in assembly per platform,
@@ -257,7 +260,10 @@ The additions:
   has a backdrop of its own it is drawn in place of the game's. So far
   Zio's stage: a sea of blue fog under a black sky, welling up at his feet
   and flowing out from them, to every edge of the view (the game's own is
-  320 wide with a black notch under it).
+  320 wide with a black notch under it); and the Hydrofoil's battles: the
+  open sea under a sky, with a horizon, drifting clouds and waves running
+  toward the cockpit, wherever the boat is (the game shows the backdrop of
+  the place it happens to be in: a desert's mountains, a beach).
 - **Battle voices** (Sound page: on / off): the party speaks in battle -- a
   shout as they attack, a grunt when hit, a breath as they cast, a cry when
   they fall, a cheer when they win (`runtime/battlevox.c`). The voices are
