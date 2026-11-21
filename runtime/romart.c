@@ -10,6 +10,8 @@
 #define PORTRAIT_LAYOUT  0x2A2B36u    /* 6x6 name-table words, tiles $55C.., palette line 2 */
 #define PORTRAIT_FIRST   0x55C
 #define PAL_CHARACTERS   0x9F2FCu     /* Pal_Init line 2: the characters' palette */
+#define FIELD_ART_PTRS   0x5E732u     /* CharFieldArtPtrs: 0 Chaz .. $A Seth, raw tiles, 9 frames of 8 */
+#define FIELD_FRAME      256          /* a frame: 2 x 4 tiles, a column at a time (as sprites are) */
 
 /* Nemesis: a header word (bit 15 = rows XORed with the previous one, then
  * the number of tiles), a table of prefix codes (each giving a pixel value
@@ -104,5 +106,31 @@ int romart_portrait(int character, uint8_t *rgba) {
                     o[0] = pal[v][0]; o[1] = pal[v][1]; o[2] = pal[v][2]; o[3] = v ? 255 : 0;
                 }
         }
+    return 1;
+}
+
+int romart_field_sprite(int character, int frame, int flip, uint8_t *rgba) {
+    if (character < 0 || character > 10 || frame < 0 || frame > 8 || !m68k_rom ||
+        m68k_rom_size < PAL_CHARACTERS + 32 || m68k_rom_size < FIELD_ART_PTRS + 44) return 0;
+    uint32_t art = rom32(FIELD_ART_PTRS + (uint32_t)character * 4) + (uint32_t)frame * FIELD_FRAME;
+    if (art < 0x200 || art + FIELD_FRAME > m68k_rom_size) return 0;
+    uint8_t pal[16][3];
+    for (int i = 0; i < 16; i++) {                        /* ----bbb-ggg-rrr- */
+        unsigned c = (unsigned)(m68k_rom[PAL_CHARACTERS + i * 2] << 8 | m68k_rom[PAL_CHARACTERS + i * 2 + 1]);
+        pal[i][0] = (uint8_t)((c >> 1 & 7) * 255 / 7);
+        pal[i][1] = (uint8_t)((c >> 5 & 7) * 255 / 7);
+        pal[i][2] = (uint8_t)((c >> 9 & 7) * 255 / 7);
+    }
+    for (int t = 0; t < 8; t++) {
+        int tx = t / 4, ty = t % 4;
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++) {
+                uint8_t b = m68k_rom[art + (uint32_t)(t * 32 + y * 4 + x / 2)];
+                int v = x & 1 ? b & 15 : b >> 4, X = tx * 8 + x;
+                if (flip) X = ROMART_FIELD_W - 1 - X;
+                uint8_t *o = &rgba[((ty * 8 + y) * ROMART_FIELD_W + X) * 4];
+                o[0] = pal[v][0]; o[1] = pal[v][1]; o[2] = pal[v][2]; o[3] = v ? 255 : 0;
+            }
+    }
     return 1;
 }

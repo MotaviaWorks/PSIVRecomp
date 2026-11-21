@@ -32,6 +32,8 @@ void  ui_frame_window(const UiCanvas *cv, float x0, float y0, float x1, float y1
 void  ui_frame_window_a(const UiCanvas *cv, float x0, float y0, float x1, float y1, float unit, int alpha);
 /* an image (nearest neighbour: pixel art) into a rounded square; dim = grey and dark */
 void  ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float size, int dim, int alpha);
+/* an image as it is, at a size (nearest neighbour, no rounding: a sprite), its top left at x0, y0 */
+void  ui_sprite(const UiCanvas *cv, const UiImage *im, float x0, float y0, float w, float h, int alpha);
 /* ... and how its pixels are enlarged, as the Smoothing setting has the game's picture: 0 sharp
  * blocks, 1 blended (Soft), 2 through Scale2x / Scale3x (scalex.h) */
 void  ui_set_image_look(int look);

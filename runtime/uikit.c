@@ -351,6 +351,24 @@ void ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float s
     else if (n > 0) image_rows(&q, 0, n);
 }
 
+void ui_sprite(const UiCanvas *cv, const UiImage *im, float x0, float y0, float w, float h, int alpha) {
+    if (!im || !im->rgba || im->w < 1 || im->h < 1 || w < 1.0f || h < 1.0f || alpha <= 0) return;
+    int ix0 = (int)floorf(x0 + 0.5f), iy0 = (int)floorf(y0 + 0.5f), nw = (int)(w + 0.5f), nh = (int)(h + 0.5f);
+    for (int y = 0; y < nh; y++) {
+        int Y = iy0 + y;
+        if (Y < cv->y0 || Y >= cv->y1) continue;
+        int v = y * im->h / nh;
+        for (int x = 0; x < nw; x++) {
+            int X = ix0 + x;
+            if (X < cv->x0 || X >= cv->x1) continue;
+            const uint8_t *p = &im->rgba[((size_t)v * (size_t)im->w + (size_t)(x * im->w / nw)) * 4];
+            if (!p[3]) continue;
+            ui_blend(&cv->px[(size_t)Y * (size_t)cv->stride + (size_t)X],
+                     (uint32_t)p[0] << 16 | (uint32_t)p[1] << 8 | p[2], p[3] * alpha / 255);
+        }
+    }
+}
+
 void ui_frame_window_a(const UiCanvas *cv, float x0, float y0, float x1, float y1, float u, int alpha) {
     ui_round_rect(cv, x0, y0, x1, y1, 3.0f * u, 0x070B26, alpha);
     ui_round_rect(cv, x0 + u, y0 + u, x1 - u, y1 - u, 2.2f * u, 0xDDE1EE, alpha);

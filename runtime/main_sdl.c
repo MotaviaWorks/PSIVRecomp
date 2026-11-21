@@ -59,6 +59,7 @@
 #include "arenapic.h"
 #include "wave.h"
 #include "rewind.h"
+#include "romart.h"
 #include "weather.h"
 #include "fieldfx.h"
 #include "battlevox.h"
@@ -4546,6 +4547,36 @@ static int logo_tw;                              /* the width they were made for
 static float logo_glow_x, logo_glow_y;           /* how far the backlight reaches past the logo, in logo widths and heights */
 
 #define LAUNCH_PANEL_W 158.0f
+/* The party of the save Continue takes (the auto save, as a rule), walking in place under the logo while
+ * Continue or Load game is lit (PsiLok's idea, 2026-11-20): their field sprites, from the ROM
+ * (romart_field_sprite), facing down. Only beside the choices (a wide window), with the font. */
+#define LAUNCH_PARTY_H 40.0f                     /* units the row takes under the logo's line */
+static UiImage launch_spr[11][3];                /* standing, a step, the other step */
+static int launch_spr_tried;
+static int launch_party(int ids[5]) {
+    if (!cont.ok || !rom_ready) return 0;
+    const uint8_t *d = cont.page == AUTO_PAGE ? &auto_page[0x100] : &save_pages[cont.page][0x100 + cont.slot * 0xA00];
+    int n = 0;
+    for (int i = 0; i < 5; i++)
+        if (d[0x30A + i] < 11) ids[n++] = d[0x30A + i];
+    return n;
+}
+static int launch_sprites_ready(void) {
+    if (!launch_spr_tried && rom_ready) {
+        launch_spr_tried = 1;
+        if (!m68k_rom) bus_init(rom_buf, rom_size);      /* (the launcher's music puts the ROM there; without it) */
+        for (int c = 0; c < 11; c++)
+            for (int f = 0; f < 3; f++) {
+                uint8_t *px = malloc(ROMART_FIELD_W * ROMART_FIELD_H * 4);
+                if (px && romart_field_sprite(c, f, 0, px)) {
+                    launch_spr[c][f].w = ROMART_FIELD_W;
+                    launch_spr[c][f].h = ROMART_FIELD_H;
+                    launch_spr[c][f].rgba = px;
+                } else free(px);
+            }
+    }
+    return launch_spr[0][0].rgba != NULL;
+}
 typedef struct {
     int side;                                    /* the logo beside the choices */
     float logo_cx, logo_cy, logo_w, logo_h;      /* units; logo_w 0: the star */
@@ -4560,7 +4591,8 @@ static LaunchLayout launch_layout(float W, float H) {
         L.logo_w = fminf(fmaxf(W - LAUNCH_PANEL_W - 30.0f, 60.0f), 200.0f);
         L.logo_h = L.logo_w / aspect;
         float gap = (W - LAUNCH_PANEL_W - L.logo_w) / 3.0f;     /* the same at both edges and between */
-        float block = L.logo_h + 13.0f;                         /* the logo and the line under it */
+        int ids[5];
+        float block = L.logo_h + 13.0f + (launch_party(ids) ? LAUNCH_PARTY_H : 0.0f);   /* the logo, its line, the party */
         L.logo_cx = gap + L.logo_w / 2.0f;
         L.logo_cy = (H - block) / 2.0f + L.logo_h / 2.0f;
         L.title_y = L.logo_cy + L.logo_h / 2.0f + 11.0f;
@@ -4585,6 +4617,21 @@ static void draw_launcher(float W, float H, const char *hint) {
     float cx = L.menu_cx;
     if (L.logo_w > 0.0f) {                           /* the logo is the title: one line under it */
         m_text(L.logo_cx, L.title_y, 4.2f, "A native port of Phantasy Star IV", C_SOFT, 2);
+        int ids[5], n = L.side && m_ttf ? launch_party(ids) : 0;
+        if (n && launch_sprites_ready()) {
+            /* whole screen pixels to a game pixel, so the art stays even; a step every sixth of a second,
+             * as the game walks (standing, a step, standing, the other step) */
+            float k = fmaxf(1.0f, floorf(m_S + 0.25f)) / m_S, sw = 16.0f * k, sh = 32.0f * k, gap = 22.0f;
+            int walking = menu_sel == L_CONTINUE || menu_sel == L_LOAD;
+            static const int STEP[4] = {0, 1, 0, 2};
+            int f = walking ? STEP[(SDL_GetTicks() / 167) % 4] : 0;
+            float feet = L.title_y + 8.0f + sh, x = L.logo_cx - gap * (float)(n - 1) / 2.0f;
+            for (int i = 0; i < n; i++, x += gap) {
+                const UiImage *im = launch_spr[ids[i]][f].rgba ? &launch_spr[ids[i]][f] : &launch_spr[ids[i]][0];
+                m_box(x - 6.5f, feet - 2.2f, x + 6.5f, feet + 1.4f, 1.8f, 0x000000, 0x000000, 70);   /* a shadow */
+                ui_sprite(&m_cv, im, (x - sw / 2.0f) * m_S, (feet - sh) * m_S, sw * m_S, sh * m_S, 255);
+            }
+        }
     } else {                                         /* no logo (it did not load): the port's name under the star */
         m_text(L.logo_cx, L.title_y, 12.5f, "PSIV Recomp", C_GOLD, 2);
         m_text(L.logo_cx, L.title_y + 10.5f, 4.2f, "A native port of Phantasy Star IV", C_SOFT, 2);
