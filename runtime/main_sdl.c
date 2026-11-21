@@ -433,7 +433,7 @@ static Setting settings[] = {
     {"enhance.voices", "on", "the party's voices in battle, from the optional voice pack once it is installed (or files of your own in the voices folder): shouts as they attack, grunts when hit, a breath as they cast: on / off"},
     {"enhance.scene_voices", "on", "the voiced story scenes, from the optional voice pack once it is installed: on / off"},
     {"enhance.battle_camera", "on", "when an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping (needs battle depth); off: the one in the action steps forward, the rest step back: on / off"},
-    {"enhance.battle_backdrops", "on", "backdrops the port draws itself in place of the game's battle background, where it has one (Zio's stage: a sea of blue fog flowing from his feet, to every edge of the view; with battle depth, fog, effects or widescreen on): on / off"},
+    {"enhance.battle_backdrops", "on", "backdrops the port draws itself in place of the game's battle background, where it has one (Zio's stage: a sea of blue fog flowing from his feet, to every edge of the view; the Hydrofoil's battles: the open sea and sky, wherever it is; with battle depth, fog, effects or widescreen on): on / off"},
     {"enhance.battle_strike", "on", "an experiment: when one of the party goes up to an enemy to strike it, the view cuts in close on them for as long as they are there, and back (with the modern battle menus, and battle depth, fog, effects or widescreen on): on / off"},
     {"enhance.battle_intro", "on", "a battle opens on a close-up of the enemies, in a flash, then the view draws back to the party (about a second; with battle depth, fog, effects or widescreen on): on / off"},
     {"enhance.battle_weather", "1", "battle weather by place: rain and storms on Motavia's grass, beaches and sea, snow on Dezolis, mist clouds on Rykros, debris in space: 0 off, 1 light, 2 heavy"},
@@ -2052,7 +2052,8 @@ static const MenuItem BATTLE_ITEMS[] = {
      "An experiment: when one of the party goes up to an enemy to strike it, the view cuts in close on them, and back.",
      apply_enhancements},
     {"Backdrops", "enhance.battle_backdrops", {"on", "off"}, {"New", "Original"}, 0, 0, 0, 1,
-     "Zio's stage as a sea of blue fog flowing from his feet, to every edge of the view. The game's own elsewhere.",
+     "Zio's stage as a sea of blue fog flowing from his feet, and the open sea under a sky in the Hydrofoil's "
+     "battles, wherever it is. Both to every edge of the view. The game's own elsewhere.",
      apply_enhancements},
     {"Weather", "enhance.battle_weather", {"0", "1", "2"}, {"Off", "Light", "Heavy"}, 0, 0, 0, 1,
      "Rain and storms on Motavia, snow on Dezolis, mist clouds on Rykros, debris in space. Heavy: more of it.",

@@ -840,6 +840,121 @@ static int zf_stage(const VdpLine *lines, int w, int h, float *dim, float *white
     return 1;
 }
 
+/* The Hydrofoil's sea (depth_set_backdrops, as Zio's stage; PsiLok, 2026-11-20: "Build a ocean battle background
+ * for Hydrofoil battles"). The game gives a battle in the Hydrofoil the backdrop of the place it is over: open sea
+ * under clouds, or a desert's mountains, or a beach. The port's is always the open sea, to every edge of the view:
+ * a sky paling to the horizon, clouds drifting across it, the sun low on the right; the sea in perspective, its
+ * waves coming on toward the cockpit as the Hydrofoil runs, the sun's glitter on them. Made in Zio's stage's buffer
+ * (zf_buf: the same size, seen through the same camera), so the enemies stand where the game put them, the horizon
+ * where its own sea meets its sky. It takes the game's fades from the palette: how far the colours shown are from
+ * the ones the game fades between (most of them: a few are cycled, a flash takes some). */
+#define OC_HORIZON 90.0f                 /* game y */
+#define OC_RUN     2.5f                  /* the sea's run toward the cockpit, sea units a second */
+#define OC_SUN_DX  74.0f                 /* the sun: right of the middle, above the horizon (game pixels) */
+#define OC_SUN_UP  24.0f
+#define PAL_SHOWN  0xFB00u               /* Palette_Table_Buffer: the colours shown */
+#define PAL_SOURCE 0xFB80u               /* Palette_Table_Buffer_2: the ones the game fades from and to */
+static int oc_on;
+typedef struct { float t, cx, dim, white; int bw, bh; } OcGen;
+
+static int oc_cmp(const void *a, const void *b) {
+    float x = *(const float *)a, y = *(const float *)b;
+    return x < y ? -1 : x > y;
+}
+static void oc_fade(float *dim, float *white) {
+    float d[64], wv[64];
+    int n = 0;
+    for (int i = 0; i < 64; i++) {
+        unsigned c = (unsigned)(m68k_ram[PAL_SHOWN + i * 2] << 8 | m68k_ram[PAL_SHOWN + i * 2 + 1]);
+        unsigned g = (unsigned)(m68k_ram[PAL_SOURCE + i * 2] << 8 | m68k_ram[PAL_SOURCE + i * 2 + 1]);
+        int lc = (int)((c >> 1 & 7) + (c >> 5 & 7) + (c >> 9 & 7)), lg = (int)((g >> 1 & 7) + (g >> 5 & 7) + (g >> 9 & 7));
+        if (lg < 3) continue;                        /* (black: tells nothing) */
+        d[n] = lc >= lg ? 1.0f : (float)lc / (float)lg;
+        wv[n] = lc > lg && lg < 21 ? (float)(lc - lg) / (float)(21 - lg) : 0.0f;
+        n++;
+    }
+    if (!n) { *dim = 1.0f; *white = 0.0f; return; }
+    qsort(d, (size_t)n, sizeof *d, oc_cmp);
+    qsort(wv, (size_t)n, sizeof *wv, oc_cmp);
+    *dim = d[n / 2];
+    *white = wv[n / 2];
+}
+
+static inline float oc_mix(float a, float b, float k) { return a + (b - a) * k; }
+static inline float oc_clamp(float v) { return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; }
+static inline float oc_smooth(float e0, float e1, float v) {
+    float k = oc_clamp((v - e0) / (e1 - e0));
+    return k * k * (3.0f - 2.0f * k);
+}
+static inline uint32_t oc_rgb(float r, float g, float b, const OcGen *q) {
+    r *= q->dim; g *= q->dim; b *= q->dim;
+    r += (255.0f - r) * q->white; g += (255.0f - g) * q->white; b += (255.0f - b) * q->white;
+    r = r < 0.0f ? 0.0f : r > 255.0f ? 255.0f : r;
+    g = g < 0.0f ? 0.0f : g > 255.0f ? 255.0f : g;
+    b = b < 0.0f ? 0.0f : b > 255.0f ? 255.0f : b;
+    return 0xFF000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+}
+
+static void oc_rows(void *ctx, int y0, int y1) {
+    const OcGen *q = ctx;
+    float t = q->t, sunx = q->cx + OC_SUN_DX, suny = OC_HORIZON - OC_SUN_UP;
+    for (int by = y0; by < y1; by++) {
+        float gy = ((float)by + 0.5f) / ZF_RES - ZF_MY;
+        uint32_t *dst = zf_buf[by];
+        memset(zf_base[by], 0, (size_t)q->bw);
+        if (gy < OC_HORIZON) {                       /* the sky */
+            float up = OC_HORIZON - gy;              /* above the horizon */
+            float k = powf(oc_clamp(gy / OC_HORIZON), 1.7f);
+            float sr = oc_mix(46.0f, 196.0f, k), sg = oc_mix(98.0f, 222.0f, k), sb = oc_mix(184.0f, 240.0f, k);
+            float v = 140.0f - up * 0.9f + 1040.0f / (up + 14.0f);       /* (rows bunch toward the horizon) */
+            float va = 140.0f - (up + 3.0f) * 0.9f + 1040.0f / (up + 17.0f);   /* ... a little higher up */
+            float squash = 0.55f + 14.0f / (up + 14.0f);                  /* and further off, smaller */
+            for (int bx = 0; bx < q->bw; bx++) {
+                float ax = ((float)bx + 0.5f) / ZF_RES - ZF_MX;
+                float u = (ax - q->cx) * 0.42f * squash + q->cx * 0.42f + t * 1.4f;
+                float n = zf_noise(u, v) * 0.62f + zf_noise(u * 2.3f + 31.0f, v * 2.3f) * 0.28f
+                        + zf_noise(u * 5.1f + 77.0f, v * 5.1f) * 0.10f;
+                float cov = oc_smooth(0.50f, 0.66f, n) * oc_smooth(2.0f, 16.0f, up);
+                float above = zf_noise(u, va) * 0.62f + zf_noise(u * 2.3f + 31.0f, va * 2.3f) * 0.28f
+                            + zf_noise(u * 5.1f + 77.0f, va * 5.1f) * 0.10f;
+                float lit = oc_clamp(0.62f + (n - above) * 3.0f);             /* tops lit, undersides grey */
+                float r = oc_mix(sr, oc_mix(150.0f, 255.0f, lit), cov), g = oc_mix(sg, oc_mix(160.0f, 252.0f, lit), cov),
+                      b = oc_mix(sb, oc_mix(186.0f, 246.0f, lit), cov);
+                float dx = ax - sunx, dy = (gy - suny) * 1.15f, d = sqrtf(dx * dx + dy * dy);
+                float glow = 0.85f * expf(-d / 9.0f) + 0.30f * expf(-d / 46.0f);
+                if (d < 5.5f) glow = 1.6f;                                     /* its disc */
+                glow *= 1.0f - 0.7f * cov;
+                r += (255.0f - r) * oc_clamp(glow); g += (246.0f - g) * oc_clamp(glow); b += (214.0f - b) * oc_clamp(glow * 0.9f);
+                dst[bx] = oc_rgb(r, g, b, q);
+            }
+        } else {                                     /* the sea */
+            float dy = gy - OC_HORIZON + 0.7f, z = 240.0f / dy;          /* how far off, sea units */
+            float haze = expf(-dy / 6.0f), detail = oc_smooth(1.5f, 12.0f, dy);
+            float spread = 5.0f + dy * 0.55f;                              /* the sun's path widens toward us */
+            for (int bx = 0; bx < q->bw; bx++) {
+                float ax = ((float)bx + 0.5f) / ZF_RES - ZF_MX, gx = ax - q->cx;
+                float sx = gx * z * (1.0f / 70.0f), sz = z + t * OC_RUN;
+                float w1 = zf_noise(sx * 3.0f, sz * 16.0f), w2 = zf_noise(sx * 7.5f + 50.0f, sz * 40.0f - t * 9.0f);
+                float w3 = zf_noise(sx * 19.0f + 90.0f, sz * 95.0f + t * 17.0f);
+                float hgt = 0.5f + ((w1 * 0.6f + w2 * 0.3f + w3 * 0.1f) - 0.5f) * 1.6f * detail;
+                float ahead = zf_noise(sx * 3.0f, (sz + 0.06f) * 16.0f) * 0.6f
+                            + zf_noise(sx * 7.5f + 50.0f, (sz + 0.06f) * 40.0f - t * 9.0f) * 0.3f + w3 * 0.1f;
+                float face = oc_clamp(0.5f + (hgt - (0.5f + (ahead - 0.5f) * 1.6f * detail)) * 4.0f);   /* facing us: lit */
+                float r = oc_mix(10.0f, 34.0f, face), g = oc_mix(48.0f, 104.0f, face), b = oc_mix(104.0f, 168.0f, face);
+                float foam = oc_smooth(0.70f, 0.82f, hgt) * detail;                              /* the crests */
+                r = oc_mix(r, 214.0f, foam * 0.75f); g = oc_mix(g, 232.0f, foam * 0.75f); b = oc_mix(b, 242.0f, foam * 0.75f);
+                float lat = (ax - sunx) / spread;
+                float path = expf(-lat * lat);
+                float glint = path * (w3 > 0.62f ? 1.0f : 0.25f) * oc_smooth(0.45f, 0.75f, face);
+                r += (255.0f - r) * glint * 0.85f; g += (240.0f - g) * glint * 0.85f; b += (200.0f - b) * glint * 0.7f;
+                r = oc_mix(r, 176.0f, haze); g = oc_mix(g, 206.0f, haze); b = oc_mix(b, 230.0f, haze);   /* the far haze */
+                if (dy < 1.4f) { r = oc_mix(r, 236.0f, 0.5f); g = oc_mix(g, 244.0f, 0.5f); b = oc_mix(b, 248.0f, 0.5f); }
+                dst[bx] = oc_rgb(r, g, b, q);
+            }
+        }
+    }
+}
+
 static void compose_rows(void *ctx, int y0, int y1) {
     const Rows *q = ctx;
     uint32_t *out = q->out;
@@ -867,7 +982,7 @@ static void compose_rows(void *ctx, int y0, int y1) {
         const uint8_t *nrow1 = noise[fog_row1[Y]], *nrow2 = noise[fog_row2[Y]];
         int prof = fog_on ? fog_profile[Y] : 0;
         if (Y > y0 && !step && vu == (Y - 1) / ui_div && fe == re[Y - 1] && fp == rp[Y - 1] && fb == rb[Y - 1]
-            && (!zf_on || zf_row[Y] == zf_row[Y - 1])
+            && (!(zf_on || oc_on) || zf_row[Y] == zf_row[Y - 1])
             && prof == (fog_on ? fog_profile[Y - 1] : 0)
             && (!prof || (fog_row1[Y] == fog_row1[Y - 1] && fog_row2[Y] == fog_row2[Y - 1]))) {
             memcpy(dst, dst - out_stride, (size_t)ow * sizeof *dst);      /* the row above, again */
@@ -929,7 +1044,7 @@ static void compose_rows(void *ctx, int y0, int y1) {
             if (ve >= 0 && (u = col_en[X]) >= 0 && (c = l_ac[ce[X]]) != 0) far = tpal[c & 0x3F];
             else if (ve >= 0 && u >= 0 && (c = l_en[ce[X]]) != 0) far = tpal[c & 0x3F];
             else {
-                if (zf_on) {
+                if (zf_on || oc_on) {
                     far = zf_buf[zf_row[Y]][zf_col[X]];
                     if (bd_tint) far = tinted(far, bd_tm[0], bd_tm[1], bd_tm[2], bd_ta[0], bd_ta[1], bd_ta[2]);
                 } else far = tpal[l_bg[cb[X]] & 0x3F];
@@ -1580,15 +1695,22 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     {   /* Zio's stage: the fog made for this frame, and the way into it through the enemies' camera */
         float zdim = 1.0f, zwhite = 0.0f;
         zf_on = !vehicle && zf_stage(lines, w, h, &zdim, &zwhite);
+        oc_on = !zf_on && zf_want && h >= 200 && (m68k_ram[VEHICLE_INDEX] << 8 | m68k_ram[VEHICLE_INDEX + 1]) == 3;
         if (!zf_on) zf_wisp = 0.0f;
-        if (zf_on) {
-            int bh = (h + 2 * ZF_MY) * ZF_RES;
+        if (oc_on) {                                 /* the Hydrofoil's sea */
+            oc_fade(&zdim, &zwhite);
+            OcGen og = {t, (float)w / 2.0f, zdim, zwhite, (w + 2 * ZF_MX) * ZF_RES, (h + 2 * ZF_MY) * ZF_RES};
+            par_rows(oc_rows, &og, og.bh);
+        }
+        if (zf_on || oc_on) {
+            int bh = (h + 2 * ZF_MY) * ZF_RES, bw = (w + 2 * ZF_MX) * ZF_RES;
+            if (zf_on) {
             /* Nightmare's face: the enemies' picture in the sky over him, where nothing else of theirs is */
             long face = 0;
             for (int y = 0; y < 50; y += 2)
                 for (int x = w / 2 - 60; x < w / 2 + 60; x += 2) face += layer[L_ENEMY][y][x] != 0;
             ease(&zf_wisp, face > 250 ? 1.0f : 0.0f, 1.0f - expf(-dt / (face > 250 ? 0.7f : 0.45f)));
-            ZfGen g = {t, (float)w / 2.0f, zdim, zwhite, (w + 2 * ZF_MX) * ZF_RES, bh, zf_wisp};
+            ZfGen g = {t, (float)w / 2.0f, zdim, zwhite, bw, bh, zf_wisp};
             par_rows(zf_rows, &g, bh);
             par_rows(zf_cols, &g, g.bw);
             if (zf_wisp > 0.02f) par_rows(zf_wisps, &g, bh);
@@ -1603,11 +1725,12 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
                     }
                     zf_feet[y][x] = (uint8_t)f;
                 }
+            }
             float s = (1.0f + F_ENEMY * (zoom - 1.0f)) * iz;
             for (int X = 0; X < ow; X++) {
                 float q = ((float)X + 0.5f) / (float)scale, src = icx + (q - (float)w / 2.0f) / s + F_ENEMY * cam_en;
                 int bx = (int)floorf((src + (float)ZF_MX) * ZF_RES);
-                zf_col[X] = (int16_t)(bx < 0 ? 0 : bx >= g.bw ? g.bw - 1 : bx);
+                zf_col[X] = (int16_t)(bx < 0 ? 0 : bx >= bw ? bw - 1 : bx);
             }
             for (int Y = 0; Y < oh; Y++) {
                 float q = ((float)Y + 0.5f) / (float)scale, src = icy_en + (q - (float)h / 2.0f) / s + F_ENEMY * cam_y;
@@ -1625,7 +1748,8 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     if (fog_on || wx) {
         for (int y = 0; y < h * 6 / 7; y += 4)
             for (int x = 0; x < w; x += 4) {
-                uint32_t c = pal[layer[L_BG][y][x] & 0x3F];
+                uint32_t c = oc_on ? zf_buf[(y + ZF_MY) * ZF_RES][(x + ZF_MX) * ZF_RES]   /* (the Hydrofoil's sea) */
+                                   : pal[layer[L_BG][y][x] & 0x3F];
                 sr += c >> 16 & 255; sg += c >> 8 & 255; sb += c & 255; n++;
             }
         if (!n) n = 1;
