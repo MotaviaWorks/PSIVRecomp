@@ -297,6 +297,7 @@ typedef struct { float x0, y0, x1, y1; int d; } QtyHit;
 static QtyHit qhits[2];
 static int nqhits;
 static void buy_step(int d);
+static int equip_list_now(void);  /* (below, by the equipment's screen) */
 static int pulse;                 /* a click on nothing: a press of C, or of B (the right button), for a frame */
 static uint8_t pulse_key;
 static int wheel, wheel_rest;     /* turns of the wheel still to play: + down, - up */
@@ -624,6 +625,29 @@ void fieldmenu_wheel(int down) {
     if (wheel < -6) wheel = -6;
 }
 
+/* the equipment's list, a row on (d = 1) or back (-1) where the game's own arrow would not go there: over a
+ * page's edge, and, with `round`, from either end of the list to the other (without: an end stops it). The
+ * port walks the game's cursor there, nothing chosen. 1: taken (or stopped at an end); 0: the game's own
+ * arrow does it */
+static int equip_walking(void) { return drive.on && drive.nopick && drive.h.routine == R_LIST; }
+static int equip_step(int d, int round) {
+    int count = (int)r16(EQUIP_COUNT), walking = equip_walking();
+    if (count > 40) count = 40;
+    int cur = walking ? drive.h.page * 8 + drive.h.target : (int)r16(EQUIP_PAGE) * 8 + (int)r8(OPTION_3);
+    if (cur >= count) cur = count - 1;
+    int to = cur + d;
+    if (to < 0 || to >= count) {
+        if (!round) return 1;
+        to = (to + count) % count;
+    } else if (!walking && to / 8 == cur / 8) return 0;
+    drive.h = (Hit){0, 0, 0, 0, R_LIST, OPTION_3, EQUIP_PAGE, to % 8, to / 8, -1, PAD_UP, PAD_DOWN};
+    drive.on = drive.nopick = 1;
+    drive.hold = drive.rest = drive.presses = drive.waited = 0;
+    drive.ticks = 1;
+    drive.press = 0;
+    return 1;
+}
+
 uint8_t fieldmenu_pad(uint8_t pad) {
     static uint8_t was;
     static int held;
@@ -672,6 +696,16 @@ uint8_t fieldmenu_pad(uint8_t pad) {
         out &= (uint8_t)~arrows;
         pad = out;                                       /* (so the walk is not taken for the player's own buttons) */
     }
+    /* the equipment's list: one column here, pages of eight in the game, whose Down turns round inside its
+     * page (Right turns the page). Here Down goes on from a page's last row to the next page's first, Up
+     * from its first back to the one before's last, and from either end of the list round to the other; the
+     * port walks the game's cursor there. With one page there is nothing to do. (QueeQueg, 0.6.1-beta:
+     * with ten things to put on the ninth and tenth could not be reached with the arrows.) */
+    if (equip_list_now() && (int)r16(EQUIP_COUNT) > 8) {
+        if (fresh & (PAD_UP | PAD_DOWN)) equip_step(fresh & PAD_DOWN ? 1 : -1, 1);
+        /* while it walks, the arrows and OK are kept from the game: its cursor is not yet where the bar is */
+        if (equip_walking()) { out &= (uint8_t)~(arrows | PAD_A | PAD_C); pad = out; }
+    }
     if (pad) { drive.on = 0; pulse = 0; wheel = 0; return out; }   /* the player's own buttons come first */
     if (pulse) { pulse = 0; return pulse_key; }
     if (drive.on) {
@@ -706,6 +740,11 @@ uint8_t fieldmenu_pad(uint8_t pad) {
     }
     if (wheel_rest > 0) { wheel_rest--; return 0; }
     if (wheel) {                                         /* a turn of the wheel: the cursor a row on (the macro's commands: across) */
+        if (equip_list_now() && (int)r16(EQUIP_COUNT) > 8 && equip_step(wheel > 0 ? 1 : -1, 0)) {   /* over a page's edge */
+            wheel += wheel > 0 ? -1 : 1;
+            wheel_rest = 2;
+            return 0;
+        }
         int across = screen == SCR_MACROS && routine_of(r16(WINDOW_INDEX)) == R_MACRO_DO;
         uint8_t k = wheel > 0 ? (across ? PAD_RIGHT : PAD_DOWN) : (across ? PAD_LEFT : PAD_UP);
         wheel += wheel > 0 ? -1 : 1;
@@ -1978,6 +2017,9 @@ static int equip_focus(void) {
     return F_LIST;
 }
 
+/* the list of what could be put on has the game's cursor (not the question of which hand) */
+static int equip_list_now(void) { return active && screen == SCR_EQUIP && equip_focus() == F_LIST; }
+
 static void draw_equip(float x0, float y0, float x1, float y1) {
     int focus = equip_focus();
     int members[5], n = party(members), sel = (int)r8(OPTION_2);
@@ -2060,6 +2102,8 @@ static void draw_equip(float x0, float y0, float x1, float y1) {
         if (count > 40) count = 40;
         for (int i = 0; i < count; i++) list[i] = (uint8_t)r8(EQUIP_LIST + (unsigned)i);
         if (focus == F_LIST || focus == F_HAND) cursor = (int)r16(EQUIP_PAGE) * 8 + (int)r8(OPTION_3);
+        /* (walked over a page's edge by the arrows: the bar is where the walk ends) */
+        if (focus == F_LIST && drive.on && drive.nopick && drive.h.routine == R_LIST) cursor = drive.h.page * 8 + drive.h.target;
         if (cursor >= count) cursor = count - 1;
     }
     win(rx0, by0, x1, by1);
