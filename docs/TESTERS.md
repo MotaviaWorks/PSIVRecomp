@@ -60,7 +60,9 @@ Install the `.apk`; your browser or file manager will ask you to allow installs
 from it. The first time you choose Start game, pick your ROM in the file
 picker (the `.zip` is fine).
 Phones get an on-screen pad. Handhelds with built-in controls (Odin, Retroid and
-the like) start without one; touch the screen to bring it up.
+the like) start without one; touch the screen to bring it up. Settings >
+Controls has its size and opacity, and **Touch buttons: arrange** lets you drag
+the d-pad, A B C, Start and the menu button to where you want them.
 
 
 Controls
@@ -75,6 +77,7 @@ Controls
 | Mouse | click to walk there; click a person or chest to walk up and talk or open it |
 | | click battle commands and targets; right click = back |
 | Touch | the on-screen pad; tap like a mouse click; the ≡ button = menu |
+| | two fingers tapped away from the pad = go back 10 seconds; held half a second = the rewind menu |
 | Android | Back = menu |
 
 The launcher has **Continue** and **Load game** once you have a save (your

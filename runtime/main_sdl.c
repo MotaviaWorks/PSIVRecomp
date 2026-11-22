@@ -431,6 +431,9 @@ static Setting settings[] = {
     {"cheat.money", "off", "cheat: meseta kept at 999,999: on / off"},
     {"cheat.exp", "1", "cheat: experience from battles: 1 normal, 2 double, 4 quadruple"},
     {"cheat.weak", "off", "cheat: enemies have 1 HP: on / off"},
+    {"touch.size", "100", "the on-screen buttons' size, percent of the usual: 60 to 160"},
+    {"touch.opacity", "100", "how strongly the on-screen buttons are drawn, percent of the usual: 0 (unseen, still working) to 250"},
+    {"touch.layout", "", "where the on-screen buttons stand, as Settings > Controls > Arrange buttons left them: x,y of the d-pad, of A B C, of Start and of the menu button from their usual places, in thousandths of the screen's short side (empty: the usual places)"},
     {"enhance.voices", "on", "the party's voices in battle, from the optional voice pack once it is installed (or files of your own in the voices folder): shouts as they attack, grunts when hit, a breath as they cast: on / off"},
     {"enhance.scene_voices", "on", "the voiced story scenes, from the optional voice pack once it is installed: on / off"},
     {"enhance.battle_camera", "on", "when an enemy attacks someone, the view turns to face them: the party slides along instead of overlapping (needs battle depth); off: the one in the action steps forward, the rest step back: on / off"},
@@ -1803,7 +1806,7 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     SDL_RenderTexture(renderer, depth_shown ? depth_texture : texture, NULL, &dst);
     draw_walk_marker(&dst, fw, pm, w, h);
     map_draw_mini();                                     /* the world map, small, in the corner */
-    touch_draw(renderer, ow, oh);                        /* the on-screen pad, when touch is in use */
+    if (!touch_editing()) touch_draw(renderer, ow, oh);  /* the on-screen pad, when touch is in use (arranged: menu_draw) */
     float card = arena_card_alpha();                     /* the Boss Arena: no map, its card */
     if (card > 0.0f) arena_card(ow, oh, card);
     if (wave_mode) wave_hud(ow, oh, card);               /* Wave Mode: the battle and the clock */
@@ -1991,6 +1994,21 @@ static int rumble_setting(void) {
     return *v >= '0' && *v <= '3' ? *v - '0' : 2;
 }
 
+/* the on-screen buttons (touch.h): their size, how strongly they're drawn, where they stand */
+static void apply_touch(void) {
+    touch_set_look(setting_int("touch.size"), setting_int("touch.opacity"));
+    touch_set_layout(setting("touch.layout"));
+}
+static void touch_arrange(void) { touch_edit(1); }    /* Settings > Controls > Arrange buttons: drag them (touch.h) */
+static const char *touch_arrange_shown(void) { return setting("touch.layout")[0] ? "Your own" : "Standard"; }
+static void save_setting_str(const char *key, const char *v);
+static void touch_arrange_end(void) {                 /* Done, Esc, Back: kept */
+    char s[80];
+    touch_layout_get(s, sizeof s);
+    save_setting_str("touch.layout", s);
+    touch_edit(0);
+}
+
 static void apply_rumble(void) {                  /* changed in the menu: a taste of the new level */
     rumble_set_level(rumble_setting());
     rumble_test();
@@ -2143,6 +2161,14 @@ static const MenuItem CONTROL_ITEMS[] = {
     {"Rumble", "pad.rumble", {"off", "light", "normal", "strong"}, {"Off", "Light", "Normal", "Strong"}, 0, 0, 0, 0,
      "Blows landing, critical hits, enemies destroyed and the field's big moments, on a gamepad or a "
      "phone's motor.", apply_rumble},
+    {"Touch buttons: size", "touch.size", {0}, {0}, 60, 160, 10, 0,
+     "How large the on-screen buttons are, on a touch screen. 100% is the usual size.", apply_touch},
+    {"Touch buttons: opacity", "touch.opacity", {0}, {0}, 0, 250, 25, 0,
+     "How strongly the on-screen buttons are drawn over the game. 100% is the usual; at 0% they can't be seen "
+     "and still work.", apply_touch},
+    {"Touch buttons: arrange", NULL, {0}, {0}, 0, 0, 0, 0,
+     "Drag the d-pad, A B C, Start and the menu button to where your thumbs want them. Reset puts them back.",
+     NULL, touch_arrange, touch_arrange_shown},
 };
 
 static void apply_cheats(void);
@@ -2170,7 +2196,7 @@ static const MenuPage PAGES[] = {
     PAGE("Display", "Fullscreen, widescreen, and how the pixels are drawn.", DISPLAY_ITEMS),
     PAGE("Sound", "How loud the music, the sound effects and the voices are, and what plays them.", SOUND_ITEMS),
     PAGE("Battles", "The battle menus, and what's drawn over battles.", BATTLE_ITEMS),
-    PAGE("Controls", "Walking, clicks and taps, and rumble.", CONTROL_ITEMS),
+    PAGE("Controls", "Walking, clicks and taps, rumble, and the on-screen buttons.", CONTROL_ITEMS),
     PAGE("Cheats", "Make the game easier. All off unless you turn them on.", CHEAT_ITEMS),
     {"Buttons", "What each button and key does.", NULL, 0, draw_buttons_page},
 };
@@ -4466,7 +4492,7 @@ static void draw_buttons_page(float W, float H) {
     else key_label(IN_FF, r[n].other, sizeof r[n].other);
     n++;
     r[n] = (Row){"Go back 10 seconds", NULL, pad_label(pad_of[IN_REWIND]), ""};
-    if (MOBILE) snprintf(r[n].other, sizeof r[n].other, "In the menu");
+    if (MOBILE) snprintf(r[n].other, sizeof r[n].other, "Two-finger tap (hold: menu)");
     else key_label(IN_REWIND, r[n].other, sizeof r[n].other);
     n++;
     r[n] = (Row){"Auto-advance voiced scenes", NULL, pad_label(pad_of[IN_AUTO]), ""};
@@ -5943,6 +5969,10 @@ static uint64_t menu_signature(int ow, int oh) {
 static void menu_draw(void) {
     int ow, oh;
     SDL_GetRenderOutputSize(renderer, &ow, &oh);
+    if (touch_editing()) {                           /* the on-screen buttons being arranged: only them */
+        touch_draw(renderer, ow, oh);
+        return;
+    }
     float fade = menu_opened ? fminf(1.0f, (float)(SDL_GetTicks() - menu_opened) / 140.0f) : 1.0f;
     int launcher_screen = menu_screen == MENU_LAUNCHER;
     if (!launcher_screen) {                          /* dim the game (or the launcher) behind */
@@ -7067,6 +7097,27 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
     SDL_GetRenderOutputSize(renderer, &ow, &oh);
     while (SDL_PollEvent(&e)) {
         if (map_open && !menu_is_open() && map_event(&e, ow, oh)) continue;   /* the world map takes them */
+        if (touch_editing()) {                           /* the on-screen buttons being arranged: the mouse drags too */
+            float rx, ry;
+            if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                if (e.button.button == SDL_BUTTON_LEFT && e.button.which != SDL_TOUCH_MOUSEID) {
+                    SDL_RenderCoordinatesFromWindow(renderer, e.button.x, e.button.y, &rx, &ry);
+                    touch_edit_pointer(e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? 0 : 2, rx, ry, ow, oh);
+                }
+                continue;
+            }
+            if (e.type == SDL_EVENT_MOUSE_MOTION) {
+                if (e.motion.which != SDL_TOUCH_MOUSEID) {
+                    SDL_RenderCoordinatesFromWindow(renderer, e.motion.x, e.motion.y, &rx, &ry);
+                    touch_edit_pointer(1, rx, ry, ow, oh);
+                }
+                continue;
+            }
+            if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {   /* any key or button: done */
+                if (e.type != SDL_EVENT_KEY_DOWN || !e.key.repeat) touch_arrange_end();
+                continue;
+            }
+        }
         switch (e.type) {
         case SDL_EVENT_QUIT:
             quit(0);
@@ -7239,6 +7290,11 @@ static void handle_events(const uint32_t *pixels, int w, int h) {
             break;
         }
     }
+    if (touch_edit_take_done()) touch_arrange_end();     /* arranging them: Done */
+    switch (touch_take_rewind()) {                       /* two fingers: the rewind button, tapped or held */
+    case 1: if (!menu_is_open() && !map_open && !in_launcher) rewind_now(); break;
+    case 2: if (!menu_is_open() && !map_open && !in_launcher) rewind_menu_open(); break;
+    }
     /* the on-screen buttons: the menu key, and presses that steer the menu */
     if (touch_take_menu()) {
         if (menu_is_open()) menu_input(0, 0, 0, 0, 0, 1);
@@ -7302,6 +7358,18 @@ static void script_do(const char *tok) {
         e.motion.windowID = SDL_GetWindowID(window);
         SDL_RenderCoordinatesToWindow(renderer, x, y, &e.motion.x, &e.motion.y);
         SDL_PushEvent(&e);
+    } else if (!strncmp(tok, "finger:", 7)) {          /* finger:N:down|move|up:X:Y (render pixels): a touch */
+        int id = 0, ow = 0, oh = 0;
+        char ph[8] = "";
+        if (sscanf(tok + 7, "%d:%7[a-z]:%f:%f", &id, ph, &x, &y) == 4 && SDL_GetRenderOutputSize(renderer, &ow, &oh) && ow && oh) {
+            e.type = ph[0] == 'd' ? SDL_EVENT_FINGER_DOWN : ph[0] == 'm' ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_FINGER_UP;
+            e.tfinger.touchID = 1;
+            e.tfinger.fingerID = (SDL_FingerID)(id + 1);
+            e.tfinger.x = x / (float)ow;
+            e.tfinger.y = y / (float)oh;
+            e.tfinger.windowID = SDL_GetWindowID(window);
+            SDL_PushEvent(&e);
+        }
     } else if (!strncmp(tok, "pad:", 4)) {             /* a gamepad button by SDL name (with --test-rumble's pad) */
         e.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
         e.gbutton.which = pad ? SDL_GetGamepadID(pad) : 0;
@@ -8438,6 +8506,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     touch_init(MOBILE && !SDL_HasGamepad());             /* a phone starts with the on-screen pad, a handheld without */
+    apply_touch();
     SDL_SetRenderVSync(renderer, 0);                    /* paced to 59.92 Hz ourselves */
 #ifndef _WIN32
     {                                                   /* the icon (Windows: the exe's own, res/psiv.rc) */

@@ -104,7 +104,10 @@ is committed in `res/fonts/` with its licence.
   on a current distro. Check: `objdump -T psiv | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1`.
 - **Android:** `libmain.so` (the port) under SDL3's activity
   (`android/java`), landscape, an on-screen pad (`runtime/touch.c`) that hides
-  when a gamepad or key is used; Back opens the menu. The APK is signed with
+  when a gamepad or key is used; Back opens the menu. The pad's size and
+  opacity, and where each control stands, are set in Settings > Controls
+  (`touch.size`, `touch.opacity`, `touch.layout`; "Touch buttons: arrange"
+  shows the pad alone to be dragged about). The APK is signed with
   `~/.psiv-keys/psiv-alpha.jks` (made on first build, password beside it):
   keep that key, since Android only installs updates signed with the same one.
 - **macOS (Apple Silicon, 11+):** `PSIV Recomp.app`. Its home is the pref
