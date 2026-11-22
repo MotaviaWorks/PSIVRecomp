@@ -955,6 +955,111 @@ static void oc_rows(void *ctx, int y0, int y1) {
     }
 }
 
+/* Profound Darkness's backdrop (depth_set_backdrops, as the others; PsiLok, 2026-11-21: "Lets build on Profound
+ * darkness's backdrop ... Go with the tunnel, slow motion, all three forms"). The game's is a flat sheet of diamond
+ * rings in waves, star specks over it, its colours turned through the fight by the palette, ending in a dark band
+ * above the party's feet. The port's is those rings as a tunnel, to every edge of the view and down behind the
+ * party: diamonds about a point behind the boss, their edges zigzagged, further apart the nearer they come, flowing
+ * slowly outward; the specks stay, coming and going. Its colours are the game's own, read each frame from the entries its
+ * sheet is drawn in (dark to bright), so the palette's turns, fades and flashes all come through. Made in Zio's
+ * stage's buffer and seen through the same camera (oc_on, as the Hydrofoil's sea). */
+#define EVENT_PROFOUND 0x1A
+#define PD_CY      76.0f                 /* the tunnel's far end: behind the boss's middle, game y */
+#define PD_FLOW    0.11f                 /* rings a second that pass a point (slow) */
+static int pd_on, pd_line;               /* (pd_line: the palette line the game's sheet of rings is drawn in) */
+static uint8_t pd_keep[VDP_MAX_H][VDP_MAX_W];   /* the plane's pixels that are the boss itself: they stay */
+static int pd_div = 1;                           /* (Scale2x: the layers' rows and columns to a game pixel) */
+typedef struct { float t, cx; int bw, bh, nramp, nstar; uint32_t ramp[8], star[4]; } PdGen;
+
+/* the colours of the game's sheet now: its common entries from dark to bright (the rings), its rare ones (the specks) */
+static void pd_colours(PdGen *g, const uint32_t *pal, int w, int h) {
+    /* (the boss's lower half is drawn in the same plane, in its own colours: the sheet's line is the one the
+     * view's two sides are in, and only that line's pixels are the sheet) */
+    int lines4[4] = {0}, count[64] = {0}, total = 0;
+    for (int y = 4; y < h / 2; y += 2)
+        for (int x = 0; x < 48; x += 2) {
+            int a = layer[L_BG][y][x], b = layer[L_BG][y][w - 1 - x];
+            if (a) lines4[a >> 4 & 3]++;
+            if (b) lines4[b >> 4 & 3]++;
+        }
+    pd_line = 0;
+    for (int i = 1; i < 4; i++) if (lines4[i] > lines4[pd_line]) pd_line = i;
+    for (int y = 4; y < h * 2 / 3; y += 2)
+        for (int x = 0; x < w; x += 2) {
+            int c = layer[L_BG][y][x];
+            if (c && (c >> 4 & 3) == pd_line) { count[c & 0x3F]++; total++; }
+        }
+    /* the boss in the plane: in each row, from its first pixel that has a colour to its last (the black inside it
+     * is its own; the black band beside and under it is the sheet's end, and gives way to the tunnel) */
+    for (int y = 0; y < h; y++) {
+        int x0 = w, x1 = -1;
+        for (int x = 0; x < w; x++) {
+            int c = layer[L_BG][y][x];
+            if (c && (c >> 4 & 3) != pd_line && (pal[c & 0x3F] & 0xF0F0F0u)) { if (x < x0) x0 = x; x1 = x; }
+        }
+        for (int x = 0; x < w; x++) {
+            int c = layer[L_BG][y][x];
+            pd_keep[y][x] = (uint8_t)(c && (c >> 4 & 3) != pd_line && x >= x0 && x <= x1);
+        }
+    }
+    int idx[64], n = 0, rare[64], nr = 0;
+    for (int i = 0; i < 64; i++) {
+        if (count[i] * 40 >= total) idx[n++] = i;
+        else if (count[i] * 2000 >= total) rare[nr++] = i;
+    }
+#define PD_LUM(c) ((int)((c) >> 16 & 255) * 3 + (int)((c) >> 8 & 255) * 6 + (int)((c) & 255))
+    for (int i = 1; i < n; i++)                               /* by brightness (a handful: insertion) */
+        for (int j = i; j > 0 && PD_LUM(pal[idx[j]]) < PD_LUM(pal[idx[j - 1]]); j--) { int k = idx[j]; idx[j] = idx[j - 1]; idx[j - 1] = k; }
+    for (int i = 1; i < nr; i++)                              /* the specks: the brightest of the rare ones first */
+        for (int j = i; j > 0 && PD_LUM(pal[rare[j]]) > PD_LUM(pal[rare[j - 1]]); j--) { int k = rare[j]; rare[j] = rare[j - 1]; rare[j - 1] = k; }
+    g->nramp = 0;
+    for (int i = 0; i < n && g->nramp < 8; i++) g->ramp[g->nramp++] = pal[idx[n > 8 ? i * n / 8 : i]];
+    if (!g->nramp) g->ramp[g->nramp++] = 0xFF000000u;
+    g->nstar = 0;
+    for (int i = 0; i < nr && g->nstar < 4; i++) g->star[g->nstar++] = pal[rare[i]];
+#undef PD_LUM
+}
+
+static inline float pd_tri(float v) { v -= floorf(v); return v < 0.5f ? v * 2.0f : 2.0f - v * 2.0f; }
+static inline uint32_t pd_hash(int a, int b) {
+    uint32_t v = (uint32_t)a * 0x9E3779B1u ^ (uint32_t)b * 0x85EBCA77u;
+    v ^= v >> 15; v *= 0x2C1B3C6Du; v ^= v >> 12;
+    return v;
+}
+
+static void pd_rows(void *ctx, int y0, int y1) {
+    const PdGen *g = ctx;
+    for (int by = y0; by < y1; by++) {
+        int py = by / ZF_RES;                                 /* a game pixel at a time: the game's own grain */
+        float dy = ((float)py + 0.5f - ZF_MY - PD_CY) * 1.3f;
+        uint32_t *dst = zf_buf[by];
+        memset(zf_base[by], 0, (size_t)g->bw);
+        for (int bx = 0; bx < g->bw; bx++) {
+            int px = bx / ZF_RES;
+            float dx = (float)px + 0.5f - ZF_MX - g->cx, ax = fabsf(dx), ay = fabsf(dy);
+            float d = ax + ay + 3.0f * pd_tri((ax - ay) * (1.0f / 22.0f));     /* a diamond, its edge in zigzags */
+            float z = logf(1.0f + d * (1.0f / 9.0f));                           /* further apart the nearer they come */
+            float ph = z * 2.6f - g->t * PD_FLOW;
+            float v = pd_tri(ph);                                               /* dark, up to bright, back to dark */
+            v = v * v * (3.0f - 2.0f * v);
+            float fs = v * (float)(g->nramp - 1);
+            int i0 = (int)fs;
+            if (i0 > g->nramp - 2) i0 = g->nramp - 2 < 0 ? 0 : g->nramp - 2;
+            float fr = fs - (float)i0;
+            static const float BAYER[2][2] = {{0.2f, 0.7f}, {0.95f, 0.45f}};    /* the two shades checkered between */
+            uint32_t c = g->ramp[g->nramp > 1 && fr > BAYER[py & 1][px & 1] ? i0 + 1 : i0];
+            if (g->nstar) {                                 /* the specks: a game pixel each, coming and going slowly */
+                uint32_t hv = pd_hash(px, py);
+                if ((hv & 1023) < 9) {
+                    float tw = (float)(hv >> 10 & 255) * (1.0f / 255.0f) + g->t * (0.05f + (float)(hv >> 18 & 3) * 0.02f);
+                    if (tw - floorf(tw) < 0.8f) c = g->star[(hv >> 20) % (uint32_t)g->nstar];
+                }
+            }
+            dst[bx] = c;
+        }
+    }
+}
+
 static void compose_rows(void *ctx, int y0, int y1) {
     const Rows *q = ctx;
     uint32_t *out = q->out;
@@ -1043,6 +1148,10 @@ static void compose_rows(void *ctx, int y0, int y1) {
             uint8_t what = WX_FRONT_ENEMY;
             if (ve >= 0 && (u = col_en[X]) >= 0 && (c = l_ac[ce[X]]) != 0) far = tpal[c & 0x3F];
             else if (ve >= 0 && u >= 0 && (c = l_en[ce[X]]) != 0) far = tpal[c & 0x3F];
+            /* (Profound Darkness: what the plane holds of the boss itself stays, and is seen through the enemies'
+             * camera as the rest of the boss is, so its two halves never part) */
+            else if (pd_on && ve >= 0 && u >= 0 && pd_keep[fe / pd_div][ce[X] / pd_div])
+                far = tpal[q->L[L_BG][(size_t)fe * (size_t)ls + (size_t)ce[X]] & 0x3F];
             else {
                 if (zf_on || oc_on) {
                     far = zf_buf[zf_row[Y]][zf_col[X]];
@@ -1696,8 +1805,14 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
         float zdim = 1.0f, zwhite = 0.0f;
         zf_on = !vehicle && zf_stage(lines, w, h, &zdim, &zwhite);
         oc_on = !zf_on && zf_want && h >= 200 && (m68k_ram[VEHICLE_INDEX] << 8 | m68k_ram[VEHICLE_INDEX + 1]) == 3;
+        pd_on = !zf_on && !oc_on && !vehicle && zf_want && h >= 200 && m68k_ram[EVENT_BATTLE_INDEX] == EVENT_PROFOUND;
         if (!zf_on) zf_wisp = 0.0f;
-        if (oc_on) {                                 /* the Hydrofoil's sea */
+        if (pd_on) {                                 /* Profound Darkness's tunnel (drawn and read as the sea is) */
+            PdGen pg = {t, (float)w / 2.0f, (w + 2 * ZF_MX) * ZF_RES, (h + 2 * ZF_MY) * ZF_RES, 0, 0, {0}, {0}};
+            pd_colours(&pg, pal, w, h);
+            par_rows(pd_rows, &pg, pg.bh);
+            oc_on = 1;
+        } else if (oc_on) {                          /* the Hydrofoil's sea */
             oc_fade(&zdim, &zwhite);
             OcGen og = {t, (float)w / 2.0f, zdim, zwhite, (w + 2 * ZF_MX) * ZF_RES, (h + 2 * ZF_MY) * ZF_RES};
             par_rows(oc_rows, &og, og.bh);
@@ -1837,6 +1952,7 @@ int depth_compose(const VdpLine *lines, int w, int h, uint32_t *out, int out_str
     Rows rows = {out, out_stride, scale, ow, pal, tpal, panning, t_out, a_out, lit, fog_on, tint_r, tint_g, tint_b,
                  t_dy, a_dy, oh};
     const uint8_t *near_fine = NULL;                          /* (Scale2x: the sprites on the party, enlarged) */
+    pd_div = fine ? fine : 1;
     if (fine) {                                               /* every layer through the filter, now they are sorted */
         for (int n = 0; n < NLAYERS; n++) rows.L[n] = fine_make(n, layer[n], NULL, 0, w, h, fine);
         rows.mi = panning ? fine_make(FINE_MIMG, mimg, NULL, 0, w, h, fine) : fine_plane(FINE_ZERO);

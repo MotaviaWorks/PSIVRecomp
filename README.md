@@ -263,7 +263,11 @@ The additions:
   320 wide with a black notch under it); and the Hydrofoil's battles: the
   open sea under a sky, with a horizon, drifting clouds and waves running
   toward the cockpit, wherever the boat is (the game shows the backdrop of
-  the place it happens to be in: a desert's mountains, a beach).
+  the place it happens to be in: a desert's mountains, a beach); and the
+  last battle: the game's diamond rings as a tunnel behind the boss, flowing
+  slowly outward to every edge of the view and down behind the party, in the
+  game's own colours as its palette turns (the game's is a flat sheet that
+  ends in a dark band above the party's feet).
 - **Battle voices** (Sound page: on / off): the party speaks in battle -- a
   shout as they attack, a grunt when hit, a breath as they cast, a cry when
   they fall, a cheer when they win (`runtime/battlevox.c`). The voices are

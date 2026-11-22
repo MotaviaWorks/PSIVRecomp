@@ -111,8 +111,8 @@ speed, buttons) in the new look.
 New in battles (Battles page): a battle **opens** on a close-up of the
 enemies and the view draws back to the party; **Strike zoom**, an experiment,
 cuts in close when one of the party goes up to an enemy; Zio's stage has a
-new **backdrop**, a sea of fog drawn by the port, and the Hydrofoil's battles
-have the open sea. Each has a switch. And the
+new **backdrop**, a sea of fog drawn by the port, the Hydrofoil's battles
+have the open sea, and the last battle's rings are a slow tunnel. Each has a switch. And the
 menu (Esc) no longer stops the game in the story: its music plays on, and
 nothing you press reaches the game (Game page > This menu, for the old way;
 the Boss Arena and Wave Mode still stop under it).
