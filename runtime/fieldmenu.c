@@ -1528,7 +1528,13 @@ static void draw_status(float x0, float y0, float x1, float y1) {
         uint32_t ink = page ? WHITE : SOFT;
         win(x0, by0, lx1, by1);
         ui_portraits_init();
-        const UiImage *face = ui_portrait(id);
+        const UiImage *face = ui_portrait(id), *fine = ui_profile(id);
+        /* the game's own Status picture of them (80 x 80: the dialogue's face drawn larger and finer; PsiLok,
+         * 2026-11-22: "the Status Profile seen in classic mode are higher quality with more pixels. I'd like it
+         * if we could use those"), at the game's size where the page is wide, as near it as fits where it is
+         * not; the dialogue's 48 only where the picture would have to be shrunk */
+        float room = w >= 260.0f ? 80.0f : 54.0f;
+        if (fine && (int)(room * S / (float)fine->w) >= 1) { face = fine; P = room; }
         if (face && face->w > 0) {                       /* pixel art: a whole number of output pixels to each of its own */
             int k = (int)(P * S / (float)face->w);
             if (k < 1) k = 1;
@@ -1548,7 +1554,7 @@ static void draw_status(float x0, float y0, float x1, float y1) {
         if (age) snprintf(t, sizeof t, "Age %u", age);
         else snprintf(t, sizeof t, "Age ?");
         text(tx, by0 + 53.0f, t, ink);
-        float gy = by0 + (P + 24.0f > 68.0f ? P + 24.0f : 68.0f);
+        float gy = by0 + (P + 22.0f > 68.0f ? P + 22.0f : 68.0f);
         unsigned st = r8(rec + C_STATUS);
         gauge(x0 + 8.0f, lx1 - 8.0f, gy, "HP", r16(rec + C_HP), r16(rec + C_HP + 2), 0x6FD080);
         gauge(x0 + 8.0f, lx1 - 8.0f, gy + 12.5f, "TP", r16(rec + C_TP), r16(rec + C_TP + 2), 0x6AA8F0);
@@ -2187,7 +2193,7 @@ static void draw_system(float x0, float y0, float x1, float y1) {
             if ((ps + 2.0f) * 5.0f > room) ps = room / 5.0f - 2.0f;
             float px = cx0 + 24.0f;
             for (int i = 0; i < n && ps >= 10.0f; i++) {
-                const UiImage *im = ui_portrait(ids[i]);
+                const UiImage *im = ui_face(ids[i], ps * S);
                 ui_round_rect(&cv, px * S, (mid - ps / 2.0f) * S, (px + ps) * S, (mid + ps / 2.0f) * S, 1.0f * S, 0x0C1440, 255);
                 if (im) ui_image(&cv, im, px * S, (mid - ps / 2.0f) * S, ps * S, 0, 255);
                 px += ps + 2.0f;

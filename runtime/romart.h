@@ -16,6 +16,17 @@ int romart_nemesis(const uint8_t *src, uint32_t src_len, uint8_t *dst, int max);
 #define ROMART_PORTRAIT 48
 int romart_portrait(int character, uint8_t *rgba);
 
+/* the picture of a party member on the game's Status page (0 Chaz .. 10 Seth) as 80x80 RGBA, colour 0
+ * transparent: the same faces as the dialogue's, drawn larger and finer; 1 on success */
+#define ROMART_PROFILE 80
+int romart_profile(int character, uint8_t *rgba);
+/* the same as the palette's entries (0-15 of line 2; 0: nothing there), for drawing in the colours the
+ * game has loaded now (a fade, a flash); 1 on success */
+int romart_profile_index(int character, uint8_t *index);
+/* whose dialogue portrait these 36 tiles are (as they stand in VRAM at tile $55C): 0 Chaz .. 10 Seth;
+ * -1: someone else's, or no portrait at all */
+int romart_portrait_who(const uint8_t *tiles);
+
 /* a party member's field sprite (0 Chaz .. 10 Seth) as 16x32 RGBA, colour 0
  * transparent: frame 0-8 as the game keeps them (0 standing facing down, 1-2
  * its steps; 3-5 facing left; 6-8 facing up), flip: mirrored (facing right,

@@ -60,6 +60,12 @@ int   ui_ready(void);                    /* the font is loaded */
 extern const char *const UI_CHAR_NAMES[11];   /* Chaz .. Seth, by character ID */
 int   ui_portraits_init(void);           /* the dialogue portraits from the ROM; returns how many */
 const UiImage *ui_portrait(int id);      /* NULL when unavailable */
+const UiImage *ui_profile(int id);       /* the Status page's larger picture of them (80 x 80), from the ROM; NULL when unavailable */
+/* the picture of them for a box `side` output pixels across: the larger one where it shows more than the
+ * small one holds (PsiLok, 2026-11-22: "We could use those higher quality sprites for dialogue, battle, and
+ * the save menu"), else the dialogue's. ui_image draws the larger one evenly at any size. */
+const UiImage *ui_face(int id, float side);
+#define UI_FACE_FINE 64.0f               /* (from this many output pixels across) */
 const char *ui_item_name(int id);        /* from the ROM, title case ("Hunt-Knife"); "" if none */
 const char *ui_tech_name(int id);        /* techniques, 1-based ("Foi") */
 const char *ui_skill_name(int id);       /* skills 1-54 ("Crosscut") */

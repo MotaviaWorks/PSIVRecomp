@@ -5,6 +5,7 @@
 #include "m68k.h"
 
 #include "par.h"
+#include "romart.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -181,12 +182,79 @@ int hdtext_dialogue_key(const VdpLine *lines, int w, int h, char *out, int n) {
     return k;
 }
 
+/* The dialogue's portrait: 6 x 6 tiles from $55C in plane A (TextAction's portrait: the art to $55C, the cells
+ * in order). Where one of the party's is up, the game's larger picture of them -- the Status page's 80 x 80,
+ * the same face drawn finer -- goes over it, in the same 48 x 48 and in the colours loaded now (PsiLok,
+ * 2026-11-22: "We could use those higher quality sprites for dialogue"). Anyone else's portrait (the game has
+ * no larger one of them), and Alys's wounded one, stay the game's. */
+#define FACE_TILE 0x55C
+static int find_portrait(const VdpLine *lines, int w, int h, int *px, int *py) {
+    for (int y = 0; y + 48 <= h; y += 1) {
+        const VdpLine *l = &lines[y];
+        for (int x = 0; x + 48 <= w; x++) {
+            if (l->plane_a_txy[x] || l->win_in[x] || (l->plane_a_tile[x] & 0x7FF) != FACE_TILE) continue;
+            if ((lines[y + 40].plane_a_tile[x + 40] & 0x7FF) != FACE_TILE + 35 || lines[y + 40].win_in[x + 40]) continue;
+            *px = x;
+            *py = y;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int face_who(const VdpLine *lines, int w, int h, int *px, int *py) {
+    if (!find_portrait(lines, w, h, px, py)) return -1;
+    return romart_portrait_who(&vdp.vram[FACE_TILE * 32]);
+}
+
+static void draw_face(const VdpLine *lines, int w, int h, uint32_t *out, int stride, int S) {
+    static uint8_t index[11][ROMART_PROFILE * ROMART_PROFILE];
+    static int8_t ready[11];
+    int fx, fy, who = face_who(lines, w, h, &fx, &fy);
+    if (who < 0) return;
+    if (!ready[who]) ready[who] = romart_profile_index(who, index[who]) ? 1 : -1;
+    if (ready[who] < 0) return;
+    const uint8_t *src = index[who];
+    float rgb[16][3];
+    for (int i = 0; i < 16; i++) {                       /* palette line 2, as it stands */
+        uint32_t c = vdp_color(32 + i);
+        rgb[i][0] = (float)(c >> 16 & 255); rgb[i][1] = (float)(c >> 8 & 255); rgb[i][2] = (float)(c & 255);
+    }
+    int n = 48 * S;
+    float k = (float)n / (float)ROMART_PROFILE;          /* output pixels to one of the picture's */
+    for (int y = 0; y < n; y++) {
+        const VdpLine *l = &lines[fy + y / S];
+        uint32_t *o = out + (size_t)(fy * S + y) * (size_t)stride + (size_t)(fx * S);
+        float fv = ((float)y + 0.5f) / k - 0.5f;
+        int v0 = (int)floorf(fv);
+        float tv = (fv - (float)v0 - 0.5f) * k + 0.5f;
+        tv = tv < 0.0f ? 0.0f : tv > 1.0f ? 1.0f : tv;
+        int va = v0 < 0 ? 0 : v0, vb = v0 + 1 >= ROMART_PROFILE ? ROMART_PROFILE - 1 : v0 + 1;
+        for (int x = 0; x < n; x++) {
+            if (l->sprite[fx + x / S] & 0x80) continue;                  /* (a sprite in front of it stays there) */
+            float fu = ((float)x + 0.5f) / k - 0.5f;
+            int u0 = (int)floorf(fu);
+            float tu = (fu - (float)u0 - 0.5f) * k + 0.5f;               /* even pixels: only their edges shared */
+            tu = tu < 0.0f ? 0.0f : tu > 1.0f ? 1.0f : tu;
+            int ua = u0 < 0 ? 0 : u0, ub = u0 + 1 >= ROMART_PROFILE ? ROMART_PROFILE - 1 : u0 + 1;
+            const float *c00 = rgb[src[va * ROMART_PROFILE + ua]], *c10 = rgb[src[va * ROMART_PROFILE + ub]];
+            const float *c01 = rgb[src[vb * ROMART_PROFILE + ua]], *c11 = rgb[src[vb * ROMART_PROFILE + ub]];
+            float w00 = (1.0f - tu) * (1.0f - tv), w10 = tu * (1.0f - tv), w01 = (1.0f - tu) * tv, w11 = tu * tv;
+            int r = (int)(c00[0] * w00 + c10[0] * w10 + c01[0] * w01 + c11[0] * w11 + 0.5f);
+            int g = (int)(c00[1] * w00 + c10[1] * w10 + c01[1] * w01 + c11[1] * w11 + 0.5f);
+            int b = (int)(c00[2] * w00 + c10[2] * w10 + c01[2] * w01 + c11[2] * w11 + 0.5f);
+            o[x] = 0xFF000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+        }
+    }
+}
+
 int hdtext_has_text(const VdpLine *lines, int w, int h) {
     if (!enabled) return 0;
     find_cells(lines, w, h);
     for (int i = 0; i < ncells; i++)
         if (cells[i].ch != ' ') return 1;
-    return 0;
+    int fx, fy;
+    return face_who(lines, w, h, &fx, &fy) >= 0;         /* (a portrait up before its first letter) */
 }
 
 /* ------------------------------------------------------------------ glyphs */
@@ -315,6 +383,7 @@ static void draw_words(const VdpLine *lines, int h, uint32_t *out, int stride, i
 
 void hdtext_draw(const VdpLine *lines, int w, int h, uint32_t *out, int stride, int scale) {
     if (!enabled) return;
+    draw_face(lines, w, h, out, stride, scale);
     find_cells(lines, w, h);
     int S = scale;
     for (int i = 0; i < ncells;) {

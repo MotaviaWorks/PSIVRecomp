@@ -666,6 +666,22 @@ The additions:
   would otherwise flash between the new ones). `PSIV_FIELDMENU_LOG=1` says
   whenever the menu is up and the port leaves it to the game, and why.
 
+- **The party's larger pictures.** The game has two pictures of each of the
+  party: the dialogue's 48 x 48, and a finer 80 x 80 it shows only on its
+  Status page. The port reads the finer ones from your ROM too
+  (`romart_profile`) and uses them wherever there is room for more than the
+  small one holds (`ui_face`: from 64 output pixels across): the Status
+  page (at the game's size), the battle windows, the save cards of the
+  Start menu and of the launcher's Load game, and in dialogue, where the
+  port sees whose portrait the game has put up (`hdtext.c`: the tiles at
+  $55C matched to a member's) and draws their finer picture over it, in the
+  same 48 x 48 and in the palette as it stands. Anyone else's portrait, and
+  Alys's wounded one, stay the game's: it has no larger picture of them.
+  Dialogue's needs Text: Modern. In battle the small and the larger picture
+  dissolve into one another as the windows shrink under the command bar and
+  grow again. At a size that is no whole multiple of 80 a picture is drawn
+  evenly (enlarged: every pixel as wide as the others, only its edges
+  shared; smaller: averaged) from a copy made once for that size and kept.
 - **Battle menus** (modern / original): the battle windows replaced by menus
   drawn at full resolution -- a party bar with portraits and HP / TP bars
   (and each member's chosen action), the commands spelled out (Attack,

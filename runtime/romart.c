@@ -10,6 +10,9 @@
 #define PORTRAIT_LAYOUT  0x2A2B36u    /* 6x6 name-table words, tiles $55C.., palette line 2 */
 #define PORTRAIT_FIRST   0x55C
 #define PAL_CHARACTERS   0x9F2FCu     /* Pal_Init line 2: the characters' palette */
+#define PROFILE_ART_PTRS 0x5D548u     /* Win_StatusCharList's pictures: 0 Chaz .. $A Seth, Nemesis art (77 to 95 tiles) */
+#define PROFILE_MAP_PTRS 0x5D574u     /* ... and their 10x10 name-table words, tiles $580.., palette line 2 */
+#define PROFILE_FIRST    0x580
 #define FIELD_ART_PTRS   0x5E732u     /* CharFieldArtPtrs: 0 Chaz .. $A Seth, raw tiles, 9 frames of 8 */
 #define FIELD_FRAME      256          /* a frame: 2 x 4 tiles, a column at a time (as sprites are) */
 
@@ -107,6 +110,61 @@ int romart_portrait(int character, uint8_t *rgba) {
                 }
         }
     return 1;
+}
+
+int romart_profile_index(int character, uint8_t *index) {
+    if (character < 0 || character > 10 || !m68k_rom || m68k_rom_size < PROFILE_MAP_PTRS + 44) return 0;
+    uint32_t art = rom32(PROFILE_ART_PTRS + (uint32_t)character * 4), map = rom32(PROFILE_MAP_PTRS + (uint32_t)character * 4);
+    if (!art || art >= m68k_rom_size || !map || map + 200 > m68k_rom_size) return 0;
+    static uint8_t tiles[100 * 32];
+    int have = romart_nemesis(m68k_rom + art, m68k_rom_size - art, tiles, sizeof tiles) / 32;
+    for (int ty = 0; ty < 10; ty++)
+        for (int tx = 0; tx < 10; tx++) {
+            uint32_t a = map + (uint32_t)(ty * 10 + tx) * 2;
+            unsigned e = (unsigned)(m68k_rom[a] << 8 | m68k_rom[a + 1]);
+            int t = (int)(e & 0x7FF) - PROFILE_FIRST;
+            if (t < 0 || t >= have) return 0;
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++) {
+                    int sx = e & 0x0800 ? 7 - x : x, sy = e & 0x1000 ? 7 - y : y;
+                    uint8_t b = tiles[t * 32 + sy * 4 + sx / 2];
+                    index[(ty * 8 + y) * ROMART_PROFILE + tx * 8 + x] = (uint8_t)(sx & 1 ? b & 15 : b >> 4);
+                }
+        }
+    return 1;
+}
+
+int romart_profile(int character, uint8_t *rgba) {
+    static uint8_t index[ROMART_PROFILE * ROMART_PROFILE];
+    if (!romart_profile_index(character, index) || m68k_rom_size < PAL_CHARACTERS + 32) return 0;
+    uint8_t pal[16][3];
+    for (int i = 0; i < 16; i++) {                        /* ----bbb-ggg-rrr- */
+        unsigned c = (unsigned)(m68k_rom[PAL_CHARACTERS + i * 2] << 8 | m68k_rom[PAL_CHARACTERS + i * 2 + 1]);
+        pal[i][0] = (uint8_t)((c >> 1 & 7) * 255 / 7);
+        pal[i][1] = (uint8_t)((c >> 5 & 7) * 255 / 7);
+        pal[i][2] = (uint8_t)((c >> 9 & 7) * 255 / 7);
+    }
+    for (int i = 0; i < ROMART_PROFILE * ROMART_PROFILE; i++) {
+        int v = index[i];
+        uint8_t *o = &rgba[i * 4];
+        o[0] = pal[v][0]; o[1] = pal[v][1]; o[2] = pal[v][2]; o[3] = v ? 255 : 0;
+    }
+    return 1;
+}
+
+int romart_portrait_who(const uint8_t *tiles) {
+    static uint8_t known[11][36 * 32];
+    static int ready[11];                                /* 0 not tried, 1 there, -1 not to be had */
+    if (!m68k_rom || m68k_rom_size < PORTRAIT_LAYOUT + 72) return -1;
+    for (int c = 0; c < 11; c++) {
+        if (!ready[c]) {
+            uint32_t art = rom32(PORTRAIT_PTRS + (uint32_t)(c + 1) * 4);
+            ready[c] = art && art < m68k_rom_size
+                       && romart_nemesis(m68k_rom + art, m68k_rom_size - art, known[c], sizeof known[c]) >= (int)sizeof known[c] ? 1 : -1;
+        }
+        if (ready[c] > 0 && !memcmp(known[c], tiles, sizeof known[c])) return c;
+    }
+    return -1;
 }
 
 int romart_field_sprite(int character, int frame, int flip, uint8_t *rgba) {

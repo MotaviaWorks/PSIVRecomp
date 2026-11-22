@@ -733,6 +733,11 @@ static int utf8(uint32_t cp, char *o) {
 #define BAR_Y1      184.0f
 #define CARD_Y0_BAR 185.0f
 static float strip_in;            /* 0..1, eased: the bar is up */
+/* The members' pictures: the game's larger one of them where the window has the room (ui_face), the small
+ * one where it has not -- while the command bar is up, on most screens. One dissolves into the other as the
+ * windows grow and shrink (PsiLok, 2026-11-22: "could they dissolve to the higher quality portrait?"). */
+static float face_mix = -1.0f;    /* 0..1, eased: how much of the larger picture shows (-1: not yet set) */
+static int face_want;             /* where it is going: 1 the larger */
 
 /* ------------------------------------------------------------------ the aura */
 /* The member choosing glows: a soft light around their figure as it is in
@@ -1079,11 +1084,16 @@ static void draw_hud(int acting, int target_id, int show_commands, int frame, fl
             ps = tall + (brief - tall) * strip_in;
             widest = tall;
             if (tall <= 0.0f || brief <= 0.0f) ps = widest = 0.0f;
+            face_want = (strip_in > 0.5f ? brief : tall) * S >= UI_FACE_FINE;   /* (as large as it will come to rest) */
+            if (face_mix < 0.0f) face_mix = (float)face_want;
         }
         if (ps > 0.0f) {
             py = (y0 + y1 - ps) / 2.0f;
             ui_round_rect(&cv, SX(px), SY(py), SX(px + ps), SY(py + ps), 1.2f * S, 0x0C1440, AL(255 * a));
-            ui_image(&cv, im, SX(px), SY(py), ps * S, dead, AL(255 * a));
+            const UiImage *fine = ui_profile(id);
+            float mix = fine ? face_mix : 0.0f;
+            if (mix < 0.995f) ui_image(&cv, im, SX(px), SY(py), ps * S, dead, AL(255 * a));
+            if (mix > 0.005f) ui_image(&cv, fine, SX(px), SY(py), ps * S, dead, AL(255 * a * (mix > 0.995f ? 1.0f : mix)));
         }
         float tx = ps > 0.0f ? px + ps + 3.5f : x0 + 6.0f, tr = x1 - 6.0f;
         float name_base = y0 + 10.6f;
@@ -1756,6 +1766,7 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
     int tags = !((r2 >= 0x1E && r2 <= 0x26) || r2 == 0x2D || r2 == 0x2F);
     int bar_up = menu == M_MAIN || (acting >= 0 && choosing(menu));
     strip_in += ((bar_up ? 1.0f : 0.0f) - strip_in) * 0.22f;
+    if (face_mix >= 0.0f) face_mix += ((float)face_want - face_mix) * 0.10f;   /* (about a third of a second) */
     if (ncards) draw_hud(menu == M_MAIN ? -1 : acting, target_id, tags, frame, hud_in);
 
     /* other windows: enemy names, messages, results */

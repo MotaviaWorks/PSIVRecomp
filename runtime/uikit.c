@@ -100,6 +100,29 @@ const UiImage *ui_portrait(int id) {
     return id >= 0 && id < 11 && portraits[id].rgba ? &portraits[id] : NULL;
 }
 
+/* the Status page's pictures: each made the first time it is asked for */
+const UiImage *ui_profile(int id) {
+    static UiImage profiles[11];
+    static uint8_t tried[11];
+    if (id < 0 || id >= 11) return NULL;
+    if (!profiles[id].rgba && !tried[id]) {
+        tried[id] = 1;
+        uint8_t *px = malloc(ROMART_PROFILE * ROMART_PROFILE * 4);
+        if (px && romart_profile(id, px)) {
+            profiles[id].w = profiles[id].h = ROMART_PROFILE;
+            profiles[id].rgba = px;
+        } else {
+            free(px);
+        }
+    }
+    return profiles[id].rgba ? &profiles[id] : NULL;
+}
+
+const UiImage *ui_face(int id, float side) {
+    const UiImage *fine = side >= UI_FACE_FINE ? ui_profile(id) : NULL;
+    return fine ? fine : ui_portrait(id);
+}
+
 /* ------------------------------------------------------------------ shapes */
 static int straight;                       /* ui_set_straight_alpha */
 void ui_set_straight_alpha(int on) {
@@ -225,7 +248,7 @@ void ui_round_rect(const UiCanvas *cv, float x0, float y0, float x1, float y1, f
 static int image_look;
 void ui_set_image_look(int look) { image_look = look; }
 
-#define FILTERED_MAX 48
+#define FILTERED_MAX 96
 static struct { const uint8_t *src; int w, h, f; uint8_t *rgba; } filtered[FILTERED_MAX];
 static int filtered_n;
 
@@ -333,6 +356,94 @@ void ui_mask(const UiCanvas *cv, const uint8_t *mask, int mw, int mh, float x0, 
         }
 }
 
+/* The larger pictures (80 across) at a size that is no whole number of times theirs. Enlarged: each of
+ * their pixels as wide as the others, only its edges shared with its neighbours. Made smaller: each output
+ * pixel the average of what falls in it. A copy at that size is made once and kept (the pictures stand at
+ * a few sizes: a battle window tall and short, a save card), and drawn from as it is; a size seen for the
+ * first time -- a window on its way from one height to the other -- is drawn the plain way, so nothing is
+ * made for a size that lasts a frame. (Made every frame, they cost the Odin enough to lower its picture
+ * detail: PsiLok, 2026-11-22, "after 4 or 5 times, it stopped and kept using the smaller sprite version".) */
+#define EVEN_MAX 40
+static struct { const uint8_t *src; int w, n; uint8_t *rgba; unsigned used; } even[EVEN_MAX];
+static struct { const uint8_t *src; int n; } even_seen[32];
+static unsigned even_clock;
+
+static void even_make(const UiImage *im, int n, uint8_t *out) {
+    float k = (float)n / (float)im->w;
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++) {
+            float sum[4] = {0, 0, 0, 0};
+            int cnt = 1;
+            if (n < im->w) {                             /* smaller: the average */
+                int u0 = x * im->w / n, u1 = ((x + 1) * im->w + n - 1) / n, v0 = y * im->h / n, v1 = ((y + 1) * im->h + n - 1) / n;
+                cnt = 0;
+                for (int vv = v0; vv < v1 && vv < im->h; vv++)
+                    for (int uu = u0; uu < u1 && uu < im->w; uu++) {
+                        const uint8_t *t = &im->rgba[((size_t)vv * (size_t)im->w + (size_t)uu) * 4];
+                        sum[0] += (float)t[0] * (float)t[3]; sum[1] += (float)t[1] * (float)t[3];
+                        sum[2] += (float)t[2] * (float)t[3]; sum[3] += (float)t[3];
+                        cnt++;
+                    }
+                if (!cnt) cnt = 1;
+            } else {                                     /* larger: even pixels, their edges shared */
+                float fu = ((float)x + 0.5f) / k - 0.5f, fv = ((float)y + 0.5f) / k - 0.5f;
+                int u0 = (int)floorf(fu), v0 = (int)floorf(fv);
+                float tu = (fu - (float)u0 - 0.5f) * k + 0.5f, tv = (fv - (float)v0 - 0.5f) * k + 0.5f;
+                tu = tu < 0.0f ? 0.0f : tu > 1.0f ? 1.0f : tu;
+                tv = tv < 0.0f ? 0.0f : tv > 1.0f ? 1.0f : tv;
+                for (int q = 0; q < 4; q++) {
+                    int uu = u0 + (q & 1), vv = v0 + (q >> 1);
+                    uu = uu < 0 ? 0 : uu >= im->w ? im->w - 1 : uu;
+                    vv = vv < 0 ? 0 : vv >= im->h ? im->h - 1 : vv;
+                    const uint8_t *t = &im->rgba[((size_t)vv * (size_t)im->w + (size_t)uu) * 4];
+                    float wgt = ((q & 1) ? tu : 1.0f - tu) * ((q >> 1) ? tv : 1.0f - tv) * (float)t[3];
+                    sum[0] += (float)t[0] * wgt; sum[1] += (float)t[1] * wgt; sum[2] += (float)t[2] * wgt;
+                    sum[3] += wgt;
+                }
+            }
+            uint8_t *o = &out[((size_t)y * (size_t)n + (size_t)x) * 4];
+            if (sum[3] < 1.0f) { o[0] = o[1] = o[2] = o[3] = 0; continue; }
+            float al = sum[3] / (float)cnt;
+            o[0] = (uint8_t)(sum[0] / sum[3]); o[1] = (uint8_t)(sum[1] / sum[3]); o[2] = (uint8_t)(sum[2] / sum[3]);
+            o[3] = (uint8_t)(al > 255.0f ? 255.0f : al);
+        }
+}
+
+/* im at n across, evenly, in *copy: the kept copy, or one made now if this size was asked for before;
+ * im itself the first time a size is seen (and when there is no memory for a copy) */
+static const UiImage *image_even(const UiImage *im, int n, UiImage *copy) {
+    even_clock++;
+    int old = 0;
+    for (int i = 0; i < EVEN_MAX; i++) {
+        if (even[i].rgba && even[i].src == im->rgba && even[i].w == im->w && even[i].n == n) {
+            even[i].used = even_clock;
+            copy->w = copy->h = n;
+            copy->rgba = even[i].rgba;
+            return copy;
+        }
+        if (!even[i].rgba) old = i;
+        else if (even[old].rgba && even[i].used < even[old].used) old = i;
+    }
+    int k = (int)(((uintptr_t)im->rgba >> 4) % (sizeof even_seen / sizeof even_seen[0]));
+    if (even_seen[k].src != im->rgba || even_seen[k].n != n) {      /* the first time: only noted */
+        even_seen[k].src = im->rgba;
+        even_seen[k].n = n;
+        return im;
+    }
+    uint8_t *px = malloc((size_t)n * (size_t)n * 4);
+    if (!px) return im;
+    even_make(im, n, px);
+    free(even[old].rgba);
+    even[old].src = im->rgba;
+    even[old].w = im->w;
+    even[old].n = n;
+    even[old].rgba = px;
+    even[old].used = even_clock;
+    copy->w = copy->h = n;
+    copy->rgba = px;
+    return copy;
+}
+
 void ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float size, int dim, int alpha) {
     if (!im || !im->rgba || im->w < 1) return;
     UiImage big;
@@ -345,7 +456,13 @@ void ui_image(const UiCanvas *cv, const UiImage *im, float x0, float y0, float s
         int r = (n + im->w / 2) / im->w;
         int f = r <= 4 ? r : r % 4 == 0 ? 4 : r % 3 == 0 ? 3 : 4;
         im = image_filtered(im, f, &big);
+    } else if (image_look == 2 && im->w >= 80 && n > im->w) {
+        /* (a larger picture enlarged by less than twice: through the filter at twice, then evened down
+         * to its size below, so it is rounded off as the rest of the picture is) */
+        im = image_filtered(im, 2, &big);
     }
+    UiImage copy;
+    if (!soft && im->w >= 80 && n > 0 && n % im->w) im = image_even(im, n, &copy);   /* (the larger pictures: see image_even) */
     ImageRows q = {cv, im, x0, y0, size, dim, alpha, soft};
     if (n >= 96) par_rows(image_rows, &q, n);                          /* a large one: in pieces */
     else if (n > 0) image_rows(&q, 0, n);

@@ -4918,7 +4918,7 @@ static void draw_load(float W, float H, const char *hint) {
         for (int i = 0; i < n && m_ttf; i++) faces += ui_portrait(ids[i]) != NULL;
         if (faces) {
             for (int i = 0; i < n; i++) {
-                const UiImage *im = ui_portrait(ids[i]);
+                const UiImage *im = ui_face(ids[i], ps * m_S);
                 m_box(px, mid - ps / 2.0f, px + ps, mid + ps / 2.0f, 1.5f, 0x0C1440, 0x0C1440, 255);
                 if (im) ui_image(&m_cv, im, px * m_S, (mid - ps / 2.0f) * m_S, ps * m_S, 0, 255);
                 px += ps + 2.0f;
