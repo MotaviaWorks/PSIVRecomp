@@ -27,6 +27,11 @@ int romart_profile_index(int character, uint8_t *index);
  * -1: someone else's, or no portrait at all */
 int romart_portrait_who(const uint8_t *tiles);
 
+/* One of the game's story panels (the manga illustrations of its cutscenes), by the number the game knows it
+ * by (Panel_Create's), as it draws it: its two layers, the front over the back. A new buffer of *w x *h RGBA
+ * (the caller frees it), nothing drawn black; NULL if there is no such panel. */
+uint8_t *romart_panel(int index, int *w, int *h);
+
 /* a party member's field sprite (0 Chaz .. 10 Seth) as 16x32 RGBA, colour 0
  * transparent: frame 0-8 as the game keeps them (0 standing facing down, 1-2
  * its steps; 3-5 facing left; 6-8 facing up), flip: mirrored (facing right,

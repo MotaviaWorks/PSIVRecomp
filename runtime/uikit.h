@@ -66,6 +66,12 @@ const UiImage *ui_profile(int id);       /* the Status page's larger picture of 
  * the save menu"), else the dialogue's. ui_image draws the larger one evenly at any size. */
 const UiImage *ui_face(int id, float side);
 #define UI_FACE_FINE 64.0f               /* (from this many output pixels across) */
+/* one of the game's story panels (romart_panel), kept once read; NULL when there is none */
+const UiImage *ui_story_panel(int index);
+/* a picture, whole, in the box at (x0, y0), w x h output pixels, at its top left: a whole number of output
+ * pixels to each of its own where it fits, made smaller evenly (averaged) where it does not; *dw, *dh: the
+ * size it was drawn at (either may be NULL) */
+void ui_picture(const UiCanvas *cv, const UiImage *im, float x0, float y0, float w, float h, int alpha, float *dw, float *dh);
 const char *ui_item_name(int id);        /* from the ROM, title case ("Hunt-Knife"); "" if none */
 const char *ui_tech_name(int id);        /* techniques, 1-based ("Foi") */
 const char *ui_skill_name(int id);       /* skills 1-54 ("Crosscut") */

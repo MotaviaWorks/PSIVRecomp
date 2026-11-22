@@ -168,7 +168,13 @@ to and what to do next, read from the game's own event flags
 (`runtime/journal.h`: reads only, so the game is unchanged, Classic too).
 *Now* shows the current step and, only when asked for, a hint: where to go,
 who to talk to, what to use. *Story so far* recaps every step reached, the
-newest first. *Hunters' Guild*, once Aiedo has been visited, lists the
+newest first, each beside one of the game's own story panels from that part
+of the story (the manga illustrations of its cutscenes: 307 of them, read
+from your ROM when the page is shown -- `romart_panel`: Nemesis art, two
+layers of Enigma-mapped cells, a palette each; a `panel HEX` line names a
+step's in `journal.txt`). A step's panel is one the party has seen by then;
+a step with no cutscene is its words alone. *Hunters' Guild*, once Aiedo has
+been visited, lists the
 guild's jobs: offered, under way (what to do next, and a hint), to report
 back for the fee, or done. The words are the port's own, written to give
 nothing away before it happens: `runtime/journal.txt`, made into

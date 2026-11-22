@@ -23,6 +23,7 @@ typedef struct {
     const char *arc;              /* the part of the game, e.g. "Motavia" */
     const char *title, *done;     /* done: what happened (the story so far) */
     const char *next, *hint;      /* what to do now, and help when asked for */
+    int panel;                    /* its picture in "Story so far": a story panel of the game's (romart_panel); -1 none */
 } JournalStep;
 
 int journal_story(void);                       /* the current step; -1 before the story begins */

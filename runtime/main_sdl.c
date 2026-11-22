@@ -4605,15 +4605,32 @@ static void draw_journal_story(float W, float pad) {
     }
     if (j_scroll > m - 1) j_scroll = m - 1;
     int e = j_scroll;
+    /* An entry's picture, beside its words: one of the game's own story panels from that part of the story
+     * (JournalStep.panel), read from the ROM (PsiLok, 2026-11-22: "For story so far, could we use story panels
+     * that were in those segments?" ... "Go with A"). Whole, in a box at the left; the words keep to its right,
+     * those of an entry without a picture too, so the page reads down one edge. The fallback font's page is the
+     * words alone. */
+    const float PW = 58.0f, PH = 29.0f, PGAP = 5.0f;
+    int pictures = m_ttf && rom_ready;
     for (; e < m; e++) {
         const JournalStep *s = journal_step(v[e]);
-        int lines = m_wrap(x, 0, width, 7.2f, 4, 3.9f, s->done, 0, 0);       /* counted, not drawn */
+        const UiImage *pic = pictures && s->panel >= 0 ? ui_story_panel(s->panel) : NULL;
+        float tx = pictures ? x + PW + PGAP : x, tw = pictures ? width - PW - PGAP : width;
+        int lines = m_wrap(tx, 0, tw, 7.2f, 5, 3.9f, s->done, 0, 0);        /* counted, not drawn */
         float h = 9.0f + 7.2f * (float)lines + 3.4f;
+        if (pic && h < PH + 4.0f) h = PH + 4.0f;
         if (y + h > bottom && e > j_scroll) break;
-        m_text(x, y + 6.2f, 4.3f, s->title, C_GOLD, 0);
+        if (pic) {                                       /* (centred across its box, from the entry's top) */
+            float k = fminf(PW * m_S / (float)pic->w, PH * m_S / (float)pic->h), dw, dh;
+            float pw = k >= 1.0f ? (float)(pic->w * (int)k) : (float)(int)((float)pic->w * k);
+            float px0 = floorf((x + (PW - pw / m_S) / 2.0f) * m_S), py0 = floorf((y + 1.6f) * m_S);
+            ui_picture(&m_cv, pic, px0, py0, PW * m_S, PH * m_S, 255, &dw, &dh);
+            if (dw > 0.0f) ui_round_frame(&m_cv, px0 - 1.0f, py0 - 1.0f, px0 + dw + 1.0f, py0 + dh + 1.0f, 0.0f, 1.0f, 0x0A1030, 255);
+        }
+        m_text(tx, y + 6.2f, 4.3f, s->title, C_GOLD, 0);
         if (s->arc[0] && (e == j_scroll || strcmp(s->arc, journal_step(v[e - 1])->arc)))
             m_text(W - pad - 10.0f, y + 6.2f, 3.3f, s->arc, C_DIM, 1);      /* where the part of the game changes */
-        m_wrap(x, y + 6.2f + 8.0f, width, 7.2f, 4, 3.9f, s->done, C_TEXT, 0);
+        m_wrap(tx, y + 6.2f + 8.0f, tw, 7.2f, 5, 3.9f, s->done, C_TEXT, 0);
         y += h;
     }
     j_more_below = e < m;

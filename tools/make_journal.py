@@ -11,6 +11,8 @@ space carries on the one before):
                               (A|B: either; START: from the start)
     title / done / next / hint   its words (done: what happened; next: what to
                               do now; hint: help, shown when asked for)
+    panel HEX                 its picture in "Story so far": a story panel of the
+                              game's, by number (none: the words alone)
 
     job NAME                  a Hunters' Guild job (HuntersGuildData's order)
     flags TAKEN COMPLETED FEE FROM UNTIL
@@ -73,6 +75,11 @@ def parse(path):
             if key in cur:
                 problems.append(f'{no}: a second {key}')
             cur[key] = rest
+        elif key == 'panel' and cur is not None and 'stages' not in cur:
+            if not re.fullmatch(r'[0-9A-Fa-f]{1,3}', rest):
+                problems.append(f'{no}: panel wants a hex number')
+            else:
+                cur['panel'] = int(rest, 16)
         elif key == 'flags' and cur is not None and 'stages' in cur:
             cur['flags'] = rest.split()
         elif key == 'stage' and cur is not None and 'stages' in cur:
@@ -164,7 +171,7 @@ def write(steps, jobs):
         out.append(f'     {{{c_str(s["arc"])}, {c_str(s.get("title"))},')
         out.append(f'      {c_str(s.get("done"))},')
         out.append(f'      {c_str(s.get("next"))},')
-        out.append(f'      {c_str(s.get("hint"))}}}}},')
+        out.append(f'      {c_str(s.get("hint"))}, {s.get("panel", -1)}}}}},')
     out.append('};')
     for i, j in enumerate(jobs):
         out += ['', f'static const Stage JOB{i}[] = {{']

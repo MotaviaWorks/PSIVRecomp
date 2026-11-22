@@ -118,6 +118,78 @@ const UiImage *ui_profile(int id) {
     return profiles[id].rgba ? &profiles[id] : NULL;
 }
 
+/* the story panels read so far (a page of the Journal shows three or four) */
+const UiImage *ui_story_panel(int index) {
+    static struct { int index; UiImage im; unsigned used; } kept[24];
+    static unsigned clock;
+    int old = 0;
+    clock++;
+    for (int i = 0; i < 24; i++) {
+        if (kept[i].used && kept[i].index == index) { kept[i].used = clock; return kept[i].im.rgba ? &kept[i].im : NULL; }
+        if (kept[i].used < kept[old].used) old = i;
+    }
+    free(kept[old].im.rgba);
+    kept[old].index = index;
+    kept[old].used = clock;
+    kept[old].im.w = kept[old].im.h = 0;
+    kept[old].im.rgba = romart_panel(index, &kept[old].im.w, &kept[old].im.h);   /* (NULL: none; kept as that) */
+    return kept[old].im.rgba ? &kept[old].im : NULL;
+}
+
+void ui_picture(const UiCanvas *cv, const UiImage *im, float x0, float y0, float w, float h, int alpha, float *dw, float *dh) {
+    static struct { const uint8_t *src; int w, h; UiImage im; unsigned used; } small[12];
+    static unsigned clock;
+    if (dw) *dw = 0.0f;
+    if (dh) *dh = 0.0f;
+    if (!im || !im->rgba || im->w < 1 || im->h < 1 || w < 1.0f || h < 1.0f) return;
+    float k = fminf(w / (float)im->w, h / (float)im->h);
+    int ow, oh;
+    if (k >= 1.0f) {                                     /* whole pixels */
+        ow = im->w * (int)k;
+        oh = im->h * (int)k;
+    } else {                                             /* smaller: an averaged copy at that size, kept */
+        ow = (int)((float)im->w * k);
+        oh = (int)((float)im->h * k);
+        if (ow < 1 || oh < 1) return;
+        int old = 0, at = -1;
+        clock++;
+        for (int i = 0; i < 12; i++) {
+            if (small[i].im.rgba && small[i].src == im->rgba && small[i].w == ow && small[i].h == oh) at = i;
+            if (small[i].used < small[old].used) old = i;
+        }
+        if (at < 0) {
+            uint8_t *px = malloc((size_t)ow * (size_t)oh * 4);
+            if (!px) return;
+            for (int y = 0; y < oh; y++)
+                for (int x = 0; x < ow; x++) {
+                    int u0 = x * im->w / ow, u1 = ((x + 1) * im->w + ow - 1) / ow, v0 = y * im->h / oh, v1 = ((y + 1) * im->h + oh - 1) / oh;
+                    unsigned sum[4] = {0, 0, 0, 0}, cnt = 0;
+                    for (int vv = v0; vv < v1 && vv < im->h; vv++)
+                        for (int uu = u0; uu < u1 && uu < im->w; uu++) {
+                            const uint8_t *t = &im->rgba[((size_t)vv * (size_t)im->w + (size_t)uu) * 4];
+                            sum[0] += t[0]; sum[1] += t[1]; sum[2] += t[2]; sum[3] += t[3];
+                            cnt++;
+                        }
+                    uint8_t *o = &px[((size_t)y * (size_t)ow + (size_t)x) * 4];
+                    if (!cnt) cnt = 1;
+                    o[0] = (uint8_t)(sum[0] / cnt); o[1] = (uint8_t)(sum[1] / cnt); o[2] = (uint8_t)(sum[2] / cnt);
+                    o[3] = (uint8_t)(sum[3] / cnt);
+                }
+            at = old;
+            free(small[at].im.rgba);
+            small[at].src = im->rgba;
+            small[at].w = small[at].im.w = ow;
+            small[at].h = small[at].im.h = oh;
+            small[at].im.rgba = px;
+        }
+        small[at].used = clock;
+        im = &small[at].im;
+    }
+    ui_sprite(cv, im, x0, y0, (float)ow, (float)oh, alpha);
+    if (dw) *dw = (float)ow;
+    if (dh) *dh = (float)oh;
+}
+
 const UiImage *ui_face(int id, float side) {
     const UiImage *fine = side >= UI_FACE_FINE ? ui_profile(id) : NULL;
     return fine ? fine : ui_portrait(id);
