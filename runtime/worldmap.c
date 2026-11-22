@@ -25,6 +25,7 @@
  * changes and a moment after the field settles (its tiles are all in then).
  */
 #include "worldmap.h"
+#include "par.h"
 #include "bus.h"
 #include "m68k.h"
 #include "vdp.h"
@@ -424,23 +425,23 @@ static inline uint32_t fogged(uint32_t c, int f) {
     return 0xFF000000u | r << 16 | g << 8 | b;
 }
 
-void worldmap_render(uint32_t *out, int stride, int w, int h, int ox, int oy, int lvl, int mag, int wrap) {
-    int W = lw * 32, H = vh * 32, fog = mode == 1;
-    if (cur < 0 || W <= 0 || H <= 0 || !mip[1]) {
-        for (int j = 0; j < h; j++)
-            for (int i = 0; i < w; i++) out[j * stride + i] = DARK;
-        return;
-    }
-    int wrap_x = (wrap & 1) && worldmap_wraps(), wrap_y = (wrap & 2) && worldmap_wraps_y();
-    fog_wrap = worldmap_wraps();
-    fog_cw = lw * 2;
-    fog_ch = lh * 2;
-    fog_ex = explored[cur];
-    if (lvl > 0) {                                       /* from afar: the kept pictures */
-        if (lvl > 4) lvl = 4;
+/* A view's rows, on all the cores (par_rows): panning the whole map draws it again every frame, about two
+ * million pixels on a phone's screen -- on one core of the Odin that took a frame of its own, and the sound
+ * ran dry (PsiLok, 2026-11-22: "when in the map screen panning the map, the audio lags"). */
+typedef struct {
+    uint32_t *out;
+    int stride, w, h, ox, oy, lvl, mag, wrap_x, wrap_y, fog, W, H;
+} MapView;
+
+static void view_far(void *ctx, int j0, int j1) {      /* from afar: the kept pictures, a row of them at a time */
+    const MapView *v = ctx;
+    uint32_t *out = v->out;
+    int stride = v->stride, w = v->w, ox = v->ox, oy = v->oy, lvl = v->lvl, fog = v->fog, wrap_x = v->wrap_x, wrap_y = v->wrap_y;
+    {
+        int W = v->W, H = v->H;
         int Wl = W >> lvl, Hl = H >> lvl, ws = MAXC * 32 >> lvl, half = 1 << lvl >> 1;
         const uint16_t *m = mip[lvl];
-        for (int j = 0; j < h; j++) {
+        for (int j = j0; j < j1; j++) {
             uint32_t *o = out + (size_t)j * stride;
             int Y = oy + j;
             if (wrap_y) Y = wrapi(Y, Hl);
@@ -455,20 +456,21 @@ void worldmap_render(uint32_t *out, int stride, int w, int h, int ox, int oy, in
                      : fogged(from565(m[(size_t)Y * ws + X]), f);
             }
         }
-        return;
     }
-    if (mag < 1) mag = 1;
-    static uint32_t *line;
-    static int line_n;
+}
+
+#define VIEW_LINE 4096                                   /* (a piece's row of map pixels, on its own stack) */
+static void view_near(void *ctx, int r0, int r1) {     /* close: a row of map pixels, then stretched; r: those rows */
+    const MapView *v = ctx;
+    uint32_t *out = v->out;
+    int stride = v->stride, w = v->w, h = v->h, ox = v->ox, oy = v->oy, mag = v->mag, fog = v->fog;
+    int wrap_x = v->wrap_x, wrap_y = v->wrap_y, W = v->W, H = v->H;
+    uint32_t line[VIEW_LINE];
     int cols = (w + mag - 1) / mag;
-    if (cols > line_n) {
-        free(line);
-        line = malloc((size_t)cols * sizeof *line);
-        line_n = line ? cols : 0;
-        if (!line) return;
-    }
-    for (int j = 0; j < h; j += mag) {                   /* a row of map pixels, then stretched */
-        int Y = oy + j / mag, void_row = 0;
+    if (cols > VIEW_LINE) cols = VIEW_LINE;
+    for (int r = r0; r < r1; r++) {
+        int j = r * mag;
+        int Y = oy + r, void_row = 0;
         if (wrap_y) Y = wrapi(Y, H);
         else if (Y < 0 || Y >= H) void_row = 1;
         const uint8_t *la = lay[0] + (void_row ? 0 : Y >> 5) * MAXC, *lb = lay[1] + (void_row ? 0 : Y >> 5) * MAXC;
@@ -484,11 +486,30 @@ void worldmap_render(uint32_t *out, int stride, int w, int h, int ox, int oy, in
             line[c] = f == 256 ? col : fogged(col, f);
         }
         uint32_t *o = out + (size_t)j * stride;
-        if (mag == 1) memcpy(o, line, (size_t)w * sizeof *o);
+        if (mag == 1) memcpy(o, line, (size_t)(w < cols ? w : cols) * sizeof *o);
         else
-            for (int i = 0; i < w; i++) o[i] = line[i / mag];
+            for (int i = 0; i < w; i++) o[i] = line[i / mag < cols ? i / mag : cols - 1];
         for (int k = 1; k < mag && j + k < h; k++) memcpy(o + (size_t)k * stride, o, (size_t)w * sizeof *o);
     }
+}
+
+void worldmap_render(uint32_t *out, int stride, int w, int h, int ox, int oy, int lvl, int mag, int wrap) {
+    int W = lw * 32, H = vh * 32;
+    if (cur < 0 || W <= 0 || H <= 0 || !mip[1]) {
+        for (int j = 0; j < h; j++)
+            for (int i = 0; i < w; i++) out[j * stride + i] = DARK;
+        return;
+    }
+    fog_wrap = worldmap_wraps();                         /* (read by every piece: set before they start) */
+    fog_cw = lw * 2;
+    fog_ch = lh * 2;
+    fog_ex = explored[cur];
+    if (mag < 1) mag = 1;
+    if (lvl > 4) lvl = 4;
+    MapView v = {out, stride, w, h, ox, oy, lvl, mag, (wrap & 1) && worldmap_wraps(), (wrap & 2) && worldmap_wraps_y(),
+                 mode == 1, W, H};
+    if (lvl > 0) par_rows(view_far, &v, h);
+    else par_rows(view_near, &v, (h + mag - 1) / mag);
 }
 
 /* ------------------------------------------------------------------ collision, places */
