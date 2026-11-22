@@ -5,6 +5,7 @@
 #include "battledesc.h"
 #include "bus.h"
 #include "hdtext.h"
+#include "m68k.h"
 #include "savepages.h"
 #include "uikit.h"
 #include "vdp.h"
@@ -291,6 +292,11 @@ static VehHit vhits[3];
 static int nvhits;
 static void vehicles_now(Vehicles *v);
 static void vehicle_go(const Vehicles *v, int row);
+/* buying several (below, by the shop's screen) */
+typedef struct { float x0, y0, x1, y1; int d; } QtyHit;
+static QtyHit qhits[2];
+static int nqhits;
+static void buy_step(int d);
 static int pulse;                 /* a click on nothing: a press of C, or of B (the right button), for a frame */
 static uint8_t pulse_key;
 static int wheel, wheel_rest;     /* turns of the wheel still to play: + down, - up */
@@ -337,6 +343,8 @@ int fieldmenu_click(float fx, float fy, int right) {
     drive.on = 0;
     wheel = 0;
     if (right) { pulse = 1; pulse_key = PAD_B; return 1; }
+    for (int i = 0; i < nqhits; i++)                     /* a shop: fewer, more */
+        if (fx >= qhits[i].x0 && fx < qhits[i].x1 && fy >= qhits[i].y0 && fy < qhits[i].y1) { buy_step(qhits[i].d); return 1; }
     for (int i = 0; i < nvhits; i++)                     /* a vehicle */
         if (fx >= vhits[i].x0 && fx < vhits[i].x1 && fy >= vhits[i].y0 && fy < vhits[i].y1) {
             Vehicles v;
@@ -446,6 +454,113 @@ static void items_wheel(int d) {
     walk_items_to(slot);
 }
 
+/* ---- a shop: several at once (GitHub issue 9: "when making a purchase, let me choose the quantity of the item I
+ * want to buy -- instead of having to buy them one by one"; PsiLok, 2026-11-22: "Lets do a shop quantity test").
+ * In the goods' list Left and Right (or the row's arrows) set how many, up to what the meseta and the pack's
+ * free slots allow. The purchase is still the game's own, asked and answered once: C, its "OK?", Yes -- and as
+ * its item lands in the pack and its price leaves the meseta, the others follow it there the same way (the
+ * game's purchase is no more than that: the item into the first free slot, the price off; Win_ShopBuyConfirm,
+ * $0659D4). Nothing is bought that the game would have refused. */
+static int item_price_of(int id);
+static struct {
+    int qty, cursor;                 /* how many of the row the cursor is on; that row */
+    int armed, item, count0;         /* the game is asking: what, and the pack's count as it asked */
+    uint32_t money0;
+    int held;
+} buy = {1, -1, 0, 0, 0, 0, 0};
+
+static int pack_count(void) {
+    int n = 0;
+    while (n < 40 && r8(INVENTORY_AT + (unsigned)n)) n++;
+    return n;
+}
+/* the goods of the shop that is open: item IDs, as draw_shop lists them */
+static int shop_goods(uint8_t *list) {
+    uint32_t a = SHOP_GOODS;
+    int count = 0;
+    for (unsigned i = 0; i < r8(SHOP_ID) && i < 64; i++) {
+        while (ui_rom8(a) != 0xFF && a < SHOP_GOODS + 0x400) a++;
+        a++;
+    }
+    while (count < 16 && ui_rom8(a + (uint32_t)count) != 0xFF) { list[count] = (uint8_t)ui_rom8(a + (uint32_t)count); count++; }
+    return count;
+}
+/* how many of it could be bought now: the pack's free slots, the meseta */
+static int buy_most(int item) {
+    int room = 40 - pack_count(), price = item_price_of(item);
+    uint32_t money = ui_ram32(MONEY);
+    int n = price > 0 ? (int)(money / (uint32_t)price > 40 ? 40 : money / (uint32_t)price) : room;
+    if (n > room) n = room;
+    return n < 1 ? 1 : n;
+}
+static int buy_item_now(void) {
+    uint8_t list[16];
+    int n = shop_goods(list), c = (int)r8(OPTION_3);
+    return c < n ? list[c] : 0;
+}
+static void buy_step(int d) {
+    if (screen != SCR_SHOP || routine_of(r16(WINDOW_INDEX)) != R_SHOP_BUY || buy.armed) return;
+    int most = buy_most(buy_item_now());
+    buy.qty += d;
+    if (buy.qty > most) buy.qty = most;
+    if (buy.qty < 1) buy.qty = 1;
+}
+
+static void buy_watch(uint8_t fresh, uint8_t *pad) {
+    if (screen != SCR_SHOP) { buy.qty = 1; buy.cursor = -1; buy.armed = 0; return; }
+    uint32_t now = routine_of(r16(WINDOW_INDEX));
+    if (buy.armed) {
+        int n = pack_count(), price = item_price_of(buy.item);
+        uint32_t money = ui_ram32(MONEY);
+        if (n == buy.count0 + 1 && (int)r8(INVENTORY_AT + (unsigned)buy.count0) == buy.item
+            && money + (uint32_t)price == buy.money0) {      /* bought, by the game: the others after it */
+            int more = buy.qty - 1;
+            if (more > 40 - n) more = 40 - n;
+            if (price > 0 && (uint32_t)more > money / (uint32_t)price) more = (int)(money / (uint32_t)price);
+            for (int k = 0; k < more; k++) m68k_ram[INVENTORY_AT + (unsigned)(n + k)] = (uint8_t)buy.item;
+            money -= (uint32_t)more * (uint32_t)price;
+            m68k_ram[MONEY] = (uint8_t)(money >> 24);
+            m68k_ram[MONEY + 1] = (uint8_t)(money >> 16);
+            m68k_ram[MONEY + 2] = (uint8_t)(money >> 8);
+            m68k_ram[MONEY + 3] = (uint8_t)money;
+            {
+                static int on = -1;
+                if (on < 0) on = getenv("PSIV_FIELDMENU_LOG") != NULL;
+                if (on) fprintf(stderr, "fieldmenu: bought %d x %02X (%s) at %d: the pack %d -> %d, %lu meseta left\n", 1 + more,
+                                buy.item, ui_item_name(buy.item), price, buy.count0, n + more, (unsigned long)money);
+            }
+            buy.armed = 0;
+            buy.qty = 1;
+        } else if (now == R_SHOP_BUY && n == buy.count0 && money == buy.money0) {
+            buy.armed = 0;                               /* No, or the game would not sell: nothing bought */
+            buy.qty = 1;
+        } else if (n != buy.count0 && n != buy.count0 + 1) {
+            buy.armed = 0;                               /* (not what was asked: left alone) */
+            buy.qty = 1;
+        }
+        return;
+    }
+    if (now == R_SHOP_BUY_Q && open_now(R_SHOP_BUY)) {    /* the game asks "OK?": what, and how things stand */
+        if (buy.qty > 1) {
+            buy.armed = 1;
+            buy.item = buy_item_now();
+            buy.count0 = pack_count();
+            buy.money0 = ui_ram32(MONEY);
+        }
+        return;
+    }
+    if (now != R_SHOP_BUY) { buy.qty = 1; buy.cursor = -1; return; }
+    if ((int)r8(OPTION_3) != buy.cursor) { buy.cursor = (int)r8(OPTION_3); buy.qty = 1; }
+    uint8_t lr = *pad & (PAD_LEFT | PAD_RIGHT);
+    if (lr) {                                            /* fewer, more: the game never sees them (it has no use for them here) */
+        buy.held = (fresh & (PAD_LEFT | PAD_RIGHT)) ? 0 : buy.held + 1;
+        if ((fresh & (PAD_LEFT | PAD_RIGHT)) || (buy.held >= 18 && buy.held % 4 == 0)) buy_step(lr & PAD_RIGHT ? 1 : -1);
+        *pad &= (uint8_t)~(PAD_LEFT | PAD_RIGHT);
+    }
+    int most = buy_most(buy_item_now());
+    if (buy.qty > most) buy.qty = most;
+}
+
 /* ---- vehicle shortcuts (GitHub issue 9): the vehicles in the pack, boarded from the menu's first screen
  * by the game's own way there -- Items, the vehicle, Use -- played as the pad */
 #define FIELD_MAP_AT    0xEC28u   /* Field_Map_Index: a planet's world map below $10 */
@@ -519,6 +634,7 @@ uint8_t fieldmenu_pad(uint8_t pad) {
         if (fresh & PAD_B) { vseq.n = 0; drive.on = 0; return pad; }
         pad = 0;
     }
+    buy_watch(fresh, &pad);
     uint8_t out = pad;
     if (sideways) {
         out = pad & (uint8_t)~(PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT);
@@ -1517,6 +1633,7 @@ static void draw_status(float x0, float y0, float x1, float y1) {
 /* ---- a shop: the meseta, the keeper, buy or sell, the goods (or the pack), who could use the one
  * the cursor is on and what it would do for them, the keeper's words at the foot */
 static int item_price(int id) { return id > 0 ? (int)ui_rom16(ITEM_DATA + (uint32_t)(id - 1) * 0x16u + I_PRICE) : 0; }
+static int item_price_of(int id) { return item_price(id); }
 
 /* what putting `item` on would do for a member: 0 if they cannot wear it */
 static int would_change(int id, unsigned rec, int item, int *attack, int *defense) {
@@ -1585,6 +1702,12 @@ static void draw_shop(float x0, float y0, float x1, float y1) {
         int lines = 0, first;
         for (int cy = 0; cy < words->h - 2 && cy < 28 && lines < 2; cy++)
             if (tall_text(words, cy, line[lines], (int)sizeof line[0], &first) || row_text(words, cy, line[lines], (int)sizeof line[0])) lines++;
+        if (buy.qty > 1 && now == R_SHOP_BUY_Q && open_now(R_SHOP_BUY)) {   /* several: what it comes to */
+            int it = buy_item_now();
+            snprintf(line[0], sizeof line[0], "%d x %s: %d meseta in all.", buy.qty, ui_item_name(it), buy.qty * item_price(it));
+            snprintf(line[1], sizeof line[1], "Is that OK?");
+            lines = 2;
+        }
         if (lines > 0) text(rx0 + 8.0f, y1 - 16.6f, line[0], WHITE);
         if (lines > 1) text(rx0 + 8.0f, y1 - 6.4f, line[1], WHITE);
     }
@@ -1649,8 +1772,22 @@ static void draw_shop(float x0, float y0, float x1, float y1) {
                 else c = WHITE;
             }
             text(rx0 + 9.0f, base, ui_item_name(list[i]), c);
-            snprintf(t, sizeof t, "%d", price);
+            int many = i == cursor && buying ? buy.qty : 1;
+            snprintf(t, sizeof t, "%d", price * many);
             text_right(gx1 - 9.0f, base, t, pc);
+            if (i == cursor && focus && buying && !dear) {   /* how many: fewer, more */
+                int most = buy_most(list[i]);
+                float qx = gx1 - 58.0f;
+                if (most > 1) {
+                    snprintf(t, sizeof t, "x%d", buy.qty);
+                    text_mid(qx, base, t, NAVY);
+                    ui_triangle(&cv, (qx - 13.5f) * S, (base - 2.9f) * S, 2.6f * S, 3, buy.qty > 1 ? NAVY : 0x9AA6D0u, 255);
+                    ui_triangle(&cv, (qx + 13.5f) * S, (base - 2.9f) * S, 2.6f * S, 2, buy.qty < most ? NAVY : 0x9AA6D0u, 255);
+                    qhits[0] = (QtyHit){qx - 21.0f, base - 8.6f, qx - 7.0f, base + 3.6f, -1};
+                    qhits[1] = (QtyHit){qx + 7.0f, base - 8.6f, qx + 21.0f, base + 3.6f, 1};
+                    nqhits = 2;
+                }
+            }
         }
     }
 
@@ -1661,6 +1798,7 @@ static void draw_shop(float x0, float y0, float x1, float y1) {
         int owned = 0;
         for (int i = 0; i < 40; i++) owned += (int)r8(INVENTORY + (unsigned)i) == item;
         if (sell) snprintf(t, sizeof t, item_price(item) ? "Sells for %d mst" : "Cannot be sold", item_price(item) / 2);
+        else if (buy.qty > 1) snprintf(t, sizeof t, "In the pack: %d   Buying %d", owned, buy.qty);
         else snprintf(t, sizeof t, "In the pack: %d", owned);
         text(px0 + 9.0f, py0 + 13.5f, t, SOFT);
     } else {
@@ -2187,6 +2325,7 @@ void fieldmenu_draw(uint32_t *out, int stride, int scale, int w, int h) {
     cv = (UiCanvas){out, stride, 0, 0, ow, oh};
     S = (float)scale;
     nhits = 0;
+    nqhits = 0;
     party_routine = strip_routine = 0;
     float m = 5.0f, cmd = 84.0f, W = (float)w, H = (float)h, rx0 = m + cmd + 3.0f;
     if (screen == SCR_SHOP) {

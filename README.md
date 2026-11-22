@@ -627,7 +627,14 @@ The additions:
   who could use the thing under the cursor and what it would do for them
   ("Attack +4", "cannot use", "wearing it"; how many are in the pack, or
   what it sells for), and the keeper's words at the foot; yes / no comes up
-  in the middle. **Something found** (a chest): the game's windows where it
+  in the middle. **Buying several** (GitHub issue 9): in the goods' list
+  Left and Right, or the arrows on the cursor's row, set how many, up to
+  what the meseta and the pack's free slots allow; the row shows "x3" and
+  what they come to, and the keeper asks once ("3 x Telepipe: 390 meseta in
+  all. Is that OK?"). The purchase is the game's own: as its item lands in
+  the pack and its price leaves the meseta, the port puts the others after
+  it the same way (the game's purchase is no more than that: the item into
+  the first free slot, the price off). **Something found** (a chest): the game's windows where it
   has them, in the new frames, over the field as it is (held, not dimmed).
   **The Start button's menu** (the game's SYS window, another group): Save,
   Message speed, Battle speed and Buttons in full down the left, and beside
