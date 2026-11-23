@@ -11,6 +11,7 @@
 
 #define GAME_MODE    0xEF00
 #define MODE_FIELD   0x0C
+#define MODE_ENTER   0x08              /* a place being entered: its map loaded, its picture fading in */
 #define OBJECTS      0xC000            /* the field's objects, $40 each; the first is the party's leader */
 #define OBJ_SIZE     0x40
 #define OBJ_COUNT    64
@@ -95,8 +96,24 @@ int spritemod_set_file(const char *paths) {
 
 void spritemod_frame(void) {
     vdp_sprite_art = NULL;
-    if (!narts || r16(GAME_MODE) != MODE_FIELD) return;
     if (logging < 0) logging = getenv("PSIV_SPRITEMOD_LOG") != NULL;
+    static int said = -1;
+    static long tick;
+    tick++;
+    /* On the field, and as a place fades in: the game already shows its people then, and for those frames
+     * they were the game's own (PsiLok: "the sprites start off with the og for a few frames then switch") */
+    int mode = (int)r16(GAME_MODE);
+    if (!narts || (mode != MODE_FIELD && mode != MODE_ENTER)) {
+        if (logging && narts && said != mode) {
+            said = mode;
+            fprintf(stderr, "spritemod: tick %ld: not the field (game mode %X, routine %X): the game's own\n", tick, (unsigned)mode, r16(0xEC20));
+        }
+        return;
+    }
+    if (logging && said != mode) {
+        said = mode;
+        fprintf(stderr, "spritemod: tick %ld: %s (routine %X)\n", tick, mode == MODE_FIELD ? "the field" : "a place fading in", r16(0xEC20));
+    }
 
     /* the sprite table as the game left it */
     struct { int x, y, w, h, tile, owner, far; } sp[80];
@@ -137,6 +154,12 @@ void spritemod_frame(void) {
             if (sp[k].x < lx) lx = sp[k].x;
             if (sp[k].y < ly) ly = sp[k].y;
         }
+    static int lost = -1;
+    if (logging && lost != (lx == 9999)) {
+        lost = lx == 9999;
+        fprintf(stderr, "spritemod: tick %ld: the leader's piece %s (id %X, art tile %X, %d pieces in the table)\n", tick,
+                lost ? "not found: the game's own" : "found", r16(OBJECTS + O_ID), (unsigned)(tile0[0] < 0 ? 0xFFF : tile0[0]), nsp);
+    }
     if (lx == 9999) return;
     int dx = lx - (int)(int16_t)r16(OBJECTS + O_X), dy = ly - (int)(int16_t)r16(OBJECTS + O_Y);
     /* each piece to the nearest object that has its tiles (two townspeople of a kind share theirs) */
