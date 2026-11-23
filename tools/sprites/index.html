@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PSIV Recomp sprite editor</title>
+<!--
+  PSIV Recomp: the sprite editor (a first version: the party walking on the field). One file, no network.
+  It reads each character's walking drawings out of the player's own Phantasy Star IV (USA) ROM (in the
+  browser; the ROM goes nowhere), lets them redraw the frames -- the game's own count, or two or four
+  pictures to each of the game's frames -- plays the game's and theirs side by side at the game's pace,
+  and exports a mod: a folder for the port's mods folder, zipped. A sprite file holds only what was
+  changed: a pixel left as the game has it is written as "the game's own", so none of the game's art is in it.
+  The port's side: runtime/spritemod.h. The translation editor is its sibling: tools/translate.
+-->
+<style>
+:root {
+  --paper: #e8ecf5; --panel: #ffffff; --ink: #141a33; --soft: #556082; --rule: #c9d1e4;
+  --navy: #00246d; --bevel-hi: #b6b6b6; --bevel-lo: #6d6d6d; --gold: #ffd45a; --pick: #dfe6f7;
+  --bad: #b3261e; --good: #1b6a4c; --stage: #5b7a4a; --check-a: #cfd6e6; --check-b: #b9c2d6;
+  --ui: "Segoe UI Variable Text", "Segoe UI", "Noto Sans", "Helvetica Neue", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #0f1428; --panel: #171d38; --ink: #e6eaf7; --soft: #9aa5c7; --rule: #2c3560; --pick: #232c55;
+          --bad: #ff8a80; --good: #6fd3a8; --check-a: #2a3152; --check-b: #222847; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 var(--ui); }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border: 1px solid var(--rule); background: var(--panel); border-radius: 6px; padding: 6px 12px; }
+button:hover { border-color: var(--soft); }
+button.main { background: var(--navy); border-color: var(--navy); color: #fff; font-weight: 600; }
+button[aria-pressed=true] { background: var(--pick); border-color: var(--soft); font-weight: 600; }
+button:disabled { opacity: .45; cursor: default; }
+select { border: 1px solid var(--rule); background: var(--panel); border-radius: 6px; padding: 5px 6px; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 1px; }
+.hidden { display: none !important; }
+canvas { image-rendering: pixelated; }
+
+#app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+header { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding: 10px 16px; background: var(--panel);
+         border-bottom: 1px solid var(--rule); }
+header h1 { font-size: 17px; margin: 0 8px 0 0; font-weight: 650; }
+header label { color: var(--soft); }
+header input[type=text] { border: 1px solid var(--rule); background: var(--paper); border-radius: 6px; padding: 6px 9px; width: 12em; }
+#saved { margin-left: auto; color: var(--soft); }
+
+#start { display: grid; place-items: center; padding: 24px; overflow: auto; }
+#start .card { max-width: 40em; }
+#start h2 { font-size: 30px; line-height: 1.15; margin: 0 0 14px; font-weight: 650; }
+#start p { margin: 0 0 12px; max-width: 34em; }
+#drop { border: 2px dashed var(--rule); border-radius: 10px; padding: 18px; background: var(--panel); margin-top: 18px; }
+#drop.over { border-color: var(--navy); background: var(--pick); }
+#romerror { color: var(--bad); font-weight: 600; }
+
+#work { display: grid; grid-template-columns: 13em minmax(300px, auto) 1fr; min-height: 0; }
+#who, #draw, #side { overflow: auto; min-height: 0; }
+#who { border-right: 1px solid var(--rule); padding: 8px; }
+#who button { display: grid; grid-template-columns: auto 1fr auto; gap: 0 10px; align-items: center; width: 100%; text-align: left;
+              border: 0; background: none; border-radius: 6px; padding: 5px 8px; }
+#who button[aria-current=true] { background: var(--pick); }
+#who canvas { width: 32px; height: 64px; background: var(--stage); border-radius: 3px; }
+#who .mark { color: var(--good); font-size: 13px; }
+#draw { padding: 14px 16px; border-right: 1px solid var(--rule); }
+#draw h2, #side h2 { font-size: 15px; margin: 0 0 2px; font-weight: 650; }
+.meta { color: var(--soft); margin: 0 0 10px; }
+#tools, #palette, #frameacts, #palrow, #resrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+#palrow button { padding: 3px 10px; font-size: 13px; border-radius: 999px; }
+#draw h3 { font-size: 13px; font-weight: 650; color: var(--soft); margin: 14px 0 6px; }
+#resnote { max-width: 20em; }
+#palette button { width: 30px; height: 30px; padding: 0; border-radius: 6px; border: 2px solid var(--rule); }
+#palette button[aria-pressed=true] { border-color: var(--ink); box-shadow: 0 0 0 2px var(--gold); }
+#palette .none { background: repeating-conic-gradient(var(--check-a) 0% 25%, var(--check-b) 0% 50%) 50% / 12px 12px; }
+#canvaswrap { position: relative; width: 256px; height: 512px; }
+#canvaswrap canvas, #base { position: absolute; left: 0; top: 0; width: 256px; height: 512px; border-radius: 4px; }
+#base { background: repeating-conic-gradient(var(--check-a) 0% 25%, var(--check-b) 0% 50%) 0 0 / 32px 32px; }
+#edit { cursor: crosshair; touch-action: none; }
+#side { padding: 14px 18px 40px; }
+#side h3 { font-size: 13px; font-weight: 650; color: var(--soft); margin: 16px 0 6px; }
+#stages { display: flex; flex-wrap: wrap; gap: 14px; }
+.stage { background: var(--stage); border-radius: 8px; padding: 10px 12px 6px; }
+.stage canvas { width: 320px; height: 128px; display: block; }
+.stage div { color: #fff; font-size: 13px; margin-top: 4px; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+#playrow, #multrow, #facerow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+#strip { display: flex; flex-wrap: wrap; gap: 6px; }
+#strip button { padding: 3px; border-radius: 6px; border: 2px solid var(--rule); background: var(--stage); line-height: 0; position: relative; }
+#strip button[aria-current=true] { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold); }
+#strip button.key::after { content: ""; position: absolute; left: 3px; right: 3px; bottom: -7px; height: 3px; background: var(--soft); border-radius: 2px; }
+#strip canvas { width: 48px; height: 96px; }
+#strip .gap { width: 8px; }
+#modbox { display: grid; gap: 8px; max-width: 34em; }
+#modbox input, #modbox textarea { border: 1px solid var(--rule); background: var(--panel); border-radius: 6px; padding: 6px 9px; width: 100%; }
+#modbox .row { display: flex; flex-wrap: wrap; gap: 8px; }
+#note { color: var(--soft); max-width: 40em; margin-top: 14px; }
+#toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--ink); color: var(--paper);
+         padding: 8px 14px; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity .2s; }
+#toast.on { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+@media (max-width: 1000px) {
+  #work { grid-template-columns: 1fr; overflow: auto; }
+  #who { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--rule); }
+  #who button { width: auto; flex: none; }
+  #draw { border-right: 0; border-bottom: 1px solid var(--rule); }
+  #who, #draw, #side { overflow: visible; }
+  #who { overflow-x: auto; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>PSIV Recomp sprite editor</h1>
+    <button id="openmod" title="Carry on from sprite files: yours, or someone else's">Open sprite files</button>
+    <button id="export" class="main" disabled>Export mod</button>
+    <span id="saved"></span>
+    <input id="romfile" type="file" accept=".bin,.md,.gen,.smd" class="hidden">
+    <input id="sprfile" type="file" accept=".spr" multiple class="hidden">
+    <input id="pngfile" type="file" accept="image/png" class="hidden">
+  </header>
+
+  <main id="start">
+    <div class="card">
+      <h2>Redraw the party's walk, frame by frame</h2>
+      <p>Pick a character, change their walking frames, and watch yours beside the game's at the game's own
+         pace. Keep the game's four steps, or draw two or four pictures for each of them for a smoother walk.</p>
+      <p>Open your own Phantasy Star IV (USA) ROM to begin: the same file PSIV Recomp plays. It is read here, in
+         your browser. It is not uploaded anywhere, and this page works with no internet.</p>
+      <div id="drop">
+        <button id="openrom" class="main">Open my ROM</button>
+        <span> or drop the file here (.bin, .md, .gen or .smd; unzip a .zip first)</span>
+        <p id="romerror" role="alert"></p>
+      </div>
+      <p style="margin-top:14px;color:var(--soft)">A first version: the eleven of the party, walking on the field.
+         Your work is kept in this browser as you draw. The mod you export holds only the pixels you changed.</p>
+    </div>
+  </main>
+
+  <main id="work" class="hidden">
+    <nav id="who" aria-label="Characters"></nav>
+    <section id="draw">
+      <h2 id="title"></h2>
+      <p class="meta" id="frameinfo"></p>
+      <div id="tools" role="group" aria-label="Tools">
+        <button data-tool="pen" aria-pressed="true" title="Draw with the chosen colour (P)">Pencil</button>
+        <button data-tool="fill" aria-pressed="false" title="Fill an area with the chosen colour (F)">Fill</button>
+        <button data-tool="pick" aria-pressed="false" title="Take a colour from the picture (I)">Pick colour</button>
+        <button data-tool="back" aria-pressed="false" title="Paint the game's own pixels back (G)">Game's own</button>
+        <button id="undo" title="Undo (Ctrl + Z)">Undo</button>
+      </div>
+      <div id="palrow" role="group" aria-label="Which colours">
+        <button id="palown" aria-pressed="true" title="Only the colours the game's own sprite of this character uses"></button>
+        <button id="palall" aria-pressed="false" title="All fifteen colours of the party's palette">All fifteen</button>
+      </div>
+      <div id="palette" role="group" aria-label="Colours"></div>
+      <div id="canvaswrap"><div id="base"></div><canvas id="edit" width="16" height="32"></canvas></div>
+      <h3>Pixels for each of the game's pixels</h3>
+      <div id="resrow" role="group" aria-label="Pixels for each of the game's pixels">
+        <button data-res="1">1: the game's own, 16 x 32</button>
+        <button data-res="2">2: 32 x 64</button>
+        <button data-res="4">4: 64 x 128</button>
+      </div>
+      <p class="meta" id="resnote">Finer pictures are kept in your mod as you draw them. This version of the port still shows
+        them at the game's own 16 x 32; drawing their full detail in the game is the next step.</p>
+      <div id="frameacts" style="margin-top:10px">
+        <button id="copyprev" title="Start this frame from the one before it">Copy the frame before</button>
+        <button id="resetframe" title="This frame as the game has it">Back to the game's</button>
+      </div>
+    </section>
+    <section id="side">
+      <h2>Side by side</h2>
+      <p class="meta">Both walk at the game's pace: each of its four steps is held for nine ticks.</p>
+      <div id="stages">
+        <div class="stage"><canvas id="stageGame" width="320" height="128"></canvas><div>The game's</div></div>
+        <div class="stage"><canvas id="stageMine" width="320" height="128"></canvas><div>Yours</div></div>
+      </div>
+      <div id="playrow">
+        <button id="play" aria-pressed="true">Playing</button>
+        <label for="speed">Speed</label>
+        <select id="speed"><option value="1">the game's</option><option value="0.5">half</option><option value="0.25">a quarter</option></select>
+      </div>
+      <h3>Pictures for each of the game's frames</h3>
+      <div id="multrow" role="group" aria-label="Pictures for each of the game's frames">
+        <button data-mult="1">1: the game's own count</button>
+        <button data-mult="2">2: twice as smooth</button>
+        <button data-mult="4">4: four times</button>
+      </div>
+      <h3>Frames</h3>
+      <div id="facerow" role="group" aria-label="Facing">
+        <button data-face="0">Down</button><button data-face="1">Up</button><button data-face="2">Right</button><button data-face="3">Left</button>
+        <button id="mirror" title="This facing drawn from the other side's frames, mirrored">Make it the other side, mirrored</button>
+      </div>
+      <div id="strip" style="margin-top:10px"></div>
+      <div id="frameacts2" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:16px">
+        <button id="sheetout" title="Every frame of this character as one picture, for another drawing program">Save the sheet (PNG)</button>
+        <button id="sheetin" title="A sheet in the same layout, drawn elsewhere">Load a sheet (PNG)</button>
+        <button id="resetchar">This character back to the game's</button>
+      </div>
+      <h3>Your mod</h3>
+      <div id="modbox">
+        <input id="modname" type="text" placeholder="Its name, as the launcher will list it" aria-label="The mod's name">
+        <input id="modauthor" type="text" placeholder="Your name" aria-label="Your name">
+        <textarea id="modabout" rows="2" placeholder="A line on what it changes" aria-label="What it changes"></textarea>
+      </div>
+      <p id="note">Export mod saves a .zip. Unzip it into the <b>mods</b> folder beside your saves, and switch it on
+        from the launcher's Mods page (Enhanced only). A pixel you leave as the game has it is not stored: the port
+        shows the game's own there.</p>
+    </section>
+  </main>
+</div>
+<div id="toast" role="status"></div>
+
+<script id="core">
+/* ---------------------------------------------------------------- the game's walking sprites, and a mod's
+ * file (no page here: this block also runs under Node for the tool's own checks) */
+const ROM_SHA1 = 'bc7ff6d6a8408f38562bc610f24645cad6c42629';   /* Phantasy Star IV (USA), as a plain .bin */
+const NAMES = ['Chaz', 'Alys', 'Hahn', 'Rune', 'Gryz', 'Rika', 'Demi', 'Wren', 'Raja', 'Kyra', 'Seth'];
+const ART = 0x290000, ART_STEP = 0x900;     /* a character's walking art: nine drawings of 8 tiles, one after another */
+const PALETTE = 0x9F2FC;                    /* the game's starting palette, line 2: the party's on the field */
+const W = 16, H = 32, HOLDS = 4, FACES = 4, HOLD_TICKS = 9, OWN = 255;
+/* the walk's cycle, a facing: standing, a step, standing, the other step -- by the art's drawings. Right is
+ * left's, mirrored. Facings in the order of the port's files: down, up, right, left. */
+const CYCLE = [[0, 1, 0, 2], [6, 7, 6, 8], [3, 4, 3, 5], [3, 4, 3, 5]];
+const FACE_NAMES = ['Down', 'Up', 'Right', 'Left'];
+
+function sha1(bytes) {
+  const w = new Uint32Array(80), h = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+  const len = bytes.length, total = ((len + 8) >> 6 << 6) + 64, m = new Uint8Array(total);
+  m.set(bytes); m[len] = 0x80;
+  const bits = len * 8;
+  m[total - 4] = bits >>> 24; m[total - 3] = bits >>> 16 & 255; m[total - 2] = bits >>> 8 & 255; m[total - 1] = bits & 255;
+  m[total - 5] = Math.floor(len / 0x20000000) & 255;
+  for (let o = 0; o < total; o += 64) {
+    for (let i = 0; i < 16; i++) w[i] = (m[o + i * 4] << 24 | m[o + i * 4 + 1] << 16 | m[o + i * 4 + 2] << 8 | m[o + i * 4 + 3]) >>> 0;
+    for (let i = 16; i < 80; i++) { const x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]; w[i] = (x << 1 | x >>> 31) >>> 0; }
+    let [a, b, c, d, e] = h;
+    for (let i = 0; i < 80; i++) {
+      const f = i < 20 ? (b & c | ~b & d) : i < 40 ? (b ^ c ^ d) : i < 60 ? (b & c | b & d | c & d) : (b ^ c ^ d);
+      const k = i < 20 ? 0x5A827999 : i < 40 ? 0x6ED9EBA1 : i < 60 ? 0x8F1BBCDC : 0xCA62C1D6;
+      const t = ((a << 5 | a >>> 27) + f + e + k + w[i]) >>> 0;
+      e = d; d = c; c = (b << 30 | b >>> 2) >>> 0; b = a; a = t;
+    }
+    h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0; h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0; h[4] = (h[4] + e) >>> 0;
+  }
+  return h.map(x => x.toString(16).padStart(8, '0')).join('');
+}
+function plainRom(bytes) {                  /* a .smd: a 512-byte header, then 16 KB blocks, the odd bytes first */
+  if (bytes.length % 16384 === 512) {
+    const body = bytes.subarray(512), out = new Uint8Array(body.length);
+    for (let b = 0; b < body.length; b += 16384)
+      for (let i = 0; i < 8192; i++) { out[b + i * 2 + 1] = body[b + i]; out[b + i * 2] = body[b + 8192 + i]; }
+    bytes = out;
+  }
+  return sha1(bytes) === ROM_SHA1 ? bytes : null;
+}
+
+/* one of a character's nine drawings: 16 x 32 colour numbers (0 nothing). A sprite's cells are stored column
+ * by column: its 8 tiles are two columns of four. */
+function drawing(rom, who, n) {
+  const out = new Uint8Array(W * H), base = ART + who * ART_STEP + n * 8 * 32;
+  for (let t = 0; t < 8; t++) {
+    const cx = (t >> 2) * 8, cy = (t & 3) * 8, at = base + t * 32;
+    for (let y = 0; y < 8; y++)
+      for (let x = 0; x < 8; x++) {
+        const b = rom[at + y * 4 + (x >> 1)];
+        out[(cy + y) * W + cx + x] = x & 1 ? b & 15 : b >> 4;
+      }
+  }
+  return out;
+}
+function mirrored(px) {
+  const out = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) out[y * W + x] = px[y * W + (W - 1 - x)];
+  return out;
+}
+/* the game's own picture for a facing and one of the cycle's four holds, as it shows on the screen */
+function gameFrame(rom, who, face, hold) {
+  const d = drawing(rom, who, CYCLE[face][hold]);
+  return face === 2 ? mirrored(d) : d;
+}
+function gamePalette(rom) {                 /* 16 colours as [r, g, b]; the Mega Drive's: 3 bits each, 0000BBB0GGG0RRR0 */
+  const out = [];
+  for (let i = 0; i < 16; i++) {
+    const v = rom[PALETTE + i * 2] << 8 | rom[PALETTE + i * 2 + 1];
+    out.push([(v >> 1 & 7) * 36, (v >> 5 & 7) * 36, (v >> 9 & 7) * 36]);
+  }
+  return out;
+}
+/* a picture with `k` pixels to each of its own, along a side (the game's pixels as blocks); and back, a block
+ * becoming the value most of it has */
+function enlarged(px, k, w = W, h = H) {
+  if (k === 1) return px;
+  const out = new Uint8Array(w * k * h * k);
+  for (let y = 0; y < h * k; y++) for (let x = 0; x < w * k; x++) out[y * w * k + x] = px[Math.floor(y / k) * w + Math.floor(x / k)];
+  return out;
+}
+function reduced(px, k, w, h) {
+  const ow = w / k, oh = h / k, out = new Uint8Array(ow * oh), count = new Uint16Array(256);
+  for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
+    count.fill(0);
+    let best = 0, bestN = 0;
+    for (let j = 0; j < k; j++) for (let i = 0; i < k; i++) {
+      const v = px[(y * k + j) * w + x * k + i];
+      if (++count[v] > bestN) { bestN = count[v]; best = v; }
+    }
+    out[y * ow + x] = best;
+  }
+  return out;
+}
+/* the colours a character's own drawings use, of the fifteen */
+function usedColours(rom, who) {
+  const seen = new Uint8Array(16);
+  for (let n = 0; n < 9; n++) for (const v of drawing(rom, who, n)) seen[v] = 1;
+  const out = [];
+  for (let i = 1; i < 16; i++) if (seen[i]) out.push(i);
+  return out;
+}
+function keyOf(who) { return 'R' + (ART + who * ART_STEP).toString(16).toUpperCase(); }
+function whoOf(key) {
+  const m = /^R([0-9A-F]+)$/.exec(key), a = m ? parseInt(m[1], 16) - ART : -1;
+  return a >= 0 && a % ART_STEP === 0 && a / ART_STEP < NAMES.length ? a / ART_STEP : -1;
+}
+function frameCount(mult) { return FACES * HOLDS * mult; }
+function frameAt(mult, face, hold, sub) { return ((face * HOLDS + hold) * mult + sub) * W * H; }
+
+/* a sprite file as the port reads it: "PSIVSPR3", "W H FRAMES MULT RES KEY", then the pictures, each
+ * (W RES) x (H RES): RES pixels to each of the game's, along a side. A pixel is 0 nothing, 1-15 a colour, or
+ * 255: the game's own pixel there. ("PSIVSPR2" is the same with no RES: one.) */
+function sprFile(who, mult, data, res = 1) {
+  const head = new TextEncoder().encode('PSIVSPR3\n' + W + ' ' + H + ' ' + HOLDS + ' ' + mult + ' ' + res + ' ' + keyOf(who) + '\n');
+  const out = new Uint8Array(head.length + data.length);
+  out.set(head); out.set(data, head.length);
+  return out;
+}
+function readSpr(bytes) {
+  let nl1 = bytes.indexOf(10), nl2 = bytes.indexOf(10, nl1 + 1);
+  if (nl1 < 0 || nl2 < 0) return null;
+  const dec = new TextDecoder(), magic = dec.decode(bytes.subarray(0, nl1)), f = dec.decode(bytes.subarray(nl1 + 1, nl2)).trim().split(/\s+/);
+  const v3 = magic === 'PSIVSPR3';
+  if ((!v3 && magic !== 'PSIVSPR2') || f.length !== (v3 ? 6 : 5)) return null;
+  const mult = +f[3], res = v3 ? +f[4] : 1, who = whoOf(f[v3 ? 5 : 4]), data = bytes.subarray(nl2 + 1);
+  if (+f[0] !== W || +f[1] !== H || +f[2] !== HOLDS || ![1, 2, 4].includes(mult) || ![1, 2, 4].includes(res) || who < 0 ||
+      data.length !== frameCount(mult) * W * res * H * res) return null;
+  return {who, mult, res, data: new Uint8Array(data)};
+}
+
+/* a .zip with its files stored as they are (no compression): [{name, bytes}] */
+function crc32(bytes) {
+  let c, crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) {
+    c = (crc ^ bytes[i]) & 255;
+    for (let k = 0; k < 8; k++) c = c & 1 ? c >>> 1 ^ 0xEDB88320 : c >>> 1;
+    crc = crc >>> 8 ^ c;
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+function zipStore(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  let at = 0;
+  const u16 = v => [v & 255, v >>> 8 & 255], u32 = v => [v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255];
+  for (const f of files) {
+    const name = enc.encode(f.name), crc = crc32(f.bytes), n = f.bytes.length;
+    const local = new Uint8Array([0x50, 0x4B, 3, 4, ...u16(20), ...u16(0x800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(n), ...u32(n), ...u16(name.length), ...u16(0)]);
+    central.push(new Uint8Array([0x50, 0x4B, 1, 2, ...u16(20), ...u16(20), ...u16(0x800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(n), ...u32(n),
+                                 ...u16(name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(at)]), name);
+    parts.push(local, name, f.bytes);
+    at += local.length + name.length + n;
+  }
+  const csize = central.reduce((s, p) => s + p.length, 0);
+  const end = new Uint8Array([0x50, 0x4B, 5, 6, ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(csize), ...u32(at), ...u16(0)]);
+  const all = [...parts, ...central, end], out = new Uint8Array(all.reduce((s, p) => s + p.length, 0));
+  let o = 0;
+  for (const p of all) { out.set(p, o); o += p.length; }
+  return out;
+}
+
+if (typeof module !== 'undefined') module.exports = {plainRom, drawing, gameFrame, gamePalette, keyOf, whoOf, sprFile, readSpr, zipStore, crc32, frameAt, frameCount, enlarged, reduced, usedColours};
+</script>
+
+<script>
+/* ---------------------------------------------------------------- the page */
+const $ = id => document.getElementById(id);
+const STORE = 'psiv-sprites-1';
+let rom = null, pal = [], who = 0, face = 0, hold = 0, sub = 0, tool = 'pen', colour = 1, playing = true, speed = 1;
+let allColours = false;                              /* the palette shows the character's own colours, or all fifteen */
+/* a character's work: {mult, res, data}. mult: pictures to each of the game's frames; res: pixels to each of the
+ * game's, along a side (1, 2 or 4). data: for each facing, hold and picture, (16 res) x (32 res) pixels: 0 nothing,
+ * 1-15 a colour, 255 the game's own (not touched). Kept for every character opened or changed. */
+const work = {};
+const undo = [];
+const pw = m => W * m.res, ph = m => H * m.res, fs = m => pw(m) * ph(m);
+const at = (m, f, h, s) => ((f * HOLDS + h) * m.mult + s) * fs(m);
+function blank(mult, res) { return new Uint8Array(frameCount(mult) * W * res * H * res).fill(OWN); }
+function mine(n) { return work[n] || (work[n] = {mult: 1, res: 1, data: blank(1, 1)}); }
+function changed(n) { return !!work[n] && work[n].data.some(v => v !== OWN); }
+function toast(words) { $('toast').textContent = words; $('toast').classList.add('on'); setTimeout(() => $('toast').classList.remove('on'), 2600); }
+
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE) || 'null');
+    if (!s) return;
+    for (const k in s.work || {}) {
+      const w = s.work[k], res = w.res || 1, bin = atob(w.data), d = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) d[i] = bin.charCodeAt(i);
+      if (d.length === frameCount(w.mult) * W * res * H * res) work[k] = {mult: w.mult, res, data: d};
+    }
+    $('modname').value = s.name || ''; $('modauthor').value = s.author || ''; $('modabout').value = s.about || '';
+    allColours = !!s.allColours;
+  } catch (e) { /* no storage here: the work lives until the page closes; Export keeps it */ }
+}
+let saveTimer = 0;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      const out = {};
+      for (const k in work) if (changed(k)) {
+        let bin = '';
+        const d = work[k].data;
+        for (let i = 0; i < d.length; i += 8192) bin += String.fromCharCode.apply(null, d.subarray(i, i + 8192));
+        out[k] = {mult: work[k].mult, res: work[k].res, data: btoa(bin)};
+      }
+      localStorage.setItem(STORE, JSON.stringify({work: out, name: $('modname').value, author: $('modauthor').value, about: $('modabout').value, allColours}));
+      const n = Object.keys(out).length;
+      $('saved').textContent = n ? n + (n === 1 ? ' character' : ' characters') + ' changed, kept in this browser' : '';
+    } catch (e) { $('saved').textContent = 'Too much to keep in this browser: export the mod to keep your work'; }
+  }, 300);
+}
+
+/* the game's own picture at a character's detail, and the picture that shows: theirs where they drew, the
+ * game's own elsewhere */
+function baseAt(n, f, h, res) { return enlarged(gameFrame(rom, n, f, h), res); }
+function shown(n, f, h, s) {
+  const m = work[n];
+  if (!m) return {px: gameFrame(rom, n, f, h), res: 1};
+  const base = baseAt(n, f, h, m.res), k = Math.min(s, m.mult - 1), a = at(m, f, h, k), out = new Uint8Array(fs(m));
+  for (let i = 0; i < out.length; i++) { const v = m.data[a + i]; out[i] = v === OWN ? base[i] : v; }
+  return {px: out, res: m.res};
+}
+const scratch = document.createElement('canvas');
+function blit(ctx, pic, dx, dy, dw, dh) {            /* a picture into a box of the canvas, its pixels kept square-edged */
+  const w = W * pic.res, h = H * pic.res;
+  scratch.width = w; scratch.height = h;
+  const sc = scratch.getContext('2d'), img = sc.createImageData(w, h);
+  for (let i = 0; i < w * h; i++)
+    if (pic.px[i]) { const c = pal[pic.px[i]]; img.data[i * 4] = c[0]; img.data[i * 4 + 1] = c[1]; img.data[i * 4 + 2] = c[2]; img.data[i * 4 + 3] = 255; }
+  sc.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(scratch, 0, 0, w, h, dx, dy, dw, dh);
+}
+
+async function openRom(file) {
+  $('romerror').textContent = '';
+  const r = plainRom(new Uint8Array(await file.arrayBuffer()));
+  if (!r) { $('romerror').textContent = file.name + ' is not the Phantasy Star IV (USA) ROM that PSIV Recomp plays. A .zip has to be unzipped first.'; return; }
+  rom = r;
+  pal = gamePalette(rom);
+  $('start').classList.add('hidden');
+  $('work').classList.remove('hidden');
+  $('export').disabled = false;
+  drawWho();
+  pickWho(0);
+  save();
+  requestAnimationFrame(tickLoop);
+}
+
+function drawWho() {
+  const nav = $('who');
+  nav.textContent = '';
+  NAMES.forEach((name, n) => {
+    const b = document.createElement('button'), c = document.createElement('canvas');
+    c.width = W * 4; c.height = H * 4;
+    blit(c.getContext('2d'), shown(n, 0, 0, 0), 0, 0, c.width, c.height);
+    const t = document.createElement('span'); t.textContent = name;
+    const m = document.createElement('span'); m.className = 'mark'; m.textContent = changed(n) ? 'changed' : '';
+    b.setAttribute('aria-current', n === who);
+    b.append(c, t, m);
+    b.onclick = () => pickWho(n);
+    nav.append(b);
+  });
+}
+function pickWho(n) { who = n; hold = sub = 0; undo.length = 0; drawWho(); drawPalette(); drawAll(); }
+
+function drawPalette() {
+  const box = $('palette'), own = usedColours(rom, who);
+  box.textContent = '';
+  if (!allColours && colour && !own.includes(colour)) colour = own[0] || 1;
+  for (let i = 0; i < 16; i++) {
+    if (i && !allColours && !own.includes(i)) continue;
+    const b = document.createElement('button');
+    b.setAttribute('aria-pressed', i === colour);
+    if (i) b.style.background = 'rgb(' + pal[i].join(',') + ')'; else b.className = 'none';
+    b.title = i ? 'Colour ' + i + (own.includes(i) ? '' : ' (not one of ' + NAMES[who] + '\'s own)') : 'Nothing (see-through)';
+    b.setAttribute('aria-label', b.title);
+    b.onclick = () => { colour = i; if (tool === 'back' || tool === 'pick') setTool('pen'); drawPalette(); };
+    box.append(b);
+  }
+  $('palown').setAttribute('aria-pressed', !allColours);
+  $('palall').setAttribute('aria-pressed', allColours);
+  $('palown').textContent = NAMES[who] + '\'s own colours (' + own.length + ')';
+}
+function setTool(t) { tool = t; for (const b of $('tools').querySelectorAll('[data-tool]')) b.setAttribute('aria-pressed', b.dataset.tool === t); }
+
+function drawAll() {
+  const m = mine(who);
+  if (sub >= m.mult) sub = m.mult - 1;
+  $('title').textContent = NAMES[who] + ', facing ' + FACE_NAMES[face].toLowerCase();
+  const step = ['standing', 'a step', 'standing again', 'the other step'][hold];
+  $('frameinfo').textContent = 'The game\'s frame ' + (hold + 1) + ' of 4 (' + step + ')' + (m.mult > 1 ? ', picture ' + (sub + 1) + ' of ' + m.mult : '') +
+    '. ' + pw(m) + ' x ' + ph(m) + ' pixels.';
+  const edit = $('edit');
+  edit.width = pw(m); edit.height = ph(m);
+  blit(edit.getContext('2d'), shown(who, face, hold, sub), 0, 0, edit.width, edit.height);
+  $('base').style.backgroundSize = (32 / m.res) + 'px ' + (32 / m.res) + 'px';
+  for (const b of $('multrow').querySelectorAll('button')) b.setAttribute('aria-pressed', +b.dataset.mult === m.mult);
+  for (const b of $('resrow').querySelectorAll('button')) b.setAttribute('aria-pressed', +b.dataset.res === m.res);
+  for (const b of $('facerow').querySelectorAll('[data-face]')) b.setAttribute('aria-pressed', +b.dataset.face === face);
+  $('mirror').textContent = face >= 2 ? 'Make it the other side, mirrored' : 'Left and right only';
+  $('mirror').disabled = face < 2;
+  $('copyprev').disabled = hold === 0 && sub === 0;
+  const strip = $('strip');
+  strip.textContent = '';
+  for (let h = 0; h < HOLDS; h++) {
+    for (let s = 0; s < m.mult; s++) {
+      const b = document.createElement('button'), c = document.createElement('canvas');
+      c.width = W * 4; c.height = H * 4;
+      blit(c.getContext('2d'), shown(who, face, h, s), 0, 0, c.width, c.height);
+      b.append(c);
+      if (s === 0) b.className = 'key';
+      b.title = 'The game\'s frame ' + (h + 1) + (m.mult > 1 ? ', picture ' + (s + 1) : '');
+      b.setAttribute('aria-label', b.title);
+      b.setAttribute('aria-current', h === hold && s === sub);
+      b.onclick = () => { hold = h; sub = s; undo.length = 0; drawAll(); };
+      strip.append(b);
+    }
+    if (h < HOLDS - 1) { const g = document.createElement('span'); g.className = 'gap'; strip.append(g); }
+  }
+}
+
+/* drawing */
+function cell(e) {
+  const r = $('edit').getBoundingClientRect(), m = mine(who);
+  return [Math.floor((e.clientX - r.left) / r.width * pw(m)), Math.floor((e.clientY - r.top) / r.height * ph(m))];
+}
+function setPx(x, y, v) {
+  const m = mine(who);
+  if (x < 0 || y < 0 || x >= pw(m) || y >= ph(m)) return;
+  m.data[at(m, face, hold, sub) + y * pw(m) + x] = v;
+}
+function snapshot() {
+  const m = mine(who), a = at(m, face, hold, sub);
+  undo.push({res: m.res, mult: m.mult, px: m.data.slice(a, a + fs(m))});
+  if (undo.length > 60) undo.shift();
+}
+function afterEdit() { save(); drawAll(); drawWho(); }
+function apply(x, y, first) {
+  const m = mine(who), w = pw(m), h = ph(m), now = shown(who, face, hold, sub).px;
+  if (x < 0 || y < 0 || x >= w || y >= h) return;
+  if (tool === 'pick') { colour = now[y * w + x]; setTool('pen'); if (colour && !usedColours(rom, who).includes(colour)) allColours = true; drawPalette(); return; }
+  if (tool === 'fill') {
+    if (!first) return;
+    const from = now[y * w + x];
+    if (from === colour) return;
+    const stack = [[x, y]], seen = new Uint8Array(w * h);
+    while (stack.length) {
+      const [cx, cy] = stack.pop();
+      if (cx < 0 || cy < 0 || cx >= w || cy >= h || seen[cy * w + cx] || now[cy * w + cx] !== from) continue;
+      seen[cy * w + cx] = 1;
+      setPx(cx, cy, colour);
+      stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
+    }
+    return;
+  }
+  setPx(x, y, tool === 'back' ? OWN : colour);
+}
+let down = false;
+$('edit').addEventListener('pointerdown', e => {
+  if (!rom) return;
+  down = true;
+  $('edit').setPointerCapture(e.pointerId);
+  if (tool !== 'pick') snapshot();
+  const [x, y] = cell(e);
+  apply(x, y, true);
+  afterEdit();
+});
+$('edit').addEventListener('pointermove', e => { if (down && tool !== 'fill' && tool !== 'pick') { const [x, y] = cell(e); apply(x, y, false); afterEdit(); } });
+window.addEventListener('pointerup', () => { down = false; });
+function doUndo() {
+  const m = mine(who), u = undo.pop();
+  if (!u || u.res !== m.res || u.mult !== m.mult) return;
+  m.data.set(u.px, at(m, face, hold, sub));
+  afterEdit();
+}
+
+/* more or fewer pictures to each of the game's frames: the work is kept, a frame's pictures spread or thinned */
+function setMult(mult) {
+  const m = mine(who);
+  if (m.mult === mult) return;
+  const out = blank(mult, m.res), to = {mult, res: m.res};
+  for (let f = 0; f < FACES; f++)
+    for (let h = 0; h < HOLDS; h++)
+      for (let s = 0; s < mult; s++) {
+        const from = at(m, f, h, Math.floor(s * m.mult / mult));
+        out.set(m.data.subarray(from, from + fs(m)), at(to, f, h, s));
+      }
+  work[who] = {mult, res: m.res, data: out};
+  sub = 0; undo.length = 0;
+  afterEdit();
+}
+/* more or fewer pixels to each of the game's: finer, every pixel becomes a block of its own colour; coarser,
+ * a block becomes the colour most of it has */
+function setRes(res) {
+  const m = mine(who);
+  if (m.res === res) return;
+  if (res < m.res && changed(who) && !confirm('Fewer pixels: each block of ' + (m.res / res) + ' x ' + (m.res / res) + ' becomes one pixel, and detail finer than that is lost. Go on?')) return;
+  const to = {mult: m.mult, res}, out = blank(m.mult, res), n = frameCount(m.mult);
+  for (let k = 0; k < n; k++) {
+    const src = m.data.subarray(k * fs(m), (k + 1) * fs(m));
+    out.set(res > m.res ? enlarged(src, res / m.res, pw(m), ph(m)) : reduced(src, m.res / res, pw(m), ph(m)), k * fs(to));
+  }
+  work[who] = {mult: m.mult, res, data: out};
+  undo.length = 0;
+  afterEdit();
+}
+
+/* side by side, at the game's pace */
+let ticks = 0, last = 0;
+function tickLoop(t) {
+  if (playing && rom) {
+    if (!last) last = t;
+    ticks += (t - last) * 0.06 * speed;                 /* 60 ticks a second */
+    last = t;
+    const m = mine(who), cycle = Math.floor(ticks) % (HOLDS * HOLD_TICKS), h = Math.floor(cycle / HOLD_TICKS), gone = cycle % HOLD_TICKS;
+    const s = Math.floor(gone * m.mult / HOLD_TICKS);    /* as the port picks the picture inside a hold */
+    const g = $('stageGame').getContext('2d'), y = $('stageMine').getContext('2d');
+    g.clearRect(0, 0, 320, 128); y.clearRect(0, 0, 320, 128);
+    for (let f = 0; f < FACES; f++) {
+      blit(g, {px: gameFrame(rom, who, f, h), res: 1}, 8 + f * 80, 0, 64, 128);
+      blit(y, shown(who, f, h, s), 8 + f * 80, 0, 64, 128);
+    }
+  } else last = 0;
+  requestAnimationFrame(tickLoop);
+}
+
+/* a sheet: a row a facing, a column a picture; see-through where there is nothing */
+function sheetCanvas() {
+  const m = mine(who), cols = HOLDS * m.mult, c = document.createElement('canvas');
+  c.width = cols * pw(m); c.height = FACES * ph(m);
+  const ctx = c.getContext('2d');
+  for (let f = 0; f < FACES; f++) for (let h = 0; h < HOLDS; h++) for (let s = 0; s < m.mult; s++)
+    blit(ctx, shown(who, f, h, s), (h * m.mult + s) * pw(m), f * ph(m), pw(m), ph(m));
+  return c;
+}
+function download(name, blob) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+async function loadSheet(file) {
+  const img = await createImageBitmap(file), m = mine(who), cols = HOLDS * m.mult, w = pw(m), h = ph(m);
+  if (img.width !== cols * w || img.height !== FACES * h) {
+    toast('That sheet is ' + img.width + ' x ' + img.height + '; this character\'s is ' + cols * w + ' x ' + FACES * h + ' as it is set now.');
+    return;
+  }
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+  const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+  const d = ctx.getImageData(0, 0, c.width, c.height).data, own = usedColours(rom, who);
+  const from = allColours || !own.length ? [...Array(15)].map((_, i) => i + 1) : own;
+  for (let f = 0; f < FACES; f++) for (let hd = 0; hd < HOLDS; hd++) for (let s = 0; s < m.mult; s++) {
+    const base = baseAt(who, f, hd, m.res), a = at(m, f, hd, s), x0 = (hd * m.mult + s) * w, y0 = f * h;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = ((y0 + y) * c.width + x0 + x) * 4;
+      let v = 0;
+      if (d[i + 3] >= 128) {                              /* the nearest of the colours the palette shows */
+        let best = 1e9;
+        for (const k of from) { const e = (d[i] - pal[k][0]) ** 2 + (d[i + 1] - pal[k][1]) ** 2 + (d[i + 2] - pal[k][2]) ** 2; if (e < best) { best = e; v = k; } }
+      }
+      m.data[a + y * w + x] = v === base[y * w + x] ? OWN : v;
+    }
+  }
+  undo.length = 0;
+  afterEdit();
+  toast('Loaded the sheet for ' + NAMES[who]);
+}
+
+/* the mod: mod.txt and a sprite file for each character changed, in a folder, zipped */
+function exportMod() {
+  const name = $('modname').value.trim(), ids = Object.keys(work).filter(changed);
+  if (!name) { toast('Give the mod a name first: the launcher lists it by that.'); $('modname').focus(); return; }
+  if (!ids.length) { toast('Nothing changed yet: draw on a frame first.'); return; }
+  const folder = name.normalize('NFKD').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'my-mod';
+  const enc = new TextEncoder(), files = [];
+  const clean = s => s.replace(/[\r\n]+/g, ' ').trim();
+  files.push({name: folder + '/mod.txt', bytes: enc.encode('name = ' + clean(name) + '\nauthor = ' + clean($('modauthor').value) + '\nabout = ' + clean($('modabout').value) + '\n')});
+  for (const k of ids) files.push({name: folder + '/' + NAMES[k].toLowerCase() + '.spr', bytes: sprFile(+k, work[k].mult, work[k].data, work[k].res)});
+  download(folder + '.zip', new Blob([zipStore(files)], {type: 'application/zip'}));
+  toast('Exported ' + folder + '.zip: ' + ids.length + (ids.length === 1 ? ' character' : ' characters'));
+}
+async function openSprs(list) {
+  let n = 0;
+  for (const f of list) {
+    const s = readSpr(new Uint8Array(await f.arrayBuffer()));
+    if (s) { work[s.who] = {mult: s.mult, res: s.res, data: s.data}; n++; }
+  }
+  if (!n) { toast('No sprite file of this editor among those: it reads the .spr files of a mod made here.'); return; }
+  undo.length = 0;
+  save();
+  if (rom) { drawWho(); drawAll(); }
+  toast('Opened ' + n + (n === 1 ? ' sprite file' : ' sprite files'));
+}
+
+load();
+$('openrom').onclick = () => $('romfile').click();
+$('romfile').onchange = e => { if (e.target.files[0]) openRom(e.target.files[0]); };
+$('openmod').onclick = () => $('sprfile').click();
+$('sprfile').onchange = e => { if (e.target.files.length) openSprs([...e.target.files]); e.target.value = ''; };
+$('export').onclick = exportMod;
+for (const b of $('tools').querySelectorAll('[data-tool]')) b.onclick = () => setTool(b.dataset.tool);
+$('undo').onclick = doUndo;
+for (const b of $('multrow').querySelectorAll('button')) b.onclick = () => setMult(+b.dataset.mult);
+for (const b of $('resrow').querySelectorAll('button')) b.onclick = () => setRes(+b.dataset.res);
+$('palown').onclick = () => { allColours = false; drawPalette(); save(); };
+$('palall').onclick = () => { allColours = true; drawPalette(); save(); };
+for (const b of $('facerow').querySelectorAll('[data-face]')) b.onclick = () => { face = +b.dataset.face; hold = sub = 0; undo.length = 0; drawAll(); };
+$('play').onclick = () => { playing = !playing; $('play').setAttribute('aria-pressed', playing); $('play').textContent = playing ? 'Playing' : 'Paused'; };
+$('speed').onchange = () => { speed = +$('speed').value; };
+$('copyprev').onclick = () => {
+  const m = mine(who);
+  let h = hold, s = sub - 1;
+  if (s < 0) { h--; s = m.mult - 1; }
+  if (h < 0) return;
+  snapshot();
+  const src = shown(who, face, h, s).px, base = baseAt(who, face, hold, m.res), a = at(m, face, hold, sub);
+  for (let i = 0; i < src.length; i++) m.data[a + i] = src[i] === base[i] ? OWN : src[i];
+  afterEdit();
+};
+$('resetframe').onclick = () => { snapshot(); const m = mine(who), a = at(m, face, hold, sub); m.data.fill(OWN, a, a + fs(m)); afterEdit(); };
+$('resetchar').onclick = () => { if (!changed(who) || confirm(NAMES[who] + ' back to the game\'s own frames? Your drawing for this character is dropped.')) { delete work[who]; undo.length = 0; afterEdit(); } };
+$('mirror').onclick = () => {
+  if (face < 2) return;
+  const m = mine(who), other = face === 2 ? 3 : 2, w = pw(m), hh = ph(m);
+  for (let h = 0; h < HOLDS; h++) for (let s = 0; s < m.mult; s++) {
+    const src = shown(who, other, h, s).px, base = baseAt(who, face, h, m.res), a = at(m, face, h, s);
+    for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) { const v = src[y * w + (w - 1 - x)]; m.data[a + y * w + x] = v === base[y * w + x] ? OWN : v; }
+  }
+  undo.length = 0;
+  afterEdit();
+};
+$('sheetout').onclick = () => { const m = mine(who); sheetCanvas().toBlob(b => download(NAMES[who].toLowerCase() + '-walk-' + m.mult + 'x-frames-' + m.res + 'x-pixels.png', b)); };
+$('sheetin').onclick = () => $('pngfile').click();
+$('pngfile').onchange = e => { if (e.target.files[0]) loadSheet(e.target.files[0]); e.target.value = ''; };
+for (const id of ['modname', 'modauthor', 'modabout']) $(id).oninput = save;
+document.addEventListener('keydown', e => {
+  if (!rom || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); doUndo(); }
+  else if (e.key === 'p') setTool('pen'); else if (e.key === 'f') setTool('fill'); else if (e.key === 'i') setTool('pick'); else if (e.key === 'g') setTool('back');
+});
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(n => document.addEventListener(n, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(n => document.addEventListener(n, e => { e.preventDefault(); drop.classList.remove('over'); }));
+document.addEventListener('drop', e => {
+  const fl = e.dataTransfer ? [...e.dataTransfer.files] : [];
+  if (!fl.length) return;
+  if (fl.every(f => /\.spr$/i.test(f.name))) openSprs(fl);
+  else if (/\.png$/i.test(fl[0].name) && rom) loadSheet(fl[0]);
+  else openRom(fl[0]);
+});
+window.psivOpenRomBytes = bytes => openRom({name: 'the ROM', arrayBuffer: async () => bytes.buffer});   /* (the tool's own checks) */
+</script>
+</body>
+</html>

@@ -36,7 +36,9 @@ static uint32_t rom32(uint32_t a) {
 
 /* A file: "PSIVSPR2\n" "W H FRAMES MULT TARGET\n", then for each facing (down, up, right, left), each of
  * the game's FRAMES and each of its MULT in-between pictures, W x H bytes: 0 nothing, 1-15 a colour of the
- * sprite's own palette line. TARGET is whose it is, a key as PSIV_SPRITEMOD_LOG lists them for whoever is
+ * sprite's own palette line, 255 the game's own pixel there (the sprite editor writes that for every pixel
+ * left as the game has it, so a file holds only what was changed; it wants a picture the size of the
+ * game's piece). TARGET is whose it is, a key as PSIV_SPRITEMOD_LOG lists them for whoever is
  * on screen: R and the address its art is streamed from in the ROM (the party: one address a member),
  * or A and a hash of the first tiles of its art in video memory (the townspeople: their table of
  * animations is one for all of them, so their art is what tells them apart). */
@@ -52,16 +54,42 @@ static int load(Art *a, const char *path) {
     if (!f) { fprintf(stderr, "spritemod: cannot open %s\n", path); return 0; }
     char magic[16] = {0};
     char key[16] = {0};
+    int res = 1;
     memset(a, 0, sizeof *a);
-    int ok = fgets(magic, sizeof magic, f) && !strncmp(magic, "PSIVSPR2", 8)
-          && fscanf(f, "%d %d %d %d %15s", &a->w, &a->h, &a->frames, &a->mult, key) == 5 && fgetc(f) == '\n'
-          && (key[0] == 'R' || key[0] == 'A')
+    /* "PSIVSPR3" has one number more, RES: the pictures have RES pixels to each of the game's, along a side
+     * (1, 2 or 4), so each is (W RES) x (H RES). "PSIVSPR2" is RES 1. */
+    int ok = fgets(magic, sizeof magic, f) != NULL;
+    if (ok && !strncmp(magic, "PSIVSPR3", 8))
+        ok = fscanf(f, "%d %d %d %d %d %15s", &a->w, &a->h, &a->frames, &a->mult, &res, key) == 6;
+    else if (ok && !strncmp(magic, "PSIVSPR2", 8))
+        ok = fscanf(f, "%d %d %d %d %15s", &a->w, &a->h, &a->frames, &a->mult, key) == 5;
+    else ok = 0;
+    ok = ok && fgetc(f) == '\n' && (key[0] == 'R' || key[0] == 'A')
           && a->w > 0 && a->w <= 64 && a->h > 0 && a->h <= 64 && a->frames > 0 && a->frames <= 8
-          && a->mult > 0 && a->mult <= 8;
+          && a->mult > 0 && a->mult <= 8 && (res == 1 || res == 2 || res == 4);
     if (ok) {
-        size_t n = (size_t)a->w * (size_t)a->h * 4u * (size_t)a->frames * (size_t)a->mult;
-        a->px = malloc(n);
-        ok = a->px && fread(a->px, 1, n, f) == n;
+        size_t pics = 4u * (size_t)a->frames * (size_t)a->mult, small = (size_t)a->w * (size_t)a->h;
+        size_t big = small * (size_t)res * (size_t)res;
+        uint8_t *fine = malloc(pics * big);
+        ok = fine && fread(fine, 1, pics * big, f) == pics * big;
+        if (ok && res > 1) {
+            /* Finer pictures are shown at the game's own size for now (drawing their detail is to come):
+             * each block of RES x RES becomes the value most of it has */
+            a->px = malloc(pics * small);
+            ok = a->px != NULL;
+            for (size_t p = 0; ok && p < pics; p++)
+                for (int y = 0; y < a->h; y++)
+                    for (int x = 0; x < a->w; x++) {
+                        int count[256] = {0}, best = 0, most = 0;
+                        for (int j = 0; j < res; j++)
+                            for (int i = 0; i < res; i++) {
+                                int v = fine[p * big + (size_t)((y * res + j) * a->w * res + x * res + i)];
+                                if (++count[v] > most) { most = count[v]; best = v; }
+                            }
+                        a->px[p * small + (size_t)(y * a->w + x)] = (uint8_t)best;
+                    }
+            free(fine);
+        } else a->px = fine;
     }
     fclose(f);
     if (!ok) {
@@ -116,7 +144,7 @@ void spritemod_frame(void) {
     }
 
     /* the sprite table as the game left it */
-    struct { int x, y, w, h, tile, owner, far; } sp[80];
+    struct { int x, y, w, h, tile, pal, owner, far; } sp[80];
     int nsp = 0, entry[80];
     uint32_t sat = (uint32_t)(vdp.reg[5] & 0x7E) << 9;
     for (int link = 0, count = 0; count < 80; count++) {
@@ -127,6 +155,7 @@ void spritemod_frame(void) {
         sp[nsp].h = ((s[2] & 3) + 1) * 8;
         sp[nsp].w = ((s[2] >> 2 & 3) + 1) * 8;
         sp[nsp].tile = (s[4] << 8 | s[5]) & 0x7FF;
+        sp[nsp].pal = s[4] >> 5 & 3;
         sp[nsp].owner = -1;
         sp[nsp].far = 1 << 30;
         nsp++;
@@ -183,10 +212,11 @@ void spritemod_frame(void) {
         if (tile0[i] < 0) continue;
         unsigned o = OBJECTS + (unsigned)i * OBJ_SIZE;
         uint32_t table = r32(o + O_SCRIPTS);
-        int bx0 = 9999, by0 = 9999, bx1 = -9999, by1 = -9999, n = 0;
+        int bx0 = 9999, by0 = 9999, bx1 = -9999, by1 = -9999, n = 0, pal = 0;
         for (int k = 0; k < nsp; k++)
             if (sp[k].owner == i) {
                 n++;
+                pal = sp[k].pal;
                 if (sp[k].x < bx0) bx0 = sp[k].x;
                 if (sp[k].y < by0) by0 = sp[k].y;
                 if (sp[k].x + sp[k].w > bx1) bx1 = sp[k].x + sp[k].w;
@@ -206,8 +236,8 @@ void spritemod_frame(void) {
             if (arts[k].kind == kind && arts[k].target == key) a = &arts[k];
         if (logging && n && logged[i] != key + 1u) {            /* who is on the screen, once each */
             logged[i] = key + 1u;
-            fprintf(stderr, "spritemod: object %d: key %c%X, %d pieces in %d x %d, tiles from %03X, animations %06X%s\n", i,
-                    kind, (unsigned)key, n, bx1 - bx0, by1 - by0, (unsigned)tile0[i], (unsigned)table, a ? ": replaced" : "");
+            fprintf(stderr, "spritemod: object %d: key %c%X, %d pieces in %d x %d, palette line %d, tiles from %03X, animations %06X%s\n", i,
+                    kind, (unsigned)key, n, bx1 - bx0, by1 - by0, pal, (unsigned)tile0[i], (unsigned)table, a ? ": replaced" : "");
         }
         /* standing, the game's count stands too: seen by the object not moving */
         int x = (int)r16(o + O_X), y = (int)r16(o + O_Y);

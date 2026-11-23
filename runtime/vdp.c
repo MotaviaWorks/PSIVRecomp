@@ -384,8 +384,12 @@ static void render_sprites(int y, uint8_t *out, uint8_t *who, int x0, int width,
                     uint8_t q = p;
                     if (art) {
                         int ax = x - art->x0, ay = y - art->y0;
-                        q = ax >= 0 && ax < art->w && ay >= 0 && ay < art->h ? (uint8_t)(art->px[ay * art->w + ax] & 15) : 0;
-                        if (q) q = (uint8_t)(q | (attr >> 13 & 3) << 4 | (attr & 0x8000 ? 0x80 : 0));
+                        uint8_t v = ax >= 0 && ax < art->w && ay >= 0 && ay < art->h ? art->px[ay * art->w + ax] : 0;
+                        if (v == 0xFF) q = p;                         /* "the game's own pixel here": a file keeps only what was changed */
+                        else {
+                            q = (uint8_t)(v & 15);
+                            if (q) q = (uint8_t)(q | (attr >> 13 & 3) << 4 | (attr & 0x8000 ? 0x80 : 0));
+                        }
                     }
                     if (q && x >= x0 && x < x0 + width && !out[x - x0]) { out[x - x0] = q; who[x - x0] = (uint8_t)me; }
                     continue;
