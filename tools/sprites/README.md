@@ -28,6 +28,11 @@ takes exactly as long as before and only looks smoother. In the row of frames, a
 shows where each of the game's frames begins.
 
 - **Copy the frame before** starts a picture from the one before it: the usual way to draw an in-between.
+- **Draft the in-betweens** fills every picture between the game's frames for you, for all four facings: what
+  is the same in a frame and the next stays, and what differs slides across a little at a time. No colours
+  are mixed. It is a rough start to tidy by hand, not a finished walk: the game has only three drawings a
+  facing to go on. A mod made this way holds shifted pieces of the game's own frames, so think before
+  sharing one that you have not redrawn.
 - **Make it the other side, mirrored** draws Right from Left, or Left from Right. (The game itself draws
   Right as Left mirrored.)
 - **Save the sheet / Load a sheet** pass a character's frames to another drawing program and back as one

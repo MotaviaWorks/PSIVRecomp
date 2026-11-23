@@ -194,6 +194,7 @@ header input[type=text] { border: 1px solid var(--rule); background: var(--paper
       </div>
       <div id="strip" style="margin-top:10px"></div>
       <div id="frameacts2" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:16px">
+        <button id="draft" title="Fill the pictures between the game's frames with a rough draft made from them, to tidy by hand">Draft the in-betweens</button>
         <button id="sheetout" title="Every frame of this character as one picture, for another drawing program">Save the sheet (PNG)</button>
         <button id="sheetin" title="A sheet in the same layout, drawn elsewhere">Load a sheet (PNG)</button>
         <button id="resetchar">This character back to the game's</button>
@@ -387,6 +388,64 @@ function usedOf(e) {
   return out;
 }
 
+/* ---- a drafted in-between. From picture `a` towards `b`, `t` of the way (0..1), both w x h. No colours are
+ * mixed (the palette is fifteen colours): pixels are only moved. The two are first lined up, up or down (a
+ * walker's body rises and falls a pixel). Whatever is then the same in both stays where it is. The rest, in
+ * each row and on each side of the middle, is slid sideways by the part of the way it has to go. Past the
+ * half-way point the same is done from `b` back towards `a`, so the draft always starts from the nearer one. */
+function tween(a, b, t, w, h) {
+  if (t > 0.5) return tween(b, a, 1 - t, w, h);
+  /* (worked with room above and below, so a figure standing on the picture's edge loses nothing as it is lined up) */
+  const pad = 2 * Math.max(1, Math.round(w / 16)), tall = h + 2 * pad, pa = new Uint8Array(w * tall), pb = new Uint8Array(w * tall);
+  pa.set(a, pad * w);
+  pb.set(b, pad * w);
+  return tweenCore(pa, pb, t, w, tall).slice(pad * w, pad * w + w * h);
+}
+function tweenCore(a, b, t, w, h) {
+  const k = Math.max(1, Math.round(w / 16)), at = (p, x, y) => x < 0 || y < 0 || x >= w || y >= h ? 0 : p[y * w + x];
+  let dy = 0, bestDy = 1e9;                    /* a moved down by dy lies best on b */
+  for (let d = -2 * k; d <= 2 * k; d++) {
+    let miss = Math.abs(d) * 0.5;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (at(a, x, y - d) !== b[y * w + x]) miss++;
+    if (miss < bestDy) { bestDy = miss; dy = d; }
+  }
+  const al = new Uint8Array(w * h);            /* a, lined up with b */
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) al[y * w + x] = at(a, x, y - dy);
+  const mid = new Uint8Array(w * h), half = w >> 1;
+  const shifts = [];                           /* for each row and side: how far its changing pixels go */
+  for (let y = 0; y < h; y++) for (let side = 0; side < 2; side++) {
+    const x0 = side ? half : 0, x1 = side ? w : half;
+    let best = 0, bestMiss = 1e9, any = 0;
+    for (let x = x0; x < x1; x++) if (al[y * w + x] !== b[y * w + x]) any = 1;
+    if (any)
+      for (let d = -3 * k; d <= 3 * k; d++) {
+        let miss = Math.abs(d) * 0.25;
+        for (let x = x0 - 3 * k; x < x1 + 3 * k; x++) {
+          const from = x - d, moved = from >= x0 && from < x1 && al[y * w + from] !== at(b, from, y) ? at(al, from, y) : 0;
+          const want = x >= 0 && x < w && al[y * w + x] !== b[y * w + x] ? b[y * w + x] : 0;
+          if (moved !== want && (moved || want)) miss++;
+        }
+        if (miss < bestMiss) { bestMiss = miss; best = d; }
+      }
+    shifts.push(best);
+  }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) if (al[y * w + x] === b[y * w + x]) mid[y * w + x] = al[y * w + x];     /* what stays */
+    for (let side = 0; side < 2; side++) {
+      const x0 = side ? half : 0, x1 = side ? w : half, d = Math.round(shifts[y * 2 + side] * t);
+      for (let x = x0; x < x1; x++) {
+        const v = al[y * w + x];
+        if (!v || v === b[y * w + x]) continue;
+        const nx = x + d;
+        if (nx >= 0 && nx < w && !mid[y * w + nx]) mid[y * w + nx] = v;
+      }
+    }
+  }
+  const back = Math.round(dy * (1 - t)), out = new Uint8Array(w * h);      /* and back up or down, towards where a stood */
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out[y * w + x] = at(mid, x, y + back);
+  return out;
+}
+
 /* a picture with `k` pixels to each of its own, along a side (the game's pixels as blocks); and back, a block
  * becoming the value most of it has */
 function enlarged(px, k, w = W, h = H) {
@@ -476,7 +535,7 @@ function zipStore(files) {
   return out;
 }
 
-if (typeof module !== 'undefined') module.exports = {plainRom, drawing, gameFrame, gamePalette, keyOf, whoOf, sprFile, readSpr, zipStore, crc32, frameAt, frameCount, enlarged, reduced, usedColours, nemesis, fnv, allSprites, frameOf, usedOf, drawingOf, paletteAt};
+if (typeof module !== 'undefined') module.exports = {plainRom, drawing, gameFrame, gamePalette, keyOf, whoOf, sprFile, readSpr, zipStore, crc32, frameAt, frameCount, enlarged, reduced, usedColours, nemesis, fnv, allSprites, frameOf, usedOf, drawingOf, paletteAt, tween};
 </script>
 
 <script>
@@ -856,6 +915,28 @@ $('mirror').onclick = () => {
   }
   undo.length = 0;
   afterEdit();
+};
+/* the pictures between each of the game's frames and the next, drafted from the two (all four facings) */
+$('draft').onclick = () => {
+  const m = mine(who);
+  if (m.mult < 2) { toast('Set 2 or 4 pictures for each of the game\'s frames first: there is nothing in between at 1.'); return; }
+  let drawn = false;
+  for (let f = 0; f < FACES && !drawn; f++) for (let h = 0; h < HOLDS && !drawn; h++) for (let sb = 1; sb < m.mult; sb++) {
+    const a = at(m, f, h, sb);
+    if (m.data.subarray(a, a + fs(m)).some(v => v !== OWN)) { drawn = true; break; }
+  }
+  if (drawn && !confirm('Draft over the in-between pictures you already have for ' + entries[who].name + '? The game\'s own frames and your changes to them stay.')) return;
+  const w = pw(m), hh = ph(m);
+  for (let f = 0; f < FACES; f++) for (let h = 0; h < HOLDS; h++) {
+    const from = shown(who, f, h, 0).px, to = shown(who, f, (h + 1) % HOLDS, 0).px, base = baseAt(who, f, h, m.res);
+    for (let sb = 1; sb < m.mult; sb++) {
+      const pic = tween(from, to, sb / m.mult, w, hh), a = at(m, f, h, sb);
+      for (let i = 0; i < pic.length; i++) m.data[a + i] = pic[i] === base[i] ? OWN : pic[i];
+    }
+  }
+  undo.length = 0;
+  afterEdit();
+  toast('Drafted ' + FACES * HOLDS * (m.mult - 1) + ' in-between pictures for ' + entries[who].name + ': a rough start to tidy by hand');
 };
 $('sheetout').onclick = () => { const m = mine(who); sheetCanvas().toBlob(b => download(entries[who].name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-walk-' + m.mult + 'x-frames-' + m.res + 'x-pixels.png', b)); };
 $('sheetin').onclick = () => $('pngfile').click();
