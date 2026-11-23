@@ -889,6 +889,7 @@ Windows (`asl` on Linux) and fails unless the result is byte-identical.
 |---|---|
 | `disasm/ps4disasm` | Phantasy Star IV disassembly (submodule, [squidfeatures/ps4disasm](https://github.com/squidfeatures/ps4disasm), originally by lory90) |
 | `tools/` | ROM prep, rebuild, listing parser, 68000 decoder, program model, resolver, C generator |
+| `tools/translate/` | For translators: an editor that opens in a browser (`index.html`) and its command-line twin, which read the game's text out of your ROM and write a pack of your translation alone to share. The port does not load packs yet; see its `README.md` |
 | `runtime/` | CPU (`m68k.*`), bus, VDP + renderer (`vdp.*`), frame loop, SDL3 and headless front ends; touch controls, rumble, zip reader, glibc compatibility |
 | `third_party/` | SDL3 for Windows builds, ymfm, z80.h, stb (fetched, never committed) |
 | `res/` | The app's icon: an original four-point star in the game's window colours, drawn by `tools/make_icon.py` (which also writes `runtime/icon.h` and Android's launcher icons); `fonts/`: Noto Sans (OFL); no game art |

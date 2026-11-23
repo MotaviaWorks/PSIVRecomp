@@ -49,3 +49,6 @@ custom soundtrack ideas/
 
 # Your own music files in place of the game's songs (runtime/music.h)
 music/
+
+# The translators' tool's workbook (it holds the game's script, never committed)
+psiv-dialogue*.csv
