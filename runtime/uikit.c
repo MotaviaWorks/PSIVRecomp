@@ -7,6 +7,7 @@
 #include "romart.h"
 #include "par.h"
 #include "scalex.h"
+#include "spritemod.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -78,44 +79,84 @@ const char *ui_tech_name(int id) { load_names(); return id > 0 && id <= 40 ? tec
 const char *ui_skill_name(int id) { load_names(); return id > 0 && id <= 54 ? skills[id].name : ""; }
 
 /* ------------------------------------------------------------------ portraits */
-static UiImage portraits[11];
+#define FACE_FRAMES 8                                /* a mod's portrait may have frames that play (spritemod_still_now) */
+static UiImage portraits[11][FACE_FRAMES];
+static unsigned portraits_made;                      /* the mods' generation they were made at: a mod may have its own */
 
-int ui_portraits_init(void) {
-    int n = 0;
-    for (int i = 0; i < 11; i++) {
-        if (portraits[i].rgba) { n++; continue; }
+/* ui_picture's smaller copies, kept by the picture they were made from: dropped with the portraits, whose
+ * pictures are freed then (another could come to stand at the same address) */
+#define SMALL_KEPT 48
+static struct { const uint8_t *src; int w, h; UiImage im; unsigned used; } small[SMALL_KEPT];
+static void small_reset(void) {
+    for (int i = 0; i < SMALL_KEPT; i++) { free(small[i].im.rgba); memset(&small[i], 0, sizeof small[i]); }
+}
+
+/* a frame of a member's dialogue portrait: made the first time it is asked for */
+static const UiImage *portrait_frame(int id, int frame) {
+    UiImage *im = &portraits[id][frame];
+    if (!im->rgba) {
         uint8_t *px = malloc(ROMART_PORTRAIT * ROMART_PORTRAIT * 4);
-        if (px && romart_portrait(i, px)) {
-            portraits[i].w = portraits[i].h = ROMART_PORTRAIT;
-            portraits[i].rgba = px;
-            n++;
+        if (px && romart_portrait(id, frame, px)) {
+            im->w = im->h = ROMART_PORTRAIT;
+            im->rgba = px;
         } else {
             free(px);
         }
     }
+    return im->rgba ? im : NULL;
+}
+
+int ui_portraits_init(void) {
+    int n = 0;
+    if (portraits_made != spritemod_generation()) {
+        portraits_made = spritemod_generation();
+        for (int i = 0; i < 11; i++)
+            for (int f = 0; f < FACE_FRAMES; f++) { free(portraits[i][f].rgba); portraits[i][f].rgba = NULL; }
+        small_reset();
+    }
+    for (int i = 0; i < 11; i++) n += portrait_frame(i, 0) != NULL;
     return n;
 }
 
 const UiImage *ui_portrait(int id) {
-    return id >= 0 && id < 11 && portraits[id].rgba ? &portraits[id] : NULL;
+    if (id < 0 || id >= 11) return NULL;
+    if (portraits_made != spritemod_generation()) ui_portraits_init();
+    if (!portraits[id][0].rgba) return NULL;             /* (not to be had, or ui_portraits_init not called yet) */
+    int f = spritemod_still_now('D', id);
+    const UiImage *im = f > 0 && f < FACE_FRAMES ? portrait_frame(id, f) : NULL;
+    return im ? im : &portraits[id][0];
 }
 
 /* the Status page's pictures: each made the first time it is asked for */
 const UiImage *ui_profile(int id) {
-    static UiImage profiles[11];
-    static uint8_t tried[11];
+    static UiImage profiles[11][FACE_FRAMES];
+    static uint8_t tried[11][FACE_FRAMES];
+    static unsigned made;
     if (id < 0 || id >= 11) return NULL;
-    if (!profiles[id].rgba && !tried[id]) {
-        tried[id] = 1;
-        uint8_t *px = malloc(ROMART_PROFILE * ROMART_PROFILE * 4);
-        if (px && romart_profile(id, px)) {
-            profiles[id].w = profiles[id].h = ROMART_PROFILE;
-            profiles[id].rgba = px;
+    if (made != spritemod_generation()) {                /* the mods changed: a mod may have its own */
+        made = spritemod_generation();
+        for (int i = 0; i < 11; i++)
+            for (int f = 0; f < FACE_FRAMES; f++) { free(profiles[i][f].rgba); profiles[i][f].rgba = NULL; tried[i][f] = 0; }
+        small_reset();
+    }
+    int frame = spritemod_still_now('P', id);            /* a mod's may have frames that play */
+    if (frame < 0 || frame >= FACE_FRAMES) frame = 0;
+    UiImage *im = &profiles[id][frame];
+    if (!im->rgba && !tried[id][frame]) {
+        tried[id][frame] = 1;
+        int side = ROMART_PROFILE;
+        const uint8_t *fine = romart_profile_fine(id, frame, &side);     /* a mod's, finer than the game's */
+        if (!fine) side = ROMART_PROFILE;
+        uint8_t *px = malloc((size_t)side * (size_t)side * 4);
+        if (px && fine) romart_party_rgba(fine, side * side, px);
+        if (px && (fine || romart_profile(id, frame, px))) {
+            im->w = im->h = side;
+            im->rgba = px;
         } else {
             free(px);
         }
     }
-    return profiles[id].rgba ? &profiles[id] : NULL;
+    return im->rgba ? im : NULL;
 }
 
 /* the story panels read so far (a page of the Journal shows three or four) */
@@ -137,7 +178,6 @@ const UiImage *ui_story_panel(int index) {
 }
 
 void ui_picture(const UiCanvas *cv, const UiImage *im, float x0, float y0, float w, float h, int alpha, float *dw, float *dh) {
-    static struct { const uint8_t *src; int w, h; UiImage im; unsigned used; } small[12];
     static unsigned clock;
     if (dw) *dw = 0.0f;
     if (dh) *dh = 0.0f;
@@ -153,7 +193,7 @@ void ui_picture(const UiCanvas *cv, const UiImage *im, float x0, float y0, float
         if (ow < 1 || oh < 1) return;
         int old = 0, at = -1;
         clock++;
-        for (int i = 0; i < 12; i++) {
+        for (int i = 0; i < SMALL_KEPT; i++) {
             if (small[i].im.rgba && small[i].src == im->rgba && small[i].w == ow && small[i].h == oh) at = i;
             if (small[i].used < small[old].used) old = i;
         }

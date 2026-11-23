@@ -3,6 +3,7 @@
  */
 #include "romart.h"
 #include "m68k.h"
+#include "spritemod.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -82,7 +83,7 @@ static uint32_t rom32(uint32_t a) {
                                    (uint32_t)m68k_rom[a + 2] << 8 | m68k_rom[a + 3] : 0;
 }
 
-int romart_portrait(int character, uint8_t *rgba) {
+int romart_portrait(int character, int frame, uint8_t *rgba) {
     if (character < 0 || character > 10 || !m68k_rom || m68k_rom_size < PORTRAIT_LAYOUT + 72) return 0;
     uint32_t art = rom32(PORTRAIT_PTRS + (uint32_t)(character + 1) * 4);
     if (!art || art >= m68k_rom_size) return 0;
@@ -95,6 +96,7 @@ int romart_portrait(int character, uint8_t *rgba) {
         pal[i][1] = (uint8_t)((c >> 5 & 7) * 255 / 7);
         pal[i][2] = (uint8_t)((c >> 9 & 7) * 255 / 7);
     }
+    const uint8_t *mod = spritemod_still('D', character, frame, NULL, NULL);
     for (int ty = 0; ty < 6; ty++)
         for (int tx = 0; tx < 6; tx++) {
             uint32_t a = PORTRAIT_LAYOUT + (uint32_t)(ty * 6 + tx) * 2;
@@ -106,14 +108,17 @@ int romart_portrait(int character, uint8_t *rgba) {
                     int sx = e & 0x0800 ? 7 - x : x, sy = e & 0x1000 ? 7 - y : y;
                     uint8_t b = tiles[t * 32 + sy * 4 + sx / 2];
                     int v = sx & 1 ? b & 15 : b >> 4;
-                    uint8_t *o = &rgba[((ty * 8 + y) * ROMART_PORTRAIT + tx * 8 + x) * 4];
+                    int at = (ty * 8 + y) * ROMART_PORTRAIT + tx * 8 + x;
+                    if (mod && mod[at] != 0xFF) v = mod[at] & 15;        /* a mod's pixel */
+                    uint8_t *o = &rgba[at * 4];
                     o[0] = pal[v][0]; o[1] = pal[v][1]; o[2] = pal[v][2]; o[3] = v ? 255 : 0;
                 }
         }
     return 1;
 }
 
-int romart_profile_index(int character, uint8_t *index) {
+/* the game's own Status picture of a member, as entries of the palette line */
+static int profile_game(int character, uint8_t *index) {
     if (character < 0 || character > 10 || !m68k_rom || m68k_rom_size < PROFILE_MAP_PTRS + 44) return 0;
     uint32_t art = rom32(PROFILE_ART_PTRS + (uint32_t)character * 4), map = rom32(PROFILE_MAP_PTRS + (uint32_t)character * 4);
     if (!art || art >= m68k_rom_size || !map || map + 200 > m68k_rom_size) return 0;
@@ -135,9 +140,63 @@ int romart_profile_index(int character, uint8_t *index) {
     return 1;
 }
 
-int romart_profile(int character, uint8_t *rgba) {
+int romart_profile_index(int character, int frame, uint8_t *index) {
+    if (!profile_game(character, index)) return 0;
+    const uint8_t *mod = spritemod_still('P', character, frame, NULL, NULL);
+    if (mod)                                             /* a mod's picture: its pixels, the game's where it leaves them */
+        for (int i = 0; i < ROMART_PROFILE * ROMART_PROFILE; i++)
+            if (mod[i] != 0xFF) index[i] = mod[i] & 15;
+    return 1;
+}
+
+const uint8_t *romart_profile_fine(int character, int frame, int *side) {
+    static uint8_t *kept[11][8];
+    static unsigned made[11][8];                         /* the mods' generation + 1 it was made at; 0: not made */
+    static int sides[11][8];
+    if (character < 0 || character > 10 || frame < 0 || frame > 7) return NULL;
+    int res = 1;
+    const uint8_t *fine = NULL;
+    if (!spritemod_still('P', character, frame, &res, &fine) || !fine || res < 2) return NULL;
+    unsigned now = spritemod_generation() + 1;
+    if (made[character][frame] != now) {
+        static uint8_t game[ROMART_PROFILE * ROMART_PROFILE];
+        int n = ROMART_PROFILE * res;
+        made[character][frame] = 0;
+        uint8_t *px = realloc(kept[character][frame], (size_t)n * (size_t)n);
+        if (!px) return NULL;
+        kept[character][frame] = px;
+        if (!profile_game(character, game)) return NULL;
+        for (int y = 0; y < n; y++)
+            for (int x = 0; x < n; x++) {
+                uint8_t v = fine[y * n + x];
+                px[y * n + x] = v == 0xFF ? game[(y / res) * ROMART_PROFILE + x / res] : (uint8_t)(v & 15);
+            }
+        sides[character][frame] = n;
+        made[character][frame] = now;
+    }
+    if (side) *side = sides[character][frame];
+    return kept[character][frame];
+}
+
+void romart_party_rgba(const uint8_t *index, int count, uint8_t *rgba) {
+    uint8_t pal[16][3] = {{0}};
+    if (m68k_rom && m68k_rom_size >= PAL_CHARACTERS + 32)
+        for (int i = 0; i < 16; i++) {                    /* ----bbb-ggg-rrr- */
+            unsigned c = (unsigned)(m68k_rom[PAL_CHARACTERS + i * 2] << 8 | m68k_rom[PAL_CHARACTERS + i * 2 + 1]);
+            pal[i][0] = (uint8_t)((c >> 1 & 7) * 255 / 7);
+            pal[i][1] = (uint8_t)((c >> 5 & 7) * 255 / 7);
+            pal[i][2] = (uint8_t)((c >> 9 & 7) * 255 / 7);
+        }
+    for (int i = 0; i < count; i++) {
+        int v = index[i] & 15;
+        uint8_t *o = &rgba[i * 4];
+        o[0] = pal[v][0]; o[1] = pal[v][1]; o[2] = pal[v][2]; o[3] = v ? 255 : 0;
+    }
+}
+
+int romart_profile(int character, int frame, uint8_t *rgba) {
     static uint8_t index[ROMART_PROFILE * ROMART_PROFILE];
-    if (!romart_profile_index(character, index) || m68k_rom_size < PAL_CHARACTERS + 32) return 0;
+    if (!romart_profile_index(character, frame, index) || m68k_rom_size < PAL_CHARACTERS + 32) return 0;
     uint8_t pal[16][3];
     for (int i = 0; i < 16; i++) {                        /* ----bbb-ggg-rrr- */
         unsigned c = (unsigned)(m68k_rom[PAL_CHARACTERS + i * 2] << 8 | m68k_rom[PAL_CHARACTERS + i * 2 + 1]);

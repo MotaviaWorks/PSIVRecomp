@@ -3,16 +3,18 @@
 A page you open in your browser to redraw sprites for PSIV Recomp and share them as a mod. Nothing to
 install, and it needs no internet.
 
-**Where this stands:** it covers everyone who walks on the field: the eleven of the party, and the fifty
-kinds of townspeople. Battle sprites are not in it yet: the port does not replace those so far.
+**Where this stands:** it covers everyone who walks on the field (the eleven of the party, four of the
+story's people: Zio, Saya, Professor Holt and the Principal, and forty kinds of townspeople) and the
+party's portraits. Battle sprites are not in it yet: the port does not replace those so far.
 
 ## How to use it
 
 1. Download `index.html` (or the whole repository) and open it in a browser.
 2. Press **Open my ROM** and pick your own Phantasy Star IV (USA) ROM: the same file PSIV Recomp plays
    (`.bin`, `.md`, `.gen` or `.smd`). It is read in your browser and goes nowhere.
-3. Pick a character at the left: the party first, the townspeople under them (they have no names in the
-   game, so they are numbered; the picture tells you who is who). A townsperson you redraw changes
+3. Pick a character at the left: the party first, then the story's people, then the townspeople (they have
+   no names in the game, so they are numbered; the picture tells you who is who). Each group folds away by
+   the caret on its heading. A townsperson you redraw changes
    everywhere that kind of person appears. Their frame is in the middle to draw on; at the right the game's walk and
    yours play side by side, at the game's pace.
 4. Write your mod's name, your name and a line about it, and press **Export mod**. Unzip the file into
@@ -39,6 +41,20 @@ shows where each of the game's frames begins.
   PNG: a row a facing (down, up, right, left), a column a picture. Colours are matched to the nearest of
   the sprite's fifteen.
 
+## Drawing
+
+- **Pencil, Fill, Pick colour** work with the chosen colour; **Game's own** paints the game's pixels back.
+- **Undo** and **Redo** (Ctrl + Z, Ctrl + Y) cover the picture you are on.
+- **Onion skin** shows the picture before this one in blue (and, if you choose, the one after in orange)
+  wherever this one is empty, so you can see where a leg or an arm was. The walk is a loop, so the first
+  picture's "before" is the last.
+- **Copy**, **Paste** and **Flip** (Ctrl + C, Ctrl + V) carry a whole picture to another frame, another
+  facing or another character, or turn it left to right.
+- **Move the picture** shifts it a pixel at a time (Shift + the arrow keys). What leaves one edge comes in
+  at the other, so nothing is lost.
+- The Left and Right arrow keys step through the pictures.
+- **Canvas: Large** doubles the canvas for fine work.
+
 ## More pixels
 
 **Pixels for each of the game's pixels** gives the canvas two or four times the pixels along each side:
@@ -54,15 +70,41 @@ them by its own pixels.
 ## Colours
 
 Above the swatches, choose **the character's own colours** (only those the game's sprite of that character
-uses, so a redraw stays in the character's look) or **all fifteen** of the party's palette. Pick colour
+uses, so a redraw stays in the character's look) or **all fifteen** of their palette. Pick colour
 takes a colour from the picture. Loading a sheet matches its colours to whichever set is showing.
 
 ## What the game sets
 
 - A sprite stands in the game's 16 x 32 pixels, in fifteen colours and see-through. The party share one
   palette and the townspeople another, the same in every town, so a colour means the same for everyone
-  in a group.
+  in a group. Saya, Zio and townspeople 36 and 37 the game draws with the party's colours, and the editor
+  shows them so.
 - The picture shows where the game's own sprite would be.
+
+## Portraits
+
+Under **Portraits** each of the party has two pictures. Each starts as a single still:
+
+- **large**, 80 x 80: the game's Status page picture. In Enhanced the port shows this one wherever it
+  draws a face large enough: the dialogue's portrait with modern text, the battle's party bar, the menus.
+  This is the one to redraw first.
+- **small**, 48 x 48: the game's dialogue portrait. The port shows it where it draws a face small.
+
+They take two or four pixels for each of the game's as the sprites do (up to 320 x 320 for a large one),
+and the party's fifteen colours. **Save the picture / Load a picture** pass one to another drawing
+program and back as a PNG; its colours are matched to the nearest of those showing above the swatches.
+
+**A portrait that moves.** Under **Frames**, give a portrait 2 to 8 frames and it plays in the game: a
+blink, the eyes, the hair. A new frame starts as a copy of the last, so you change only what moves. Two
+times set the pace: how long each frame shows, and how long the first one rests before the others play.
+For a blink, let the first rest a few seconds and the others pass quickly; for hair that keeps moving,
+no rest. The side-by-side plays yours as the game will, the onion skin shows what differs from the frame
+before, and **Save / Load the frames** pass them as one PNG, side by side. In the game each of the party
+plays a little out of step with the others, so they do not all blink at once.
+
+Limits for now: where the port leaves the dialogue's portrait to the game (the text set to the game's
+own font, and the Talk command chosen from the menu), the game's own portrait shows, not a mod's; and
+Alys's wounded portrait and the story's illustrations are not in the editor.
 
 ## What a mod holds
 

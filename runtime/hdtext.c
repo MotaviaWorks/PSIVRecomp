@@ -6,6 +6,7 @@
 
 #include "par.h"
 #include "romart.h"
+#include "spritemod.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -208,20 +209,30 @@ static int face_who(const VdpLine *lines, int w, int h, int *px, int *py) {
 }
 
 static void draw_face(const VdpLine *lines, int w, int h, uint32_t *out, int stride, int S) {
-    static uint8_t index[11][ROMART_PROFILE * ROMART_PROFILE];
-    static int8_t ready[11];
+    static uint8_t *index[11][8];                        /* (a mod's picture may have up to 8 frames that play) */
+    static int8_t ready[11][8];
+    static unsigned made;
     int fx, fy, who = face_who(lines, w, h, &fx, &fy);
     if (who < 0) return;
-    if (!ready[who]) ready[who] = romart_profile_index(who, index[who]) ? 1 : -1;
-    if (ready[who] < 0) return;
-    const uint8_t *src = index[who];
+    if (made != spritemod_generation()) { made = spritemod_generation(); memset(ready, 0, sizeof ready); }   /* a mod may have its own */
+    int fr = spritemod_still_now('P', who);
+    if (fr < 0 || fr > 7) fr = 0;
+    if (!ready[who][fr]) {
+        if (!index[who][fr]) index[who][fr] = malloc(ROMART_PROFILE * ROMART_PROFILE);
+        ready[who][fr] = index[who][fr] && romart_profile_index(who, fr, index[who][fr]) ? 1 : -1;
+    }
+    if (ready[who][fr] < 0) return;
+    const uint8_t *src = index[who][fr];
+    int P = ROMART_PROFILE;                              /* the picture's side: the game's 80, or a mod's finer one */
+    const uint8_t *fine = romart_profile_fine(who, fr, &P);
+    if (fine) src = fine; else P = ROMART_PROFILE;
     float rgb[16][3];
     for (int i = 0; i < 16; i++) {                       /* palette line 2, as it stands */
         uint32_t c = vdp_color(32 + i);
         rgb[i][0] = (float)(c >> 16 & 255); rgb[i][1] = (float)(c >> 8 & 255); rgb[i][2] = (float)(c & 255);
     }
     int n = 48 * S;
-    float k = (float)n / (float)ROMART_PROFILE;          /* output pixels to one of the picture's */
+    float k = (float)n / (float)P;                       /* output pixels to one of the picture's */
     for (int y = 0; y < n; y++) {
         const VdpLine *l = &lines[fy + y / S];
         uint32_t *o = out + (size_t)(fy * S + y) * (size_t)stride + (size_t)(fx * S);
@@ -229,16 +240,16 @@ static void draw_face(const VdpLine *lines, int w, int h, uint32_t *out, int str
         int v0 = (int)floorf(fv);
         float tv = (fv - (float)v0 - 0.5f) * k + 0.5f;
         tv = tv < 0.0f ? 0.0f : tv > 1.0f ? 1.0f : tv;
-        int va = v0 < 0 ? 0 : v0, vb = v0 + 1 >= ROMART_PROFILE ? ROMART_PROFILE - 1 : v0 + 1;
+        int va = v0 < 0 ? 0 : v0, vb = v0 + 1 >= P ? P - 1 : v0 + 1;
         for (int x = 0; x < n; x++) {
             if (l->sprite[fx + x / S] & 0x80) continue;                  /* (a sprite in front of it stays there) */
             float fu = ((float)x + 0.5f) / k - 0.5f;
             int u0 = (int)floorf(fu);
             float tu = (fu - (float)u0 - 0.5f) * k + 0.5f;               /* even pixels: only their edges shared */
             tu = tu < 0.0f ? 0.0f : tu > 1.0f ? 1.0f : tu;
-            int ua = u0 < 0 ? 0 : u0, ub = u0 + 1 >= ROMART_PROFILE ? ROMART_PROFILE - 1 : u0 + 1;
-            const float *c00 = rgb[src[va * ROMART_PROFILE + ua]], *c10 = rgb[src[va * ROMART_PROFILE + ub]];
-            const float *c01 = rgb[src[vb * ROMART_PROFILE + ua]], *c11 = rgb[src[vb * ROMART_PROFILE + ub]];
+            int ua = u0 < 0 ? 0 : u0, ub = u0 + 1 >= P ? P - 1 : u0 + 1;
+            const float *c00 = rgb[src[va * P + ua]], *c10 = rgb[src[va * P + ub]];
+            const float *c01 = rgb[src[vb * P + ua]], *c11 = rgb[src[vb * P + ub]];
             float w00 = (1.0f - tu) * (1.0f - tv), w10 = tu * (1.0f - tv), w01 = (1.0f - tu) * tv, w11 = tu * tv;
             int r = (int)(c00[0] * w00 + c10[0] * w10 + c01[0] * w01 + c11[0] * w11 + 0.5f);
             int g = (int)(c00[1] * w00 + c10[1] * w10 + c01[1] * w01 + c11[1] * w11 + 0.5f);

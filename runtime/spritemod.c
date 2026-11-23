@@ -41,8 +41,10 @@ static uint32_t rom32(uint32_t a) {
  * game's piece). TARGET is whose it is, a key as PSIV_SPRITEMOD_LOG lists them for whoever is
  * on screen: R and the address its art is streamed from in the ROM (the party: one address a member),
  * or A and a hash of the first tiles of its art in video memory (the townspeople: their table of
- * animations is one for all of them, so their art is what tells them apart). */
-typedef struct { int w, h, frames, mult, res; char kind; uint32_t target; uint8_t *px, *fine; } Art;
+ * animations is one for all of them, so their art is what tells them apart).
+ * A still is one picture and no more (FRAMES and MULT 1): B and a hash, a member standing in battle (below);
+ * P or D and a party member's number, their portraits (spritemod_still). */
+typedef struct { int w, h, frames, mult, res, ticks, rest; char kind; uint32_t target; uint8_t *px, *fine; } Art;
 /* (px: the pictures at the game's size, for its sprite drawing; fine: as the file has them, res pixels to
  * each of the game's, for spritemod_draw; NULL where res is 1) */
 static Art arts[MAX_FILES];
@@ -52,6 +54,10 @@ static struct { const uint8_t *px; int res; } fine_slots[80];       /* the finer
 static int fine_any;
 static struct { int x, y, still; } was[OBJ_COUNT];
 static int logging = -1;
+static unsigned generation;
+static unsigned ticks_gone;                          /* the game's frames gone by: the clock a still's frames play to */
+
+static int still_kind(char k) { return k == 'B' || k == 'P' || k == 'D'; }
 
 static int load(Art *a, const char *path) {
     FILE *f = fopen(path, "rb");
@@ -63,16 +69,24 @@ static int load(Art *a, const char *path) {
     /* "PSIVSPR3" has one number more, RES: the pictures have RES pixels to each of the game's, along a side
      * (1, 2 or 4), so each is (W RES) x (H RES). "PSIVSPR2" is RES 1. */
     int ok = fgets(magic, sizeof magic, f) != NULL;
-    if (ok && !strncmp(magic, "PSIVSPR3", 8))
+    /* "PSIVSPR4" (a still with frames) has two more after the key, TICKS and REST: each frame shows for TICKS
+     * of the game's frames, and the first for REST if that is longer (a blink: a long rest, then the rest of the
+     * frames quickly). */
+    if (ok && !strncmp(magic, "PSIVSPR4", 8))
+        ok = fscanf(f, "%d %d %d %d %d %15s %d %d", &a->w, &a->h, &a->frames, &a->mult, &res, key, &a->ticks, &a->rest) == 8
+             && (key[0] == 'P' || key[0] == 'D') && a->ticks >= 1 && a->ticks <= 600 && a->rest >= 0 && a->rest <= 3600;
+    else if (ok && !strncmp(magic, "PSIVSPR3", 8))
         ok = fscanf(f, "%d %d %d %d %d %15s", &a->w, &a->h, &a->frames, &a->mult, &res, key) == 6;
     else if (ok && !strncmp(magic, "PSIVSPR2", 8))
         ok = fscanf(f, "%d %d %d %d %15s", &a->w, &a->h, &a->frames, &a->mult, key) == 5;
     else ok = 0;
-    ok = ok && fgetc(f) == '\n' && (key[0] == 'R' || key[0] == 'A' || key[0] == 'B')
-          && a->w > 0 && a->w <= 64 && a->h > 0 && a->h <= 64 && a->frames > 0 && a->frames <= 8
+    ok = ok && fgetc(f) == '\n' && (key[0] == 'R' || key[0] == 'A' || still_kind(key[0]))
+          && a->w > 0 && a->w <= 96 && a->h > 0 && a->h <= 96 && a->frames > 0 && a->frames <= 8
           && a->mult > 0 && a->mult <= 8 && (res == 1 || res == 2 || res == 4);
+    if (ok && key[0] == 'P') ok = a->w == 80 && a->h == 80 && a->mult == 1;
+    if (ok && key[0] == 'D') ok = a->w == 48 && a->h == 48 && a->mult == 1;
     if (ok) {
-        size_t pics = (key[0] == 'B' ? 1u : 4u) * (size_t)a->frames * (size_t)a->mult, small = (size_t)a->w * (size_t)a->h;
+        size_t pics = (still_kind(key[0]) ? 1u : 4u) * (size_t)a->frames * (size_t)a->mult, small = (size_t)a->w * (size_t)a->h;
         size_t big = small * (size_t)res * (size_t)res;
         uint8_t *fine = malloc(pics * big);
         ok = fine && fread(fine, 1, pics * big, f) == pics * big;
@@ -117,6 +131,7 @@ static int load(Art *a, const char *path) {
 int spritemod_set_file(const char *paths) {
     for (int i = 0; i < narts; i++) { free(arts[i].px); free(arts[i].fine); }
     narts = 0;
+    generation++;
     vdp_sprite_art = NULL;
     memset(was, 0, sizeof was);
     if (!paths || !*paths) return 0;
@@ -129,6 +144,40 @@ int spritemod_set_file(const char *paths) {
         p = end ? end + 1 : NULL;
     }
     return narts;
+}
+
+unsigned spritemod_generation(void) { return generation; }
+
+static const Art *still_art(char kind, int who) {
+    for (int i = 0; i < narts; i++)
+        if (arts[i].kind == kind && (int)arts[i].target == who && arts[i].px) return &arts[i];
+    return NULL;
+}
+
+const uint8_t *spritemod_still(char kind, int who, int frame, int *res, const uint8_t **fine) {
+    const Art *a = still_art(kind, who);
+    if (res) *res = 1;
+    if (fine) *fine = NULL;
+    if (!a || frame < 0 || frame >= a->frames) return NULL;
+    size_t small = (size_t)a->w * (size_t)a->h;
+    if (res) *res = a->res;
+    if (fine && a->fine) *fine = a->fine + (size_t)frame * small * (size_t)a->res * (size_t)a->res;
+    return a->px + (size_t)frame * small;
+}
+
+int spritemod_still_frames(char kind, int who) {
+    const Art *a = still_art(kind, who);
+    return a ? a->frames : 0;
+}
+
+/* frame 0 for `rest` of the game's frames (or `ticks`, if that is longer), then each of the others for `ticks`,
+ * round and round; each member a little out of step with the others, so they do not all blink together */
+int spritemod_still_now(char kind, int who) {
+    const Art *a = still_art(kind, who);
+    if (!a || a->frames < 2) return 0;
+    unsigned each = a->ticks > 0 ? (unsigned)a->ticks : 6u, first = (unsigned)a->rest > each ? (unsigned)a->rest : each;
+    unsigned t = (ticks_gone + (unsigned)who * 37u) % (first + (unsigned)(a->frames - 1) * each);
+    return t < first ? 0 : 1 + (int)((t - first) / each);
 }
 
 /* ---- battles: the party standing
@@ -259,6 +308,7 @@ static void battle_frame(void) {
 }
 
 void spritemod_frame(void) {
+    ticks_gone++;
     vdp_sprite_art = NULL;
     vdp_plane_a_art = NULL;
     fine_any = 0;

@@ -12,17 +12,23 @@
 int romart_nemesis(const uint8_t *src, uint32_t src_len, uint8_t *dst, int max);
 
 /* the dialogue portrait of a party member (0 Chaz .. 10 Seth) as 48x48 RGBA,
- * colour 0 transparent; 1 on success */
+ * colour 0 transparent; 1 on success. (This and the Status page's picture below are a mod's where a mod has
+ * them: spritemod_still. A pixel the mod leaves as the game's own is the game's.) */
 #define ROMART_PORTRAIT 48
-int romart_portrait(int character, uint8_t *rgba);
+int romart_portrait(int character, int frame, uint8_t *rgba);   /* frame: of a mod's (0: the first, or the game's) */
 
 /* the picture of a party member on the game's Status page (0 Chaz .. 10 Seth) as 80x80 RGBA, colour 0
  * transparent: the same faces as the dialogue's, drawn larger and finer; 1 on success */
 #define ROMART_PROFILE 80
-int romart_profile(int character, uint8_t *rgba);
+int romart_profile(int character, int frame, uint8_t *rgba);
 /* the same as the palette's entries (0-15 of line 2; 0: nothing there), for drawing in the colours the
  * game has loaded now (a fade, a flash); 1 on success */
-int romart_profile_index(int character, uint8_t *index);
+int romart_profile_index(int character, int frame, uint8_t *index);
+/* The same picture where a mod has it finer than the game's: the entries at *side x *side (160 or 320), in a
+ * buffer of romart's own that is good until the mods change; NULL when no mod has a finer one (or none at all). */
+const uint8_t *romart_profile_fine(int character, int frame, int *side);
+/* count entries of the party's palette line as RGBA, in the colours the ROM starts it with (0: see-through) */
+void romart_party_rgba(const uint8_t *index, int count, uint8_t *rgba);
 /* whose dialogue portrait these 36 tiles are (as they stand in VRAM at tile $55C): 0 Chaz .. 10 Seth;
  * -1: someone else's, or no portrait at all */
 int romart_portrait_who(const uint8_t *tiles);
