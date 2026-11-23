@@ -336,7 +336,7 @@ static void render_window(int y, uint8_t *out, uint8_t *in_out, int x0, int widt
  * set the collision flag, and the game stores that flag (VDP_Status_Reg). */
 #define SPRITE_MARGIN 32
 
-static void render_sprites(int y, uint8_t *out, uint8_t *who, int x0, int width, int mode_w) {
+static void render_sprites(int y, uint8_t *out, uint8_t *who, uint8_t *own, int x0, int width, int mode_w) {
     int h40 = mode_w == 320;
     uint32_t base = (uint32_t)(vdp.reg[5] & (h40 ? 0x7E : 0x7F)) << 9;
     int max_sprites = h40 ? 80 : 64, per_line = h40 ? 20 : 16, max_px = h40 ? 320 : 256;
@@ -391,7 +391,11 @@ static void render_sprites(int y, uint8_t *out, uint8_t *who, int x0, int width,
                             if (q) q = (uint8_t)(q | (attr >> 13 & 3) << 4 | (attr & 0x8000 ? 0x80 : 0));
                         }
                     }
-                    if (q && x >= x0 && x < x0 + width && !out[x - x0]) { out[x - x0] = q; who[x - x0] = (uint8_t)me; }
+                    if (q && x >= x0 && x < x0 + width && !out[x - x0]) {
+                        out[x - x0] = q;
+                        who[x - x0] = (uint8_t)me;
+                        own[x - x0] = p;
+                    }
                     continue;
                 }
                 if (!p) continue;
@@ -421,10 +425,27 @@ void vdp_render_line(int y, VdpLine *l) {
     render_plane(y, 1, l->plane_b, NULL, NULL, NULL, x0, w, mw);
     render_plane(y, 0, l->plane_a, l->plane_a_tile, l->plane_a_txy, l->plane_a_under, x0, w, mw);
     render_window(y, l->window, l->win_in, x0, w, mw);
-    render_sprites(y, l->sprite, l->sprite_no, x0, w, mw);
+    render_sprites(y, l->sprite, l->sprite_no, l->sprite_own, x0, w, mw);
     if (vdp_sprite_hidden)
         for (int i = 0; i < w; i++)
             if (l->sprite[i] && vdp_sprite_hidden[l->sprite_no[i] & 0x7F]) l->sprite[i] = 0;
+}
+
+/* (the order of vdp_compose_line below, for one column, with and without its sprite pixel) */
+void vdp_line_codes(const VdpLine *l, int x, uint8_t *shown, uint8_t *under) {
+    uint8_t b = l->plane_b[x], a = l->win_in[x] ? l->window[x] : l->plane_a[x], s = l->sprite[x];
+    uint8_t c = l->backdrop, u = l->backdrop;
+    if (b && !(b & 0x80)) c = u = b;
+    if (a && !(a & 0x80)) c = u = a;
+    if (s && !(s & 0x80)) c = s;
+    if (b & 0x80) c = u = b;
+    if (a & 0x80) {
+        u = a;
+        if (!(!l->win_in[x] && l->plane_a_under[x] && s && !(s & 0x80))) c = a;
+    }
+    if (s & 0x80) c = s;
+    *shown = c;
+    *under = u;
 }
 
 void vdp_compose_line(const VdpLine *l, uint32_t *dst, int width) {

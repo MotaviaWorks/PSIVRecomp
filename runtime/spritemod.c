@@ -42,10 +42,14 @@ static uint32_t rom32(uint32_t a) {
  * on screen: R and the address its art is streamed from in the ROM (the party: one address a member),
  * or A and a hash of the first tiles of its art in video memory (the townspeople: their table of
  * animations is one for all of them, so their art is what tells them apart). */
-typedef struct { int w, h, frames, mult; char kind; uint32_t target; uint8_t *px; } Art;
+typedef struct { int w, h, frames, mult, res; char kind; uint32_t target; uint8_t *px, *fine; } Art;
+/* (px: the pictures at the game's size, for its sprite drawing; fine: as the file has them, res pixels to
+ * each of the game's, for spritemod_draw; NULL where res is 1) */
 static Art arts[MAX_FILES];
 static int narts;
 static VdpSpriteArt slots[80];
+static struct { const uint8_t *px; int res; } fine_slots[80];       /* the finer picture of a piece's, if it has one */
+static int fine_any;
 static struct { int x, y, still; } was[OBJ_COUNT];
 static int logging = -1;
 
@@ -73,29 +77,34 @@ static int load(Art *a, const char *path) {
         uint8_t *fine = malloc(pics * big);
         ok = fine && fread(fine, 1, pics * big, f) == pics * big;
         if (ok && res > 1) {
-            /* Finer pictures are shown at the game's own size for now (drawing their detail is to come):
-             * each block of RES x RES becomes the value most of it has */
+            /* Finer pictures: the game's sprite drawing carries them at its own size, a block of RES x RES
+             * as one pixel -- the colour most of what is drawn in it has; with nothing drawn, the game's own
+             * if any of it is the game's own; nothing only if all of it is nothing. So the game's pixel is
+             * the sprite's wherever the fine picture has anything, and spritemod_draw puts the detail back. */
             a->px = malloc(pics * small);
             ok = a->px != NULL;
             for (size_t p = 0; ok && p < pics; p++)
                 for (int y = 0; y < a->h; y++)
                     for (int x = 0; x < a->w; x++) {
-                        int count[256] = {0}, best = 0, most = 0;
+                        int count[16] = {0}, best = 0, most = 0, own = 0;
                         for (int j = 0; j < res; j++)
                             for (int i = 0; i < res; i++) {
                                 int v = fine[p * big + (size_t)((y * res + j) * a->w * res + x * res + i)];
-                                if (++count[v] > most) { most = count[v]; best = v; }
+                                if (v == 0xFF) own = 1;
+                                else if ((v & 15) && ++count[v & 15] > most) { most = count[v & 15]; best = v & 15; }
                             }
-                        a->px[p * small + (size_t)(y * a->w + x)] = (uint8_t)best;
+                        a->px[p * small + (size_t)(y * a->w + x)] = (uint8_t)(best ? best : own ? 0xFF : 0);
                     }
-            free(fine);
-        } else a->px = fine;
+            a->fine = fine;
+            a->res = res;
+        } else { a->px = fine; a->res = 1; }
     }
     fclose(f);
     if (!ok) {
         fprintf(stderr, "spritemod: %s is not a sprite file of this port\n", path);
         free(a->px);
-        a->px = NULL;
+        free(a->fine);
+        a->px = a->fine = NULL;
         return 0;
     }
     a->kind = key[0];
@@ -106,7 +115,7 @@ static int load(Art *a, const char *path) {
 }
 
 int spritemod_set_file(const char *paths) {
-    for (int i = 0; i < narts; i++) free(arts[i].px);
+    for (int i = 0; i < narts; i++) { free(arts[i].px); free(arts[i].fine); }
     narts = 0;
     vdp_sprite_art = NULL;
     memset(was, 0, sizeof was);
@@ -124,6 +133,7 @@ int spritemod_set_file(const char *paths) {
 
 void spritemod_frame(void) {
     vdp_sprite_art = NULL;
+    fine_any = 0;
     if (logging < 0) logging = getenv("PSIV_SPRITEMOD_LOG") != NULL;
     static int said = -1;
     static long tick;
@@ -206,6 +216,7 @@ void spritemod_frame(void) {
     }
 
     memset(slots, 0, sizeof slots);
+    memset(fine_slots, 0, sizeof fine_slots);
     int any = 0;
     static uint32_t logged[OBJ_COUNT];
     for (int i = 0; i < OBJ_COUNT; i++) {
@@ -267,7 +278,48 @@ void spritemod_frame(void) {
                 v->w = (int16_t)a->w;
                 v->h = (int16_t)a->h;
                 any = 1;
+                if (a->fine) {
+                    fine_slots[entry[k]].px = a->fine + (size_t)(px - a->px) * (size_t)(a->res * a->res);
+                    fine_slots[entry[k]].res = a->res;
+                    fine_any = 1;
+                }
             }
     }
     if (any) vdp_sprite_art = slots;
+}
+
+int spritemod_fine(void) { return fine_any && vdp_sprite_art != NULL; }
+
+/* The finer sprites' detail, over the enlarged picture. A game pixel at a time, where one of their pieces is
+ * the layer the line shows (not where the game puts a roof or a tree in front): each of its ds x ds output
+ * pixels takes the fine picture's pixel there -- a colour of the piece's palette line; "the game's own",
+ * which is the game's pixel for the whole block; or nothing, which is what the line shows with no sprite.
+ * The colours are looked up as the frame ends, so the game's fades carry over. */
+void spritemod_draw(const void *lines_, int w, int h, uint32_t *out, int stride, int ds) {
+    const VdpLine *lines = lines_;
+    if (!spritemod_fine() || ds < 1) return;
+    for (int y = 0; y < h; y++) {
+        const VdpLine *l = &lines[y];
+        for (int x = 0; x < w; x++) {
+            uint8_t s = l->sprite[x], shown, under;
+            if (!s) continue;
+            int me = l->sprite_no[x] & 0x7F;
+            if (!fine_slots[me].px) continue;
+            vdp_line_codes(l, x, &shown, &under);
+            if (shown != s) continue;                               /* behind something: the game's picture stands */
+            const VdpSpriteArt *v = &slots[me];
+            int res = fine_slots[me].res, fw = v->w * res;
+            int ax = (x + vdp_view_x0 - v->x0) * res, ay = (y - v->y0) * res;
+            if (ax < 0 || ay < 0 || ax >= fw || ay >= v->h * res) continue;
+            uint32_t below = vdp_color(under & 0x3F), own = l->sprite_own[x] ? vdp_color(l->sprite_own[x] & 0x3F) : below;
+            uint32_t *row = out + (size_t)(y * ds) * (size_t)stride + (size_t)(x * ds);
+            for (int j = 0; j < ds; j++, row += stride) {
+                const uint8_t *src = fine_slots[me].px + (size_t)(ay + (j * 2 + 1) * res / (ds * 2)) * (size_t)fw + (size_t)ax;
+                for (int i = 0; i < ds; i++) {
+                    uint8_t c = src[(i * 2 + 1) * res / (ds * 2)];
+                    row[i] = c == 0xFF ? own : (c & 15) ? vdp_color((s & 0x30) | (c & 15)) : below;
+                }
+            }
+        }
+    }
 }

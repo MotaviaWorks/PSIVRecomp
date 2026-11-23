@@ -38,9 +38,11 @@ shows where each of the game's frames begins.
 32 x 64 or 64 x 128 in place of the game's 16 x 32. Going finer keeps what you drew, each pixel becoming a
 block; going coarser makes each block the colour most of it has, and asks first.
 
-**For now the port shows a finer sprite at the game's own 16 x 32** (each block as the colour most of it
-has). Your mod keeps the full picture, so nothing has to be redrawn when the port learns to draw the
-detail: that is the next step.
+The port draws the finer detail where it enlarges the game's picture for the screen. How much of it shows
+depends on the screen: the port makes its picture at up to four times the game's size, so a 64 x 128
+sprite shows in full on a 1080p screen or larger, and a smaller window shows it reduced. The game itself
+still works with the sprite at 16 x 32: where it puts a roof or a tree in front of a character, it hides
+them by its own pixels.
 
 ## Colours
 

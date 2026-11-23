@@ -19,9 +19,18 @@
 #ifndef PSIV_SPRITEMOD_H
 #define PSIV_SPRITEMOD_H
 
+#include <stdint.h>
+
 /* paths: the sprite files with a ; between them, or NULL / "" for none. How many loaded. */
 int  spritemod_set_file(const char *paths);
 /* once a frame, before the picture is drawn */
 void spritemod_frame(void);
+/* A mod's finer sprites (more pixels than the game's own, 2 or 4 to each along a side). The game's sprite
+ * drawing carries them at its own size; where the picture is enlarged for the screen, their detail is
+ * drawn over it. spritemod_fine: this frame has some. spritemod_draw: `lines` the frame's w x h lines,
+ * `out` the picture at ds times the game's size, `stride` its row length. */
+struct VdpLine;
+int  spritemod_fine(void);
+void spritemod_draw(const void *lines, int w, int h, uint32_t *out, int stride, int ds);
 
 #endif

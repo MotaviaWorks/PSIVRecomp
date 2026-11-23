@@ -81,6 +81,7 @@ typedef struct {
     uint8_t win_in[VDP_MAX_W];   /* 1 where the window replaces plane A */
     uint8_t sprite[VDP_MAX_W];
     uint8_t sprite_no[VDP_MAX_W];/* which sprite-table entry drew each sprite pixel */
+    uint8_t sprite_own[VDP_MAX_W];/* with vdp_sprite_art set: the game's own pixel where a sprite pixel is */
     uint8_t backdrop;            /* palette index */
 } VdpLine;
 
@@ -128,5 +129,8 @@ void vdp_render_line(int y, VdpLine *out);
 /* mix a line's layers into 0xAARRGGBB pixels */
 void vdp_compose_line(const VdpLine *l, uint32_t *dst, int width);
 uint32_t vdp_color(int index);   /* CRAM entry as 0xFFRRGGBB */
+/* what a composed line shows at column x, as its layer's pixel (palette line and colour, bit 7 priority),
+ * and what it would show there with no sprite */
+void vdp_line_codes(const VdpLine *l, int x, uint8_t *shown, uint8_t *under);
 
 #endif

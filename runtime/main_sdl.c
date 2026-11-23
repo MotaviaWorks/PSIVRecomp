@@ -1731,6 +1731,7 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
             game_base(pixels, w, h, mid, stride, ds, look);
             if (fieldfx_prepare(frame_lines, w, h)) fieldfx_draw(pixels, VDP_MAX_W, w, h, mid, stride, ds);
             if (soft) smooth_soften(mid, stride, w * ds, h * ds, ds);
+            if (spritemod_fine()) spritemod_draw(frame_lines, w, h, mid, stride, ds);   /* a mod's finer sprites: their detail */
             if (hdtext_enabled() && hdtext_has_text(frame_lines, w, h)) hdtext_draw(frame_lines, w, h, mid, stride, ds);
             panels_draw(depth_pixels, stride, ds, pm, w, h);
             depth_shown = 1;
@@ -1746,6 +1747,11 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
             if (depth_shown && soft) smooth_soften(depth_pixels, stride, w * ds, h * ds, ds);
             if (!depth_shown && look == LOOK_SCALEX && ds > 1) {        /* Scale2x: a plain frame too */
                 game_picture(pixels, w, h, stride, ds, look);
+                depth_shown = 1;
+            }
+            if (spritemod_fine()) {                      /* a mod's finer sprites: their detail, over the game's picture */
+                if (!depth_shown) game_picture(pixels, w, h, stride, ds, look);
+                spritemod_draw(frame_lines, w, h, depth_pixels, stride, ds);
                 depth_shown = 1;
             }
             /* modern text (not over a battle's opening: the game's windows are out of the close-up) */
