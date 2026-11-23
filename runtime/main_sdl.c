@@ -450,6 +450,7 @@ static Setting settings[] = {
     {"enhance.music", "original", "music: original = the YM2612 and PSG; algol = the chip remastered: the game's own instruments and drums, clean, in stereo, with reverb; proto = Proto Algol, the first Algol: the songs on new instruments of its own, with its own drums"},
     {"enhance.click_walk", "on", "mouse: on = a click on the field walks the party there (a person or a chest: up to it, then C to talk or open); right click stops; with text up a click is C, a right click B; touch: a tap is a click; off = clicks and taps only work the system menu"},
     {"enhance.diagonal", "on", "diagonal walking: on = two directions held walk the party diagonally, a cell at a time (not through a wall's corner; doors, exits and people are still met straight on); off = the game's four directions"},
+    {"mods.enabled", "", "the mods that are on: the names of their folders in mods/ (beside the saves), a ; between them; none = no mod. Enhanced only"},
     {"enhance.custom_music", "on", "music pack: on = audio files in the music folder play in place of the game's songs (music/8F.wav, or named in music/music.ini; see runtime/music.h); off = the game's"},
     {"enhance.battle_ui", "modern", "battle menus: modern = full names, descriptions and a party bar with portraits; original = the game's windows"},
     {"enhance.group_items", "on", "the modern menu's items: on = one row a kind of item, with how many (the pack is the game's as ever: 40 items, one a slot); off = one row each, as the game lists them"},
@@ -1946,9 +1947,32 @@ static void apply_enhancements(void) {
      * to play): no setting, no menu entry; PSIV_FIRST_PERSON=1 brings the
      * view back for development */
     fpview_set_enabled(!classic_mode() && SDL_getenv("PSIV_FIRST_PERSON") && *SDL_getenv("PSIV_FIRST_PERSON") == '1');
-    {   /* a mod's sprites (a proof, no setting yet): PSIV_SPRITEMOD=FILE; never in Classic */
-        static char loaded[1100];
-        const char *want = !classic_mode() && SDL_getenv("PSIV_SPRITEMOD") ? SDL_getenv("PSIV_SPRITEMOD") : "";
+    {   /* Mods: a mod is a folder in mods/ beside the saves; those named in mods.enabled are on. For now a
+         * mod can hold sprite files (.spr: spritemod.h). Never in Classic. (PSIV_SPRITEMOD=FILE[;FILE...]
+         * names files directly, for trying one out.) */
+        static char loaded[8192], want[8192];
+        size_t len = 0;
+        want[0] = 0;
+        if (!classic_mode() && SDL_getenv("PSIV_SPRITEMOD")) len = (size_t)snprintf(want, sizeof want, "%s", SDL_getenv("PSIV_SPRITEMOD"));
+        else if (!classic_mode()) {
+            char names[1024], dir[1100];
+            snprintf(names, sizeof names, "%s", setting("mods.enabled"));
+            for (char *name = names; name && *name;) {
+                char *end = strchr(name, ';');
+                if (end) *end = 0;
+                if (*name && !strpbrk(name, "/\\:") && strcmp(name, "..")) {     /* (a folder's name, not a path) */
+                    char rel[400];
+                    int count = 0;
+                    snprintf(rel, sizeof rel, "mods/%s", name);
+                    path_in_home(dir, sizeof dir, rel);
+                    char **files = SDL_GlobDirectory(dir, "*.spr", SDL_GLOB_CASEINSENSITIVE, &count);
+                    for (int i = 0; files && i < count && len + strlen(dir) + strlen(files[i]) + 3 < sizeof want; i++)
+                        len += (size_t)snprintf(want + len, sizeof want - len, "%s/%s;", dir, files[i]);
+                    SDL_free(files);
+                }
+                name = end ? end + 1 : NULL;
+            }
+        }
         if (strcmp(want, loaded)) { spritemod_set_file(want); snprintf(loaded, sizeof loaded, "%s", want); }
     }
     walkto_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.click_walk"), "off") != 0);
@@ -2227,12 +2251,12 @@ static const char *const CLASSIC_NOTE = "Off in Classic mode. Set Mode to Enhanc
 
 enum { MENU_CLOSED, MENU_MAIN, MENU_SETTINGS, MENU_QUIT, MENU_LAUNCHER, MENU_JOURNAL, MENU_LOAD, MENU_ARENA,
        MENU_ARENA_PREP, MENU_ARENA_TPL, MENU_WAVE, MENU_WAVE_SETUP, MENU_WAVE_RESULT, MENU_BONUS, MENU_JUKEBOX,
-       MENU_REWIND };
+       MENU_REWIND, MENU_MODS };
 static int menu_screen, menu_sel;     /* in Settings, -1 = the page bar */
 static int in_launcher;               /* the launcher is up: the game hasn't started */
 static int launcher_go;               /* its Start game was chosen */
-static const char *const LAUNCHER_LABELS[] = {"Continue", "Load game", "Start game", "Bonus Modes", "Mode", "Settings", "Quit"};
-enum { L_CONTINUE, L_LOAD, L_START, L_ARENA, L_MODE, L_SETTINGS, L_QUIT, N_LAUNCHER };
+static const char *const LAUNCHER_LABELS[] = {"Continue", "Load game", "Start game", "Bonus Modes", "Mods", "Mode", "Settings", "Quit"};
+enum { L_CONTINUE, L_LOAD, L_START, L_ARENA, L_MODS, L_MODE, L_SETTINGS, L_QUIT, N_LAUNCHER };
 static int launch_has_continue(void);
 static int launch_first(void) { return launch_has_continue() ? L_CONTINUE : L_START; }   /* Continue, Load game: only with a save */
 static int launch_rows(void) { return N_LAUNCHER - launch_first(); }
@@ -2866,6 +2890,94 @@ static void wave_enter(void) {
     menu_screen = MENU_WAVE;
     menu_sel = wave_sel_run >= 0 && wave_sel_run < wave_count() ? wave_sel_run : 0;
 }
+/* ------------------------------------------------------------------ Mods (the launcher's page)
+ * A mod is a folder in mods/, beside the saves. A mod.txt in it may say what it is:
+ *     name = ...      author = ...      about = ...   (a line on what it changes)
+ * The page lists the folders and switches each on or off (psiv.ini's mods.enabled); a change is in force
+ * at once. Enhanced only: Classic takes no mod. */
+#define MODS_MAX 32
+typedef struct { char folder[64], name[64], author[48], about[220]; int sprites, on; } ModInfo;
+static ModInfo mod_list[MODS_MAX];
+static int mod_count;
+
+static int mod_is_on(const char *folder) {
+    char list[340], key[80];
+    snprintf(list, sizeof list, ";%s;", setting("mods.enabled"));
+    snprintf(key, sizeof key, ";%s;", folder);
+    return strstr(list, key) != NULL;
+}
+
+static void mods_scan(void) {
+    char dir[1100];
+    int count = 0;
+    mod_count = 0;
+    path_in_home(dir, sizeof dir, "mods");
+    char **names = SDL_GlobDirectory(dir, "*", 0, &count);
+    for (int i = 0; names && i < count && mod_count < MODS_MAX; i++) {
+        char path[1300], txt[1400];
+        SDL_PathInfo info;
+        if (strpbrk(names[i], "/\\;") || strlen(names[i]) >= sizeof mod_list[0].folder) continue;
+        snprintf(path, sizeof path, "%s/%s", dir, names[i]);
+        if (!SDL_GetPathInfo(path, &info) || info.type != SDL_PATHTYPE_DIRECTORY) continue;
+        ModInfo *m = &mod_list[mod_count++];
+        memset(m, 0, sizeof *m);
+        snprintf(m->folder, sizeof m->folder, "%s", names[i]);
+        snprintf(m->name, sizeof m->name, "%s", names[i]);
+        int n = 0;
+        char **spr = SDL_GlobDirectory(path, "*.spr", SDL_GLOB_CASEINSENSITIVE, &n);
+        m->sprites = spr ? n : 0;
+        SDL_free(spr);
+        snprintf(txt, sizeof txt, "%s/mod.txt", path);
+        FILE *f = fopen(txt, "r");
+        if (f) {
+            char line[400];
+            while (fgets(line, sizeof line, f)) {
+                char *eq = strchr(line, '=');
+                if (!eq) continue;
+                *eq = 0;
+                char *k = line, *v = eq + 1;
+                while (*k == ' ' || *k == '\t') k++;
+                for (char *e = k + strlen(k); e > k && (e[-1] == ' ' || e[-1] == '\t');) *--e = 0;
+                while (*v == ' ' || *v == '\t') v++;
+                for (char *e = v + strlen(v); e > v && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ');) *--e = 0;
+                if (!strcmp(k, "name") && *v) snprintf(m->name, sizeof m->name, "%s", v);
+                else if (!strcmp(k, "author")) snprintf(m->author, sizeof m->author, "%s", v);
+                else if (!strcmp(k, "about")) snprintf(m->about, sizeof m->about, "%s", v);
+            }
+            fclose(f);
+        }
+        m->on = mod_is_on(m->folder);
+    }
+    SDL_free(names);
+}
+
+/* a mod on or off: the setting written, and in force at once */
+static void mods_toggle(int k) {
+    if (k < 0 || k >= mod_count || classic_mode()) return;
+    mod_list[k].on = !mod_list[k].on;
+    for (int i = 0; i < NSETTINGS; i++) {
+        if (strcmp(settings[i].key, "mods.enabled")) continue;
+        size_t len = 0;
+        settings[i].value[0] = 0;
+        for (int j = 0; j < mod_count; j++)
+            if (mod_list[j].on && len + strlen(mod_list[j].folder) + 2 < sizeof settings[i].value)
+                len += (size_t)snprintf(settings[i].value + len, sizeof settings[i].value - len, "%s%s", len ? ";" : "",
+                                        mod_list[j].folder);
+    }
+    char path[1100];
+    path_in_home(path, sizeof path, "psiv.ini");
+    write_settings(path);
+    apply_enhancements();
+    if (in_launcher) launcher_sfx(LOAD_OPEN_SFX, 350);
+}
+
+static void mods_enter(void) {
+    mods_scan();
+    if (in_launcher) launcher_sfx(LOAD_OPEN_SFX, 350);
+    menu_screen = MENU_MODS;
+    menu_sel = 0;
+}
+
 /* Bonus Modes: the Boss Arena and Wave Mode, one above the other */
 static void bonus_enter(void) {
     if (!arena_faces && rom_ready) {                 /* (the faces: both lists show them) */
@@ -3368,6 +3480,7 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
         else if (menu_screen == MENU_ARENA) { menu_screen = MENU_BONUS; menu_sel = 0; }
         else if (menu_screen == MENU_JUKEBOX) { menu_screen = MENU_BONUS; menu_sel = 2; }
         else if (menu_screen == MENU_BONUS && in_launcher) { menu_screen = MENU_LAUNCHER; menu_sel = L_ARENA; }
+        else if (menu_screen == MENU_MODS) { menu_screen = MENU_LAUNCHER; menu_sel = L_MODS; }
         else {                                       /* back to the main menu, on the line it came from */
             menu_sel = menu_screen == MENU_SETTINGS ? M_SETTINGS
                      : menu_screen == MENU_JOURNAL || menu_screen == MENU_BONUS ? M_JOURNAL
@@ -3424,6 +3537,14 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
         wave_menu_input(up, down, left, right, ok);
         return;
     }
+    if (menu_screen == MENU_MODS) {                   /* a mod: on or off */
+        if (mod_count) {
+            if (up) menu_sel = (menu_sel + mod_count - 1) % mod_count;
+            if (down) menu_sel = (menu_sel + 1) % mod_count;
+            if (ok) mods_toggle(menu_sel);
+        }
+        return;
+    }
     if (menu_screen == MENU_BONUS) {                  /* the modes, and the Jukebox */
         if (up) menu_sel = (menu_sel + 2) % 3;
         if (down) menu_sel = (menu_sel + 1) % 3;
@@ -3464,6 +3585,7 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
             else if (menu_sel == L_CONTINUE) launcher_go = 2;
             else if (menu_sel == L_LOAD) load_enter();
             else if (menu_sel == L_ARENA) bonus_enter();
+            else if (menu_sel == L_MODS) mods_enter();
             else if (menu_sel == L_MODE) item_change(MODE_ITEM, 1);
             else if (menu_sel == L_SETTINGS) settings_enter();
             else quit(0);
@@ -3712,6 +3834,13 @@ static void menu_hint(char *out, size_t n) {
         else if (menu_sel < 0) snprintf(out, n, "Left / Right what plays the songs%sDown the songs%sEsc back", sep, sep);
         else snprintf(out, n, "Enter play / stop%sL launcher song%sUp / Down choose%sTab what plays it%sEsc back",
                       sep, sep, sep, sep);
+        return;
+    }
+    if (menu_screen == MENU_MODS) {
+        if (touch_visible()) snprintf(out, n, "Tap a mod to switch it%sTap outside to go back", sep);
+        else if (menu_last_pad && pad)
+            snprintf(out, n, "%s on / off%sUp / Down choose%s%s back", pad_button_name(pad_of[IN_C]), sep, sep, pad_button_name(pad_of[IN_B]));
+        else snprintf(out, n, "Enter on / off%sUp / Down choose%sEsc back", sep, sep);
         return;
     }
     if (menu_screen == MENU_BONUS) {
@@ -4844,6 +4973,7 @@ static void draw_launcher(float W, float H, const char *hint) {
     const char *about =
         menu_sel == L_CONTINUE ? going
         : menu_sel == L_LOAD ? "Choose which of your saves to play on."
+        : menu_sel == L_MODS ? "Sprites and more made by players: each mod is a folder you switch on or off. Enhanced only."
         : menu_sel == L_ARENA ? "The Boss Arena and Wave Mode: the game's bosses again, or five battles in a row against the clock. Your saves are never touched."
         : menu_sel == L_START ? (rom_ready ? "Your Phantasy Star IV (USA), checked and ready."
                                : rom_problem[0] ? "The ROM that's installed can't be used: Start game says why, then asks for another."
@@ -5191,6 +5321,52 @@ static void wave_hud(int ow, int oh, float card) {
 static uint64_t arena_anim_sig(void) {
     if (menu_screen != MENU_ARENA || menu_sel < 0 || menu_sel >= ARENA_MAX || arena_pic_state[menu_sel] <= 0) return 0;
     return (uint64_t)arenapic_frame_at(&arena_pics[menu_sel], arena_anim_t()) + 1;
+}
+
+/* Mods: each mod a card -- its name, who made it, what it holds and changes -- and whether it is on */
+static void draw_mods(float W, float H, const char *hint) {
+    const float pad = 10.0f;
+    char t[260];
+    int classic = classic_mode();
+    m_text(pad + 2.0f, 17.0f, 6.4f, "Mods", C_GOLD, 0);
+    draw_back_button(W, pad);
+    m_box(pad, 25.5f, W - pad, 26.0f, 0, C_RULE, C_RULE, 80);
+    if (!mod_count) {
+        char dir[1100];
+        path_in_home(dir, sizeof dir, "mods");
+        m_text(pad + 2.0f, 42.0f, 5.2f, "No mods yet", C_TEXT, 0);
+        m_wrap(pad + 2.0f, 53.0f, W - 2.0f * pad - 4.0f, 6.6f, 2, 3.8f,
+               "A mod is a folder you put in the mods folder, beside your saves. It shows up here to be switched on.",
+               C_VALUE, 0);
+        m_wrap(pad + 2.0f, 71.0f, W - 2.0f * pad - 4.0f, 6.2f, 3, 3.4f, dir, C_SOFT, 0);
+    }
+    const float y = 31.0f, h = 33.0f;
+    const int rows = 4;
+    int first = menu_sel >= rows ? menu_sel - rows + 1 : 0;
+    for (int k = first; k < mod_count && k < first + rows; k++) {
+        const ModInfo *m = &mod_list[k];
+        int sel = menu_sel == k, on = m->on && !classic;
+        float a = y + (h + 4.0f) * (float)(k - first), b = a + h;
+        if (sel) m_box(pad, a, W - pad, b, 8.0f, C_GOLD, C_GOLD_LOW, 255);
+        else m_box(pad, a, W - pad, b, 8.0f, 0x243470, 0x1A2658, 255);
+        m_text(pad + 10.0f, a + 12.5f, 6.0f, m->name, sel ? C_INK : classic ? C_DIM : C_GOLD, 0);
+        m_text(W - pad - 10.0f, a + 12.5f, 5.2f, on ? "On" : "Off", sel ? C_INK : on ? 0xA8F0B4 : C_DIM, 1);
+        int n = 0;
+        if (m->author[0]) n = snprintf(t, sizeof t, "by %s", m->author);
+        if (m->sprites)
+            snprintf(t + n, sizeof t - (size_t)n, "%s%d sprite file%s", n ? "   " : "", m->sprites, m->sprites == 1 ? "" : "s");
+        else if (!n) snprintf(t, sizeof t, "nothing in it this version can use");
+        m_text(pad + 10.0f, a + 20.0f, 3.6f, t, sel ? C_INK_SOFT : C_SOFT, 0);
+        if (m->about[0])
+            m_wrap(pad + 10.0f, a + 27.0f, W - 2.0f * pad - 20.0f, 5.6f, 1, 3.6f, m->about, sel ? C_INK_SOFT : C_VALUE, 0);
+        m_hit(pad, a, W - pad, b, HIT_ROW, k);
+    }
+    if (mod_count > rows) {
+        snprintf(t, sizeof t, "%d to %d of %d", first + 1, first + rows < mod_count ? first + rows : mod_count, mod_count);
+        m_text(W - pad - 2.0f, H - 6.5f, 3.4f, t, C_DIM, 1);
+    }
+    if (classic) m_text(pad + 2.0f, H - 15.0f, 3.6f, "Mods are off in Classic. Set Mode to Enhanced to use them.", C_SOFT, 0);
+    m_text(pad + 2.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
 }
 
 /* Bonus Modes: each mode a card -- what it is, and how far you've got */
@@ -5919,6 +6095,8 @@ static void menu_layout(float W, float H) {
         draw_arena_tpl(W, H, hint);
     } else if (menu_screen == MENU_ARENA) {
         draw_arena(W, H, hint);
+    } else if (menu_screen == MENU_MODS) {
+        draw_mods(W, H, hint);
     } else if (menu_screen == MENU_BONUS) {
         draw_bonus(W, H, hint);
     } else if (menu_screen == MENU_JUKEBOX) {
@@ -6017,7 +6195,7 @@ static void menu_draw(void) {
     } else {
         int settings = menu_screen == MENU_SETTINGS, load = menu_screen == MENU_LOAD || menu_screen == MENU_ARENA
                    || menu_screen == MENU_ARENA_PREP || menu_screen == MENU_ARENA_TPL || menu_screen == MENU_WAVE
-                   || menu_screen == MENU_WAVE_SETUP || menu_screen == MENU_WAVE_RESULT || menu_screen == MENU_BONUS
+                   || menu_screen == MENU_WAVE_SETUP || menu_screen == MENU_WAVE_RESULT || menu_screen == MENU_BONUS || menu_screen == MENU_MODS
                    || menu_screen == MENU_JUKEBOX;
         int big = settings || load || menu_screen == MENU_JOURNAL || menu_screen == MENU_REWIND;
         W = big ? 288.0f : menu_screen == MENU_QUIT ? 176.0f : 168.0f;
@@ -6150,6 +6328,9 @@ static void menu_tap(float rx, float ry) {
         } else if (menu_screen == MENU_WAVE || menu_screen == MENU_WAVE_SETUP || menu_screen == MENU_WAVE_RESULT
                    || (menu_screen == MENU_ARENA && h->kind == HIT_PAGE)) {
             wave_menu_tap(h->kind, h->index);
+        } else if (menu_screen == MENU_MODS) {      /* a mod: on or off */
+            menu_sel = h->index;
+            mods_toggle(menu_sel);
         } else if (menu_screen == MENU_BONUS) {     /* a mode: open it */
             menu_sel = h->index;
             bonus_open(menu_sel);

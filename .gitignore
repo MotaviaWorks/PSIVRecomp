@@ -52,3 +52,6 @@ music/
 
 # The translators' tool's workbook (it holds the game's script, never committed)
 psiv-dialogue*.csv
+
+# Your mods (a folder each, beside the saves; never committed)
+/mods/

@@ -897,6 +897,7 @@ Windows (`asl` on Linux) and fails unless the result is byte-identical.
 | `analysis/` | Generated analysis: `functions.json` (every function entry and why), `indirect_targets.{json,md}` (addresses and labels only) |
 | `docs/` | Plan, ideas, and the testers' README (`TESTERS.md`) |
 | `rom/`, `build/`, `dist/` | Your ROM, build output and packages (never committed) |
+| `mods/` | Your mods, a folder each, switched on and off on the launcher's Mods page (never committed). A first proof: a mod's sprite files stand in for the characters walking on the field, the game going on as it does (`runtime/spritemod.h`; `tools/spritemod_proof.py` writes placeholder ones). Enhanced only |
 | `vgm/`, `mp3/` | Your soundtrack references for the sound milestone (never committed) |
 
 The disassembly is for informational and educational use; commercial use is

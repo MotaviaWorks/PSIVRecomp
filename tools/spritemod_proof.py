@@ -2,19 +2,25 @@
 """A sprite file for the port's sprite-mod proof (runtime/spritemod.c): a placeholder figure of our own,
 drawn by this script, walking in the four directions with as many in-between pictures as asked for.
 
-  python tools/spritemod_proof.py OUT.spr [--size 16x32] [--frames 2] [--mult 4] [--sheet OUT.png]
+  python tools/spritemod_proof.py OUT.spr --target KEY [--size 16x32] [--frames 4] [--mult 4]
+                                  [--colours BODY,SHADE,LEG,SKIN] [--sheet OUT.png]
 
-FRAMES is the game's own count for the walk (two); MULT how many pictures stand for each of them (1, 2 or
-4). The file: "PSIVSPR1\\n" "W H FRAMES MULT\\n", then for each facing (down, up, right, left), each frame
-and each of its pictures, W x H bytes: 0 nothing, 1-15 a colour of the sprite's palette line.
+KEY is whose sprite the file stands for, as the port lists them for whoever is on screen
+(PSIV_SPRITEMOD_LOG=1): R290900 for one of the party, A1B2C3D4 for a kind of townsperson. FRAMES is the game's
+own count for the walk (four holds to a cycle); MULT how many pictures stand for each of them (1, 2 or 4).
+COLOURS picks the figure's colours in the sprite's palette line, to tell several figures apart.
+
+The file: a line "PSIVSPR2", a line "W H FRAMES MULT KEY", then for each facing (down, up, right,
+left), each frame and each of its pictures, W x H bytes: 0 nothing, 1-15 a colour of the palette line.
 """
 import argparse, math
 
-OUTLINE, SKIN, BODY, SHADE, LEG, EYE = 1, 14, 6, 4, 9, 1      # colours of the palette line, picked by eye
+OUTLINE, EYE = 1, 1                                    # colours of the palette line, picked by eye
 
 
-def figure(w, h, facing, phase):
+def figure(w, h, facing, phase, colours):
     """one picture: `phase` 0..1 through the walk's cycle"""
+    body, shade, leg, skin = colours
     px = [[0] * w for _ in range(h)]
 
     def dot(x, y, c):
@@ -52,55 +58,61 @@ def figure(w, h, facing, phase):
             t = i / steps
             x = (cx + (0 if side else sign * 1.6)) * (1 - t) + fx * t
             y = hip * (1 - t) + (foot - lift) * t
-            rect(x - 0.6, y, x + 0.6, y, LEG)
+            rect(x - 0.6, y, x + 0.6, y, leg)
         rect(fx - 1.2, foot - lift, fx + 1.2, foot - lift + 1, OUTLINE)
     # body
     top = h * 0.36 + bob
     rect(cx - 3.4, top, cx + 3.4, hip, OUTLINE)
-    rect(cx - 2.6, top + 1, cx + 2.6, hip - 1, BODY)
-    rect(cx - 2.6, hip - 3, cx + 2.6, hip - 1, SHADE)
+    rect(cx - 2.6, top + 1, cx + 2.6, hip - 1, body)
+    rect(cx - 2.6, hip - 3, cx + 2.6, hip - 1, shade)
     # arms, against the legs
     for sign in (-1, 1):
         if side:
             ax = cx - sign * swing * 2.6
-            rect(ax - 0.6, top + 2, ax + 0.6, top + 7, SKIN if sign > 0 else SHADE)
+            rect(ax - 0.6, top + 2, ax + 0.6, top + 7, skin if sign > 0 else shade)
         else:
             ay = top + 2 + max(0.0, -sign * swing) * 1.5
-            rect(cx + sign * 4 - 0.6, ay, cx + sign * 4 + 0.6, ay + 5, SKIN)
+            rect(cx + sign * 4 - 0.6, ay, cx + sign * 4 + 0.6, ay + 5, skin)
     # head
     hy = h * 0.2 + bob
     disc(cx, hy, 4.4, OUTLINE)
-    disc(cx, hy, 3.5, SKIN)
+    disc(cx, hy, 3.5, skin)
     if facing == 0:
-        dot(cx - 1.5, hy, EYE); dot(cx + 1.5, hy, EYE)
+        dot(cx - 1.5, hy, EYE)
+        dot(cx + 1.5, hy, EYE)
     elif facing == 2:
         dot(cx + 2, hy, EYE)
     elif facing == 3:
         dot(cx - 2, hy, EYE)
     else:                                                 # the back of the head
-        rect(cx - 2.5, hy - 3, cx + 2.5, hy - 1, SHADE)
+        rect(cx - 2.5, hy - 3, cx + 2.5, hy - 1, shade)
     return px
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('out')
+    p.add_argument('--target', required=True, help="the character's key, as the port's log lists it (R... or A...)")
     p.add_argument('--size', default='16x32')
-    p.add_argument('--frames', type=int, default=2)
+    p.add_argument('--frames', type=int, default=4)
     p.add_argument('--mult', type=int, default=4)
+    p.add_argument('--colours', default='6,4,9,14', help='body, shade, leg, skin: colours 1-15 of the palette line')
     p.add_argument('--sheet', help='also a picture of every frame (needs Pillow)')
     a = p.parse_args()
     w, h = (int(v) for v in a.size.lower().split('x'))
+    colours = tuple(int(v) for v in a.colours.split(','))
     pics = []
     with open(a.out, 'wb') as f:
-        f.write(b'PSIVSPR1\n%d %d %d %d\n' % (w, h, a.frames, a.mult))
+        if a.target[:1] not in ('R', 'A'):
+            raise SystemExit('--target is a key as the log lists it: R... or A...')
+        f.write(('PSIVSPR2\n%d %d %d %d %s\n' % (w, h, a.frames, a.mult, a.target)).encode('ascii'))
         for facing in range(4):
             for g in range(a.frames):
                 for k in range(a.mult):
-                    pic = figure(w, h, facing, (g + k / a.mult) / a.frames)
+                    pic = figure(w, h, facing, (g + k / a.mult) / a.frames, colours)
                     pics.append(pic)
                     f.write(bytes(v for row in pic for v in row))
-    print('%s: %d x %d, %d frames x %d pictures a facing' % (a.out, w, h, a.frames, a.mult))
+    print('%s: for %s, %d x %d, %d frames x %d pictures a facing' % (a.out, a.target, w, h, a.frames, a.mult))
     if a.sheet:
         from PIL import Image
         grey = [(0, 0, 0, 0)] + [(40 + i * 14, 40 + i * 14, 60 + i * 12, 255) for i in range(1, 16)]
