@@ -3,15 +3,17 @@
 A page you open in your browser to redraw sprites for PSIV Recomp and share them as a mod. Nothing to
 install, and it needs no internet.
 
-**Where this stands:** a first version. It covers the eleven of the party walking on the field. The
-townspeople, battle sprites and anything larger than the game's own sprites are not in it yet.
+**Where this stands:** it covers everyone who walks on the field: the eleven of the party, and the fifty
+kinds of townspeople. Battle sprites are not in it yet: the port does not replace those so far.
 
 ## How to use it
 
 1. Download `index.html` (or the whole repository) and open it in a browser.
 2. Press **Open my ROM** and pick your own Phantasy Star IV (USA) ROM: the same file PSIV Recomp plays
    (`.bin`, `.md`, `.gen` or `.smd`). It is read in your browser and goes nowhere.
-3. Pick a character at the left. Their frame is in the middle to draw on; at the right the game's walk and
+3. Pick a character at the left: the party first, the townspeople under them (they have no names in the
+   game, so they are numbered; the picture tells you who is who). A townsperson you redraw changes
+   everywhere that kind of person appears. Their frame is in the middle to draw on; at the right the game's walk and
    yours play side by side, at the game's pace.
 4. Write your mod's name, your name and a line about it, and press **Export mod**. Unzip the file into
    the `mods` folder beside your saves, and switch the mod on from the launcher's **Mods** page. Mods work
@@ -20,7 +22,7 @@ townspeople, battle sprites and anything larger than the game's own sprites are 
 ## Frames
 
 The game's walk is a cycle of four frames a facing (standing, a step, standing, the other step), each held
-for nine ticks. **Pictures for each of the game's frames** lets you keep that, or draw two or four pictures
+for nine ticks (eight for the townspeople). **Pictures for each of the game's frames** lets you keep that, or draw two or four pictures
 for each frame: the port shows them one after another inside the time the game holds its own, so the walk
 takes exactly as long as before and only looks smoother. In the row of frames, a mark under a picture
 shows where each of the game's frames begins.
@@ -52,8 +54,9 @@ takes a colour from the picture. Loading a sheet matches its colours to whicheve
 
 ## What the game sets
 
-- A sprite stands in the game's 16 x 32 pixels, in fifteen colours and see-through: the party's own
-  palette on the field. All the party share it, so a colour means the same for every character.
+- A sprite stands in the game's 16 x 32 pixels, in fifteen colours and see-through. The party share one
+  palette and the townspeople another, the same in every town, so a colour means the same for everyone
+  in a group.
 - The picture shows where the game's own sprite would be.
 
 ## What a mod holds

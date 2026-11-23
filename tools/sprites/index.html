@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PSIV Recomp sprite editor</title>
 <!--
-  PSIV Recomp: the sprite editor (a first version: the party walking on the field). One file, no network.
-  It reads each character's walking drawings out of the player's own Phantasy Star IV (USA) ROM (in the
+  PSIV Recomp: the sprite editor (the party and the townspeople, walking on the field). One file, no network.
+  It reads the walking drawings of the party and of the townspeople out of the player's own Phantasy Star IV (USA) ROM (in the
   browser; the ROM goes nowhere), lets them redraw the frames -- the game's own count, or two or four
   pictures to each of the game's frames -- plays the game's and theirs side by side at the game's pace,
   and exports a mod: a folder for the port's mods folder, zipped. A sprite file holds only what was
@@ -54,7 +54,7 @@ header input[type=text] { border: 1px solid var(--rule); background: var(--paper
 #drop.over { border-color: var(--navy); background: var(--pick); }
 #romerror { color: var(--bad); font-weight: 600; }
 
-#work { display: grid; grid-template-columns: 13em minmax(300px, auto) 1fr; min-height: 0; }
+#work { display: grid; grid-template-columns: 14.5em minmax(300px, auto) 1fr; min-height: 0; }
 #who, #draw, #side { overflow: auto; min-height: 0; }
 #who { border-right: 1px solid var(--rule); padding: 8px; }
 #who button { display: grid; grid-template-columns: auto 1fr auto; gap: 0 10px; align-items: center; width: 100%; text-align: left;
@@ -62,6 +62,8 @@ header input[type=text] { border: 1px solid var(--rule); background: var(--paper
 #who button[aria-current=true] { background: var(--pick); }
 #who canvas { width: 32px; height: 64px; background: var(--stage); border-radius: 3px; }
 #who .mark { color: var(--good); font-size: 13px; }
+#who h2 { font-size: 13px; font-weight: 650; color: var(--soft); margin: 12px 8px 4px; }
+#who h2:first-child { margin-top: 2px; }
 #draw { padding: 14px 16px; border-right: 1px solid var(--rule); }
 #draw h2, #side h2 { font-size: 15px; margin: 0 0 2px; font-weight: 650; }
 .meta { color: var(--soft); margin: 0 0 10px; }
@@ -121,7 +123,7 @@ header input[type=text] { border: 1px solid var(--rule); background: var(--paper
 
   <main id="start">
     <div class="card">
-      <h2>Redraw the party's walk, frame by frame</h2>
+      <h2>Redraw the party and the townspeople, frame by frame</h2>
       <p>Pick a character, change their walking frames, and watch yours beside the game's at the game's own
          pace. Keep the game's four steps, or draw two or four pictures for each of them for a smoother walk.</p>
       <p>Open your own Phantasy Star IV (USA) ROM to begin: the same file PSIV Recomp plays. It is read here, in
@@ -131,7 +133,7 @@ header input[type=text] { border: 1px solid var(--rule); background: var(--paper
         <span> or drop the file here (.bin, .md, .gen or .smd; unzip a .zip first)</span>
         <p id="romerror" role="alert"></p>
       </div>
-      <p style="margin-top:14px;color:var(--soft)">A first version: the eleven of the party, walking on the field.
+      <p style="margin-top:14px;color:var(--soft)">The eleven of the party and the townspeople, walking on the field.
          Your work is kept in this browser as you draw. The mod you export holds only the pixels you changed.</p>
     </div>
   </main>
@@ -169,7 +171,7 @@ header input[type=text] { border: 1px solid var(--rule); background: var(--paper
     </section>
     <section id="side">
       <h2>Side by side</h2>
-      <p class="meta">Both walk at the game's pace: each of its four steps is held for nine ticks.</p>
+      <p class="meta" id="pace">Both walk at the game's pace.</p>
       <div id="stages">
         <div class="stage"><canvas id="stageGame" width="320" height="128"></canvas><div>The game's</div></div>
         <div class="stage"><canvas id="stageMine" width="320" height="128"></canvas><div>Yours</div></div>
@@ -286,6 +288,105 @@ function gamePalette(rom) {                 /* 16 colours as [r, g, b]; the Mega
   }
   return out;
 }
+/* ---- the townspeople. Their art is Nemesis-packed, 72 tiles laid out as the party's is (nine drawings), and
+ * the same four-step walk, a step held eight ticks. All of them use one palette line, the same in every place.
+ * In the game they are told apart by their art (runtime/spritemod.c): a hash of its first sixteen tiles. */
+const PEOPLE_PALETTE = 0x730FC, PEOPLE_TICKS = 8, PEOPLE_TILES = 72;
+
+/* a Nemesis stream unpacked: its tiles' bytes (32 a tile), or null if it is not one */
+function nemesis(rom, at, maxTiles = 512) {
+  const head = rom[at] << 8 | rom[at + 1], tiles = head & 0x7FFF, xor = head >> 15;
+  if (!tiles || tiles > maxTiles) return null;
+  let p = at + 2, colour = 0;
+  const table = new Map();                   /* (length << 8 | code) -> (count << 4 | colour) */
+  for (let b = rom[p++]; b !== 0xFF; b = rom[p++]) {
+    if (p > rom.length - 4) return null;
+    if (b & 0x80) { colour = b & 15; b = rom[p++]; }
+    const len = b & 15, count = (b >> 4 & 7) + 1, code = rom[p++];
+    if (!len || len > 8) return null;
+    table.set(len << 8 | code, count << 4 | colour);
+  }
+  const out = new Uint8Array(tiles * 32), total = tiles * 64;
+  let n = 0, bit = 0, code = 0, len = 0;
+  const next = () => { const v = rom[p] >> (7 - bit) & 1; if (++bit === 8) { bit = 0; p++; } return v; };
+  const put = (c, k) => { for (; k > 0 && n < total; k--, n++) out[n >> 1] |= n & 1 ? c : c << 4; };
+  while (n < total) {
+    if (p >= rom.length) return null;
+    code = code << 1 | next(); len++;
+    if (len === 6 && code === 0x3F) {        /* written out: a count of three bits, a colour of four */
+      let v = 0;
+      for (let i = 0; i < 7; i++) v = v << 1 | next();
+      put(v & 15, (v >> 4) + 1);
+      code = len = 0;
+      continue;
+    }
+    const e = table.get(len << 8 | code);
+    if (e !== undefined) { put(e & 15, e >> 4); code = len = 0; }
+    else if (len > 8) return null;
+  }
+  if (xor) for (let i = 4; i < out.length; i++) out[i] ^= out[i - 4];
+  return out;
+}
+function fnv(bytes, n) {
+  let h = 2166136261;
+  for (let i = 0; i < n; i++) h = Math.imul(h ^ bytes[i], 16777619) >>> 0;
+  return h >>> 0;
+}
+function paletteAt(rom, at) {               /* 16 colours as [r, g, b]; the Mega Drive's: 3 bits each, 0000BBB0GGG0RRR0 */
+  const out = [];
+  for (let i = 0; i < 16; i++) {
+    const v = rom[at + i * 2] << 8 | rom[at + i * 2 + 1];
+    out.push([(v >> 1 & 7) * 36, (v >> 5 & 7) * 36, (v >> 9 & 7) * 36]);
+  }
+  return out;
+}
+/* Everyone the editor can redraw: {key, name, group, art (the tiles of the nine drawings), pal, ticks}. The
+ * party's art is plain in the ROM. The townspeople's is found by what points at it: any address in the game's
+ * data that leads to a Nemesis stream of exactly 72 tiles (the game names its people's art per map). */
+function allSprites(rom) {
+  const out = [], party = paletteAt(rom, PALETTE), people = paletteAt(rom, PEOPLE_PALETTE);
+  NAMES.forEach((name, n) => out.push({key: keyOf(n), name, group: 'The party', ticks: HOLD_TICKS, pal: party,
+                                       art: rom.subarray(ART + n * ART_STEP, ART + (n + 1) * ART_STEP)}));
+  const seen = new Set(), found = [];
+  for (let p = 0x40000; p < 0x2A0000; p += 2) {
+    if (rom[p] !== 0) continue;
+    const a = rom[p + 1] << 16 | rom[p + 2] << 8 | rom[p + 3];
+    if (a < 0x100000 || a >= 0x2A0000 || (a & 1) || seen.has(a)) continue;
+    const h = rom[a] << 8 | rom[a + 1];
+    if ((h & 0x7FFF) !== PEOPLE_TILES) continue;
+    seen.add(a);
+    const art = nemesis(rom, a);
+    if (art) found.push({at: a, art});
+  }
+  found.sort((x, y) => x.at - y.at);
+  found.forEach((f, i) => out.push({key: 'A' + fnv(f.art, 512).toString(16).toUpperCase(), name: 'Townsperson ' + (i + 1), group: 'Townspeople',
+                                    ticks: PEOPLE_TICKS, pal: people, art: f.art}));
+  return out;
+}
+/* one of an entry's nine drawings, the picture for a facing and a hold, and the colours its drawings use */
+function drawingOf(art, n) {
+  const out = new Uint8Array(W * H), base = n * 8 * 32;
+  for (let t = 0; t < 8; t++) {
+    const cx = (t >> 2) * 8, cy = (t & 3) * 8, at = base + t * 32;
+    for (let y = 0; y < 8; y++)
+      for (let x = 0; x < 8; x++) {
+        const b = art[at + y * 4 + (x >> 1)];
+        out[(cy + y) * W + cx + x] = x & 1 ? b & 15 : b >> 4;
+      }
+  }
+  return out;
+}
+function frameOf(e, face, hold) {
+  const d = drawingOf(e.art, CYCLE[face][hold]);
+  return face === 2 ? mirrored(d) : d;
+}
+function usedOf(e) {
+  const seen = new Uint8Array(16), out = [];
+  for (let n = 0; n < 9; n++) for (const v of drawingOf(e.art, n)) seen[v] = 1;
+  for (let i = 1; i < 16; i++) if (seen[i]) out.push(i);
+  return out;
+}
+
 /* a picture with `k` pixels to each of its own, along a side (the game's pixels as blocks); and back, a block
  * becoming the value most of it has */
 function enlarged(px, k, w = W, h = H) {
@@ -326,8 +427,9 @@ function frameAt(mult, face, hold, sub) { return ((face * HOLDS + hold) * mult +
 /* a sprite file as the port reads it: "PSIVSPR3", "W H FRAMES MULT RES KEY", then the pictures, each
  * (W RES) x (H RES): RES pixels to each of the game's, along a side. A pixel is 0 nothing, 1-15 a colour, or
  * 255: the game's own pixel there. ("PSIVSPR2" is the same with no RES: one.) */
-function sprFile(who, mult, data, res = 1) {
-  const head = new TextEncoder().encode('PSIVSPR3\n' + W + ' ' + H + ' ' + HOLDS + ' ' + mult + ' ' + res + ' ' + keyOf(who) + '\n');
+function sprFile(key, mult, data, res = 1) {
+  if (typeof key === 'number') key = keyOf(key);
+  const head = new TextEncoder().encode('PSIVSPR3\n' + W + ' ' + H + ' ' + HOLDS + ' ' + mult + ' ' + res + ' ' + key + '\n');
   const out = new Uint8Array(head.length + data.length);
   out.set(head); out.set(data, head.length);
   return out;
@@ -338,10 +440,10 @@ function readSpr(bytes) {
   const dec = new TextDecoder(), magic = dec.decode(bytes.subarray(0, nl1)), f = dec.decode(bytes.subarray(nl1 + 1, nl2)).trim().split(/\s+/);
   const v3 = magic === 'PSIVSPR3';
   if ((!v3 && magic !== 'PSIVSPR2') || f.length !== (v3 ? 6 : 5)) return null;
-  const mult = +f[3], res = v3 ? +f[4] : 1, who = whoOf(f[v3 ? 5 : 4]), data = bytes.subarray(nl2 + 1);
-  if (+f[0] !== W || +f[1] !== H || +f[2] !== HOLDS || ![1, 2, 4].includes(mult) || ![1, 2, 4].includes(res) || who < 0 ||
+  const mult = +f[3], res = v3 ? +f[4] : 1, key = f[v3 ? 5 : 4], data = bytes.subarray(nl2 + 1);
+  if (+f[0] !== W || +f[1] !== H || +f[2] !== HOLDS || ![1, 2, 4].includes(mult) || ![1, 2, 4].includes(res) || !/^[RA][0-9A-F]+$/.test(key) ||
       data.length !== frameCount(mult) * W * res * H * res) return null;
-  return {who, mult, res, data: new Uint8Array(data)};
+  return {key, who: whoOf(key), mult, res, data: new Uint8Array(data)};
 }
 
 /* a .zip with its files stored as they are (no compression): [{name, bytes}] */
@@ -374,14 +476,14 @@ function zipStore(files) {
   return out;
 }
 
-if (typeof module !== 'undefined') module.exports = {plainRom, drawing, gameFrame, gamePalette, keyOf, whoOf, sprFile, readSpr, zipStore, crc32, frameAt, frameCount, enlarged, reduced, usedColours};
+if (typeof module !== 'undefined') module.exports = {plainRom, drawing, gameFrame, gamePalette, keyOf, whoOf, sprFile, readSpr, zipStore, crc32, frameAt, frameCount, enlarged, reduced, usedColours, nemesis, fnv, allSprites, frameOf, usedOf, drawingOf, paletteAt};
 </script>
 
 <script>
 /* ---------------------------------------------------------------- the page */
 const $ = id => document.getElementById(id);
 const STORE = 'psiv-sprites-1';
-let rom = null, pal = [], who = 0, face = 0, hold = 0, sub = 0, tool = 'pen', colour = 1, playing = true, speed = 1;
+let rom = null, entries = [], who = 0, face = 0, hold = 0, sub = 0, tool = 'pen', colour = 1, playing = true, speed = 1;
 let allColours = false;                              /* the palette shows the character's own colours, or all fifteen */
 /* a character's work: {mult, res, data}. mult: pictures to each of the game's frames; res: pixels to each of the
  * game's, along a side (1, 2 or 4). data: for each facing, hold and picture, (16 res) x (32 res) pixels: 0 nothing,
@@ -391,8 +493,10 @@ const undo = [];
 const pw = m => W * m.res, ph = m => H * m.res, fs = m => pw(m) * ph(m);
 const at = (m, f, h, s) => ((f * HOLDS + h) * m.mult + s) * fs(m);
 function blank(mult, res) { return new Uint8Array(frameCount(mult) * W * res * H * res).fill(OWN); }
-function mine(n) { return work[n] || (work[n] = {mult: 1, res: 1, data: blank(1, 1)}); }
-function changed(n) { return !!work[n] && work[n].data.some(v => v !== OWN); }
+const K = n => entries[n].key;                       /* work is kept by key: R... one of the party, A... a townsperson */
+function mine(n) { return work[K(n)] || (work[K(n)] = {mult: 1, res: 1, data: blank(1, 1)}); }
+function changedKey(k) { return !!work[k] && work[k].data.some(v => v !== OWN); }
+function changed(n) { return changedKey(K(n)); }
 function toast(words) { $('toast').textContent = words; $('toast').classList.add('on'); setTimeout(() => $('toast').classList.remove('on'), 2600); }
 
 function load() {
@@ -402,7 +506,7 @@ function load() {
     for (const k in s.work || {}) {
       const w = s.work[k], res = w.res || 1, bin = atob(w.data), d = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) d[i] = bin.charCodeAt(i);
-      if (d.length === frameCount(w.mult) * W * res * H * res) work[k] = {mult: w.mult, res, data: d};
+      if (d.length === frameCount(w.mult) * W * res * H * res) work[/^\d+$/.test(k) ? keyOf(+k) : k] = {mult: w.mult, res, data: d};
     }
     $('modname').value = s.name || ''; $('modauthor').value = s.author || ''; $('modabout').value = s.about || '';
     allColours = !!s.allColours;
@@ -414,7 +518,7 @@ function save() {
   saveTimer = setTimeout(() => {
     try {
       const out = {};
-      for (const k in work) if (changed(k)) {
+      for (const k in work) if (changedKey(k)) {
         let bin = '';
         const d = work[k].data;
         for (let i = 0; i < d.length; i += 8192) bin += String.fromCharCode.apply(null, d.subarray(i, i + 8192));
@@ -429,13 +533,13 @@ function save() {
 
 /* the game's own picture at a character's detail, and the picture that shows: theirs where they drew, the
  * game's own elsewhere */
-function baseAt(n, f, h, res) { return enlarged(gameFrame(rom, n, f, h), res); }
+function baseAt(n, f, h, res) { return enlarged(frameOf(entries[n], f, h), res); }
 function shown(n, f, h, s) {
-  const m = work[n];
-  if (!m) return {px: gameFrame(rom, n, f, h), res: 1};
+  const m = work[K(n)], pal = entries[n].pal;
+  if (!m) return {px: frameOf(entries[n], f, h), res: 1, pal};
   const base = baseAt(n, f, h, m.res), k = Math.min(s, m.mult - 1), a = at(m, f, h, k), out = new Uint8Array(fs(m));
   for (let i = 0; i < out.length; i++) { const v = m.data[a + i]; out[i] = v === OWN ? base[i] : v; }
-  return {px: out, res: m.res};
+  return {px: out, res: m.res, pal};
 }
 const scratch = document.createElement('canvas');
 function blit(ctx, pic, dx, dy, dw, dh) {            /* a picture into a box of the canvas, its pixels kept square-edged */
@@ -443,7 +547,7 @@ function blit(ctx, pic, dx, dy, dw, dh) {            /* a picture into a box of 
   scratch.width = w; scratch.height = h;
   const sc = scratch.getContext('2d'), img = sc.createImageData(w, h);
   for (let i = 0; i < w * h; i++)
-    if (pic.px[i]) { const c = pal[pic.px[i]]; img.data[i * 4] = c[0]; img.data[i * 4 + 1] = c[1]; img.data[i * 4 + 2] = c[2]; img.data[i * 4 + 3] = 255; }
+    if (pic.px[i]) { const c = pic.pal[pic.px[i]]; img.data[i * 4] = c[0]; img.data[i * 4 + 1] = c[1]; img.data[i * 4 + 2] = c[2]; img.data[i * 4 + 3] = 255; }
   sc.putImageData(img, 0, 0);
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(scratch, 0, 0, w, h, dx, dy, dw, dh);
@@ -454,7 +558,7 @@ async function openRom(file) {
   const r = plainRom(new Uint8Array(await file.arrayBuffer()));
   if (!r) { $('romerror').textContent = file.name + ' is not the Phantasy Star IV (USA) ROM that PSIV Recomp plays. A .zip has to be unzipped first.'; return; }
   rom = r;
-  pal = gamePalette(rom);
+  entries = allSprites(rom);
   $('start').classList.add('hidden');
   $('work').classList.remove('hidden');
   $('export').disabled = false;
@@ -467,12 +571,15 @@ async function openRom(file) {
 function drawWho() {
   const nav = $('who');
   nav.textContent = '';
-  NAMES.forEach((name, n) => {
+  let group = '';
+  entries.forEach((en, n) => {
+    const name = en.name;
+    if (en.group !== group) { group = en.group; const h = document.createElement('h2'); h.textContent = group; nav.append(h); }
     const b = document.createElement('button'), c = document.createElement('canvas');
     c.width = W * 4; c.height = H * 4;
     blit(c.getContext('2d'), shown(n, 0, 0, 0), 0, 0, c.width, c.height);
     const t = document.createElement('span'); t.textContent = name;
-    const m = document.createElement('span'); m.className = 'mark'; m.textContent = changed(n) ? 'changed' : '';
+    const m = document.createElement('span'); m.className = 'mark'; m.textContent = changed(n) ? '\u25CF' : ''; m.title = changed(n) ? 'You have changed this one' : '';
     b.setAttribute('aria-current', n === who);
     b.append(c, t, m);
     b.onclick = () => pickWho(n);
@@ -482,7 +589,7 @@ function drawWho() {
 function pickWho(n) { who = n; hold = sub = 0; undo.length = 0; drawWho(); drawPalette(); drawAll(); }
 
 function drawPalette() {
-  const box = $('palette'), own = usedColours(rom, who);
+  const box = $('palette'), own = usedOf(entries[who]), pal = entries[who].pal;
   box.textContent = '';
   if (!allColours && colour && !own.includes(colour)) colour = own[0] || 1;
   for (let i = 0; i < 16; i++) {
@@ -490,21 +597,22 @@ function drawPalette() {
     const b = document.createElement('button');
     b.setAttribute('aria-pressed', i === colour);
     if (i) b.style.background = 'rgb(' + pal[i].join(',') + ')'; else b.className = 'none';
-    b.title = i ? 'Colour ' + i + (own.includes(i) ? '' : ' (not one of ' + NAMES[who] + '\'s own)') : 'Nothing (see-through)';
+    b.title = i ? 'Colour ' + i + (own.includes(i) ? '' : ' (not one of ' + entries[who].name + '\'s own)') : 'Nothing (see-through)';
     b.setAttribute('aria-label', b.title);
     b.onclick = () => { colour = i; if (tool === 'back' || tool === 'pick') setTool('pen'); drawPalette(); };
     box.append(b);
   }
   $('palown').setAttribute('aria-pressed', !allColours);
   $('palall').setAttribute('aria-pressed', allColours);
-  $('palown').textContent = NAMES[who] + '\'s own colours (' + own.length + ')';
+  $('palown').textContent = entries[who].name + '\'s own colours (' + own.length + ')';
 }
 function setTool(t) { tool = t; for (const b of $('tools').querySelectorAll('[data-tool]')) b.setAttribute('aria-pressed', b.dataset.tool === t); }
 
 function drawAll() {
   const m = mine(who);
   if (sub >= m.mult) sub = m.mult - 1;
-  $('title').textContent = NAMES[who] + ', facing ' + FACE_NAMES[face].toLowerCase();
+  $('pace').textContent = 'Both walk at the game\'s pace: each of its four steps is held for ' + entries[who].ticks + ' ticks.';
+  $('title').textContent = entries[who].name + ', facing ' + FACE_NAMES[face].toLowerCase();
   const step = ['standing', 'a step', 'standing again', 'the other step'][hold];
   $('frameinfo').textContent = 'The game\'s frame ' + (hold + 1) + ' of 4 (' + step + ')' + (m.mult > 1 ? ', picture ' + (sub + 1) + ' of ' + m.mult : '') +
     '. ' + pw(m) + ' x ' + ph(m) + ' pixels.';
@@ -556,7 +664,7 @@ function afterEdit() { save(); drawAll(); drawWho(); }
 function apply(x, y, first) {
   const m = mine(who), w = pw(m), h = ph(m), now = shown(who, face, hold, sub).px;
   if (x < 0 || y < 0 || x >= w || y >= h) return;
-  if (tool === 'pick') { colour = now[y * w + x]; setTool('pen'); if (colour && !usedColours(rom, who).includes(colour)) allColours = true; drawPalette(); return; }
+  if (tool === 'pick') { colour = now[y * w + x]; setTool('pen'); if (colour && !usedOf(entries[who]).includes(colour)) allColours = true; drawPalette(); return; }
   if (tool === 'fill') {
     if (!first) return;
     const from = now[y * w + x];
@@ -603,7 +711,7 @@ function setMult(mult) {
         const from = at(m, f, h, Math.floor(s * m.mult / mult));
         out.set(m.data.subarray(from, from + fs(m)), at(to, f, h, s));
       }
-  work[who] = {mult, res: m.res, data: out};
+  work[K(who)] = {mult, res: m.res, data: out};
   sub = 0; undo.length = 0;
   afterEdit();
 }
@@ -618,7 +726,7 @@ function setRes(res) {
     const src = m.data.subarray(k * fs(m), (k + 1) * fs(m));
     out.set(res > m.res ? enlarged(src, res / m.res, pw(m), ph(m)) : reduced(src, m.res / res, pw(m), ph(m)), k * fs(to));
   }
-  work[who] = {mult: m.mult, res, data: out};
+  work[K(who)] = {mult: m.mult, res, data: out};
   undo.length = 0;
   afterEdit();
 }
@@ -630,12 +738,12 @@ function tickLoop(t) {
     if (!last) last = t;
     ticks += (t - last) * 0.06 * speed;                 /* 60 ticks a second */
     last = t;
-    const m = mine(who), cycle = Math.floor(ticks) % (HOLDS * HOLD_TICKS), h = Math.floor(cycle / HOLD_TICKS), gone = cycle % HOLD_TICKS;
-    const s = Math.floor(gone * m.mult / HOLD_TICKS);    /* as the port picks the picture inside a hold */
+    const m = mine(who), T = entries[who].ticks, cycle = Math.floor(ticks) % (HOLDS * T), h = Math.floor(cycle / T), gone = cycle % T;
+    const s = Math.floor(gone * m.mult / T);             /* as the port picks the picture inside a hold */
     const g = $('stageGame').getContext('2d'), y = $('stageMine').getContext('2d');
     g.clearRect(0, 0, 320, 128); y.clearRect(0, 0, 320, 128);
     for (let f = 0; f < FACES; f++) {
-      blit(g, {px: gameFrame(rom, who, f, h), res: 1}, 8 + f * 80, 0, 64, 128);
+      blit(g, {px: frameOf(entries[who], f, h), res: 1, pal: entries[who].pal}, 8 + f * 80, 0, 64, 128);
       blit(y, shown(who, f, h, s), 8 + f * 80, 0, 64, 128);
     }
   } else last = 0;
@@ -666,7 +774,7 @@ async function loadSheet(file) {
   }
   const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
   const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
-  const d = ctx.getImageData(0, 0, c.width, c.height).data, own = usedColours(rom, who);
+  const d = ctx.getImageData(0, 0, c.width, c.height).data, own = usedOf(entries[who]), pal = entries[who].pal;
   const from = allColours || !own.length ? [...Array(15)].map((_, i) => i + 1) : own;
   for (let f = 0; f < FACES; f++) for (let hd = 0; hd < HOLDS; hd++) for (let s = 0; s < m.mult; s++) {
     const base = baseAt(who, f, hd, m.res), a = at(m, f, hd, s), x0 = (hd * m.mult + s) * w, y0 = f * h;
@@ -682,19 +790,20 @@ async function loadSheet(file) {
   }
   undo.length = 0;
   afterEdit();
-  toast('Loaded the sheet for ' + NAMES[who]);
+  toast('Loaded the sheet for ' + entries[who].name);
 }
 
 /* the mod: mod.txt and a sprite file for each character changed, in a folder, zipped */
 function exportMod() {
-  const name = $('modname').value.trim(), ids = Object.keys(work).filter(changed);
+  const name = $('modname').value.trim(), ids = Object.keys(work).filter(changedKey);
   if (!name) { toast('Give the mod a name first: the launcher lists it by that.'); $('modname').focus(); return; }
   if (!ids.length) { toast('Nothing changed yet: draw on a frame first.'); return; }
   const folder = name.normalize('NFKD').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'my-mod';
   const enc = new TextEncoder(), files = [];
   const clean = s => s.replace(/[\r\n]+/g, ' ').trim();
   files.push({name: folder + '/mod.txt', bytes: enc.encode('name = ' + clean(name) + '\nauthor = ' + clean($('modauthor').value) + '\nabout = ' + clean($('modabout').value) + '\n')});
-  for (const k of ids) files.push({name: folder + '/' + NAMES[k].toLowerCase() + '.spr', bytes: sprFile(+k, work[k].mult, work[k].data, work[k].res)});
+  const fileOf = k => { const e = entries.find(x => x.key === k); return (e ? e.name : k).toLowerCase().replace(/[^a-z0-9]+/g, '-'); };
+  for (const k of ids) files.push({name: folder + '/' + fileOf(k) + '.spr', bytes: sprFile(k, work[k].mult, work[k].data, work[k].res)});
   download(folder + '.zip', new Blob([zipStore(files)], {type: 'application/zip'}));
   toast('Exported ' + folder + '.zip: ' + ids.length + (ids.length === 1 ? ' character' : ' characters'));
 }
@@ -702,12 +811,12 @@ async function openSprs(list) {
   let n = 0;
   for (const f of list) {
     const s = readSpr(new Uint8Array(await f.arrayBuffer()));
-    if (s) { work[s.who] = {mult: s.mult, res: s.res, data: s.data}; n++; }
+    if (s) { work[s.key] = {mult: s.mult, res: s.res, data: s.data}; n++; }
   }
   if (!n) { toast('No sprite file of this editor among those: it reads the .spr files of a mod made here.'); return; }
   undo.length = 0;
   save();
-  if (rom) { drawWho(); drawAll(); }
+  if (rom) { drawWho(); drawPalette(); drawAll(); }
   toast('Opened ' + n + (n === 1 ? ' sprite file' : ' sprite files'));
 }
 
@@ -737,7 +846,7 @@ $('copyprev').onclick = () => {
   afterEdit();
 };
 $('resetframe').onclick = () => { snapshot(); const m = mine(who), a = at(m, face, hold, sub); m.data.fill(OWN, a, a + fs(m)); afterEdit(); };
-$('resetchar').onclick = () => { if (!changed(who) || confirm(NAMES[who] + ' back to the game\'s own frames? Your drawing for this character is dropped.')) { delete work[who]; undo.length = 0; afterEdit(); } };
+$('resetchar').onclick = () => { if (!changed(who) || confirm(entries[who].name + ' back to the game\'s own frames? Your drawing for this character is dropped.')) { delete work[K(who)]; undo.length = 0; afterEdit(); } };
 $('mirror').onclick = () => {
   if (face < 2) return;
   const m = mine(who), other = face === 2 ? 3 : 2, w = pw(m), hh = ph(m);
@@ -748,7 +857,7 @@ $('mirror').onclick = () => {
   undo.length = 0;
   afterEdit();
 };
-$('sheetout').onclick = () => { const m = mine(who); sheetCanvas().toBlob(b => download(NAMES[who].toLowerCase() + '-walk-' + m.mult + 'x-frames-' + m.res + 'x-pixels.png', b)); };
+$('sheetout').onclick = () => { const m = mine(who); sheetCanvas().toBlob(b => download(entries[who].name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-walk-' + m.mult + 'x-frames-' + m.res + 'x-pixels.png', b)); };
 $('sheetin').onclick = () => $('pngfile').click();
 $('pngfile').onchange = e => { if (e.target.files[0]) loadSheet(e.target.files[0]); e.target.value = ''; };
 for (const id of ['modname', 'modauthor', 'modabout']) $(id).oninput = save;

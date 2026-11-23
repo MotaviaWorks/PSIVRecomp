@@ -149,6 +149,11 @@ void spritemod_frame(void) {
         return;
     }
     if (logging && said != mode) {
+        if (mode == MODE_FIELD) {                        /* (the sprites' colours here, faded in: the party's line and the townspeople's) */
+            fprintf(stderr, "spritemod: palette lines 2 and 3:");
+            for (int i = 32; i < 64; i++) fprintf(stderr, "%s%04X", i == 48 ? " | " : " ", vdp.cram[i]);
+            fputc('\n', stderr);
+        }
         said = mode;
         fprintf(stderr, "spritemod: tick %ld: %s (routine %X)\n", tick, mode == MODE_FIELD ? "the field" : "a place fading in", r16(0xEC20));
     }
