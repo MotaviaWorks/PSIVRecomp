@@ -282,11 +282,11 @@ typedef struct {
 } Hit;
 static Hit hits[200];
 static int nhits;
-static struct { int on, hold, rest, presses, waited, nopick, ticks; uint8_t press; Hit h; } drive;
+static struct { int on, hold, rest, presses, waited, nopick, ticks, paged; uint8_t press; Hit h; } drive;
 /* the vehicle shortcuts (below, by the item code): what the click and the pad need of them */
 typedef struct { int n, slot[3], kind[3], ok[3]; } Vehicles;
 static int veh_focus = -1;                                       /* the box's row the keys are on; -1: none */
-static struct { int n, i, chosen, settle, row, kind, shown; Hit step[3]; } vseq;   /* the walk under way (row: the box's) */
+static struct { int n, i, chosen, settle, row, kind, shown, again; Hit step[3]; } vseq;   /* the walk under way (row: the box's) */
 typedef struct { float x0, y0, x1, y1; int k; } VehHit;
 static VehHit vhits[3];
 static int nvhits;
@@ -325,6 +325,10 @@ static unsigned strip_var;
 static int cursor_cell(int *col, int *row);
 
 /* the next press of a pick: 0 when the cursor is there, WAIT while the game is between windows */
+#ifndef PAGE_SETTLE
+#define PAGE_SETTLE 12             /* frames a page turned to is given before a choice from it */
+#endif
+
 static uint8_t drive_step(void) {
     const Hit *h = &drive.h;
     if (h->cell_row >= 0) {
@@ -360,7 +364,7 @@ int fieldmenu_click(float fx, float fy, int right) {
         if (h->cell_row < 0 && h->target < 0) { pulse = 1; pulse_key = h->dec; return 1; }   /* a press: a page's arrow */
         drive.h = *h;
         drive.on = 1;
-        drive.hold = drive.rest = drive.presses = drive.waited = drive.nopick = 0;
+        drive.hold = drive.rest = drive.presses = drive.waited = drive.nopick = drive.paged = 0;
         drive.ticks = 1;
         drive.press = 0;
         return 1;
@@ -422,7 +426,7 @@ static int page_step(int row, int n, int per, uint8_t key) {
 static void walk_items_to(int slot) {
     drive.h = (Hit){0, 0, 0, 0, R_ITEMS_AT, OPTION_2, ITEM_PAGE_AT, slot % 8, slot / 8, -1, PAD_UP, PAD_DOWN};
     drive.on = drive.nopick = 1;
-    drive.hold = drive.rest = drive.presses = drive.waited = 0;
+    drive.hold = drive.rest = drive.presses = drive.waited = drive.paged = 0;
     drive.ticks = 1;
     drive.press = 0;
 }
@@ -591,7 +595,7 @@ static void vehicle_go(const Vehicles *v, int row) {
     vseq.step[2] = (Hit){0, 0, 0, 0, R_ITEM_DO, OPTION_3, 0, 0, 0, -1, PAD_UP, PAD_DOWN};
     vseq.n = 3;
     vseq.i = 0;
-    vseq.chosen = vseq.settle = 0;
+    vseq.chosen = vseq.settle = vseq.again = 0;
     vseq.row = row;
     vseq.kind = v->kind[row];
     vseq.shown = 0;
@@ -603,7 +607,7 @@ static void vehicle_go(const Vehicles *v, int row) {
     }
     drive.h = vseq.step[0];
     drive.on = 1;
-    drive.hold = drive.rest = drive.presses = drive.waited = drive.nopick = drive.ticks = 0;
+    drive.hold = drive.rest = drive.presses = drive.waited = drive.nopick = drive.ticks = drive.paged = 0;
     drive.press = 0;
     veh_focus = -1;
 }
@@ -642,7 +646,7 @@ static int equip_step(int d, int round) {
     } else if (!walking && to / 8 == cur / 8) return 0;
     drive.h = (Hit){0, 0, 0, 0, R_LIST, OPTION_3, EQUIP_PAGE, to % 8, to / 8, -1, PAD_UP, PAD_DOWN};
     drive.on = drive.nopick = 1;
-    drive.hold = drive.rest = drive.presses = drive.waited = 0;
+    drive.hold = drive.rest = drive.presses = drive.waited = drive.paged = 0;
     drive.ticks = 1;
     drive.press = 0;
     return 1;
@@ -717,14 +721,24 @@ uint8_t fieldmenu_pad(uint8_t pad) {
                 drive.h = vseq.step[vseq.i];
                 vseq.settle = 0;
                 drive.on = 1;
-                drive.hold = drive.rest = drive.presses = drive.waited = drive.nopick = drive.ticks = 0;
+                drive.hold = drive.rest = drive.presses = drive.waited = drive.nopick = drive.ticks = drive.paged = 0;
                 drive.press = 0;
             } else vseq.n = 0;
             return 0;
         }
         uint8_t k = drive_step();
         if (k == WAIT) {
-            if (++drive.waited > (vseq.n ? 150 : 40)) { drive.on = 0; vseq.n = 0; }
+            /* a vehicle's walk: the window chosen from is still the one up, so the choice was lost. Once more
+             * from there (twice at most) */
+            drive.waited++;
+            if (vseq.n && vseq.i > 0 && drive.waited == 40 && vseq.again < 2) {
+                Hit next = drive.h;
+                drive.h = vseq.step[vseq.i - 1];
+                if (drive_step() == WAIT) drive.h = next;
+                else { vseq.i--; vseq.again++; vseq.settle = 0; drive.waited = drive.presses = drive.paged = 0; drive.press = 0; }
+                return 0;
+            }
+            if (drive.waited > (vseq.n ? 150 : 40)) { drive.on = 0; vseq.n = 0; }
             return 0;
         }
         drive.waited = 0;
@@ -732,10 +746,15 @@ uint8_t fieldmenu_pad(uint8_t pad) {
          * is lost (the Use / Look / Discard window's was) */
         if (vseq.n && vseq.settle < 12) { vseq.settle++; return 0; }
         if (!k && drive.nopick) { drive.on = 0; return 0; }          /* there: nothing chosen (grouped items) */
+        /* a page just turned to, and its first row the one wanted: the game is still drawing the page, and a
+         * choice made now is lost (issue 12: a vehicle first on a later page of the pack was never chosen).
+         * It is given PAGE_SETTLE frames more, and looked at again */
+        if (!k && drive.paged) { drive.paged = 0; drive.rest = PAGE_SETTLE; return 0; }
         if (!k) k = PAD_C;
         if (++drive.presses > 64) { drive.on = 0; return 0; }
         drive.press = k;
-        drive.rest = drive.h.cell_row < 0 && drive.h.page_var && (k & (PAD_LEFT | PAD_RIGHT)) ? 6 : 2;   /* a page: a window to open */
+        drive.paged = drive.h.cell_row < 0 && drive.h.page_var && (k & (PAD_LEFT | PAD_RIGHT));
+        drive.rest = drive.paged ? 6 : 2;                            /* a page: a window to open */
         return k;
     }
     if (wheel_rest > 0) { wheel_rest--; return 0; }
