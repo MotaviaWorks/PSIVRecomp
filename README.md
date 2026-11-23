@@ -10,6 +10,8 @@ Genesis, USA) built by static recompilation. Work in progress: see
 This repository contains no game data. You need your own dump of the USA
 cartridge (`GM MK-1307-00`).
 
+**See it in motion:** [PSIV Recomp 0.7, everything new since 0.5](https://youtu.be/ZD-N4brP0k4) (a video, 4:38).
+
 **How it's made:** built by PsiLok with Claude (Anthropic), which wrote most
 of the code; the design, direction, testing, music and art are PsiLok's.
 Commits made with Claude say so in a `Co-Authored-By` line.
