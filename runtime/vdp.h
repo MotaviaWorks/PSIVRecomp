@@ -92,6 +92,12 @@ typedef struct {
  * collision flags the game reads stay as the hardware sets them. NULL = off. */
 extern const uint16_t *vdp_plane_a_override;
 extern const uint8_t *vdp_sprite_hidden;
+/* Other pictures for sprites (a mod's: spritemod.c). NULL, or 80 entries by the sprite table's index;
+ * where `px` is set, the piece shows that picture's pixels (w x h bytes, 0 nothing, 1-15 a colour of the
+ * piece's own palette line; x0, y0 its place on the screen) in place of its tiles'. Display only: the
+ * collision flag the game can read is still worked out from its own pixels. */
+typedef struct { const uint8_t *px; int16_t x0, y0, w, h; } VdpSpriteArt;
+extern const VdpSpriteArt *vdp_sprite_art;
 /* With an override, per cell: bit 0 = its tile stays behind low-priority
  * sprites (a picture the port put back, which the game's own action sprites
  * pass in front of); bit 1 = its pixels come from vdp_tile_shadow, a copy of

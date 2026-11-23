@@ -194,6 +194,7 @@ uint32_t vdp_color(int index) {
 
 const uint16_t *vdp_plane_a_override;
 const uint8_t *vdp_sprite_hidden;
+const VdpSpriteArt *vdp_sprite_art;
 const uint8_t *vdp_plane_a_flags;
 const uint8_t *vdp_tile_shadow;
 const uint16_t *vdp_plane_a_back;
@@ -349,6 +350,7 @@ static void render_sprites(int y, uint8_t *out, uint8_t *who, int x0, int width,
     memset(out, 0, (size_t)width);
     do {
         int me = link;
+        const VdpSpriteArt *art = vdp_sprite_art && vdp_sprite_art[me].px ? &vdp_sprite_art[me] : NULL;
         uint32_t a = (base + (uint32_t)link * 8) & 0xFFFF;
         const uint8_t *s = &vdp.vram[a];
         const uint8_t *c = &vdp.sat_cache[((uint32_t)link * 8) & sat_addr_mask()];   /* Y, size, link */
@@ -372,6 +374,22 @@ static void render_sprites(int y, uint8_t *out, uint8_t *who, int x0, int width,
                 uint16_t tile = (uint16_t)((attr & 0x07FF) + (tx >> 3) * vs + (ty >> 3));
                 uint16_t e = (uint16_t)((attr & 0xE000) | (tile & 0x07FF));   /* flips already applied */
                 uint8_t p = tile_pixel(e, tx & 7, ty & 7);
+                if (vdp_sprite_art) {
+                    /* a mod's pictures are about: what the game can read (the collision flag) goes by its
+                     * own pixels as ever; what is shown goes by the pictures, the first drawn in front */
+                    if (p) {
+                        if (seen[x - x0 + SPRITE_MARGIN]) vdp.sprite_status |= 0x20;
+                        else seen[x - x0 + SPRITE_MARGIN] = 1;
+                    }
+                    uint8_t q = p;
+                    if (art) {
+                        int ax = x - art->x0, ay = y - art->y0;
+                        q = ax >= 0 && ax < art->w && ay >= 0 && ay < art->h ? (uint8_t)(art->px[ay * art->w + ax] & 15) : 0;
+                        if (q) q = (uint8_t)(q | (attr >> 13 & 3) << 4 | (attr & 0x8000 ? 0x80 : 0));
+                    }
+                    if (q && x >= x0 && x < x0 + width && !out[x - x0]) { out[x - x0] = q; who[x - x0] = (uint8_t)me; }
+                    continue;
+                }
                 if (!p) continue;
                 if (seen[x - x0 + SPRITE_MARGIN]) {              /* two opaque sprite pixels: collision */
                     vdp.sprite_status |= 0x20;

@@ -45,6 +45,7 @@
 #include "panels.h"
 #include "battleui.h"
 #include "fieldmenu.h"
+#include "spritemod.h"
 #include "algol.h"
 #include "music.h"
 #include "fpview.h"
@@ -1945,6 +1946,11 @@ static void apply_enhancements(void) {
      * to play): no setting, no menu entry; PSIV_FIRST_PERSON=1 brings the
      * view back for development */
     fpview_set_enabled(!classic_mode() && SDL_getenv("PSIV_FIRST_PERSON") && *SDL_getenv("PSIV_FIRST_PERSON") == '1');
+    {   /* a mod's sprites (a proof, no setting yet): PSIV_SPRITEMOD=FILE; never in Classic */
+        static char loaded[1100];
+        const char *want = !classic_mode() && SDL_getenv("PSIV_SPRITEMOD") ? SDL_getenv("PSIV_SPRITEMOD") : "";
+        if (strcmp(want, loaded)) { spritemod_set_file(want); snprintf(loaded, sizeof loaded, "%s", want); }
+    }
     walkto_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.click_walk"), "off") != 0);
     walkto_set_diagonal(!classic_mode() && SDL_strcasecmp(setting("enhance.diagonal"), "off") != 0);
     {   /* the world map: off (where the party goes is noted all the same), what was explored, or all of it */
