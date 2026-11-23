@@ -112,8 +112,17 @@ def main():
     a = p.parse_args()
     w, h = (int(v) for v in a.size.lower().split('x'))
     colours = tuple(int(v) for v in a.colours.split(','))
+    if a.target[:1] == 'B':
+        # one of the party standing in battle: a single picture of 48 x 48, the figure seen from behind
+        fig = figure(12, 24, 1, 0.0, colours, 2)          # 24 x 48, in the middle of the block
+        pic = [[0] * 12 + row + [0] * 12 for row in fig]
+        with open(a.out, 'wb') as f:
+            f.write(('PSIVSPR2\n48 48 1 1 %s\n' % a.target).encode('ascii'))
+            f.write(bytes(v for row in pic for v in row))
+        print('%s: for %s, 48 x 48, a battle stance' % (a.out, a.target))
+        return
     if a.target[:1] not in ('R', 'A'):
-        raise SystemExit('--target is a key as the log lists it: R... or A...')
+        raise SystemExit('--target is a key as the log lists it: R..., A... or B...')
     pics = []
     with open(a.out, 'wb') as f:
         if a.res == 1:

@@ -68,11 +68,11 @@ static int load(Art *a, const char *path) {
     else if (ok && !strncmp(magic, "PSIVSPR2", 8))
         ok = fscanf(f, "%d %d %d %d %15s", &a->w, &a->h, &a->frames, &a->mult, key) == 5;
     else ok = 0;
-    ok = ok && fgetc(f) == '\n' && (key[0] == 'R' || key[0] == 'A')
+    ok = ok && fgetc(f) == '\n' && (key[0] == 'R' || key[0] == 'A' || key[0] == 'B')
           && a->w > 0 && a->w <= 64 && a->h > 0 && a->h <= 64 && a->frames > 0 && a->frames <= 8
           && a->mult > 0 && a->mult <= 8 && (res == 1 || res == 2 || res == 4);
     if (ok) {
-        size_t pics = 4u * (size_t)a->frames * (size_t)a->mult, small = (size_t)a->w * (size_t)a->h;
+        size_t pics = (key[0] == 'B' ? 1u : 4u) * (size_t)a->frames * (size_t)a->mult, small = (size_t)a->w * (size_t)a->h;
         size_t big = small * (size_t)res * (size_t)res;
         uint8_t *fine = malloc(pics * big);
         ok = fine && fread(fine, 1, pics * big, f) == pics * big;
@@ -131,10 +131,140 @@ int spritemod_set_file(const char *paths) {
     return narts;
 }
 
+/* ---- battles: the party standing
+ * At rest a member is no sprite: the game draws them as cells of plane A, a block of 6 x 6 (rows 15-20), from a
+ * handful of tiles reused and mirrored; and with the modern battle menus the port redraws them from a kept copy
+ * of those tiles (battleui.c: vdp_plane_a_override, vdp_plane_a_flags, vdp_tile_shadow). So their picture is
+ * replaced by cell. For each member the standing layout is learned when the whole block shows (which tile and
+ * which way round in each of the 36 cells), with a key: a hash of the 48 x 48 picture the block makes. A file
+ * for that key (B...) gives another 48 x 48 picture; it goes wherever cells still show that layout from those
+ * tiles. When the game puts an attack's frames into the tiles, the hash of the tiles no longer matches and the
+ * game's own show. */
+#define FIGHTERS 0x4400                /* $40 each, the party's five first: +0 in use, +$C x + 128, +$E their art in video memory */
+#define B_ROW0   15
+#define B_CELLS  36
+typedef struct {
+    int base, tiles;                   /* their first tile, and how many the layout uses */
+    uint16_t cell[B_CELLS];            /* the layout: each cell's tile less the base, with its flip bits */
+    uint8_t attr;
+    uint32_t key, set;                 /* the picture's hash; the hash of the tiles' bytes it was made from */
+    const Art *art;
+} Stance;
+static Stance stance[5];
+static VdpCellArt cell_art[32 * 64];
+static uint8_t cell_px[5][B_CELLS][64];
+
+/* a cell of plane A as it will be drawn: its entry, and the video memory its tile is read from */
+static uint16_t cell_now(int r, int c, const uint8_t **src) {
+    int i = (r & 31) * 64 + (c & 63);
+    uint32_t nt = (uint32_t)(vdp.reg[2] & 0x38) << 10, a = (nt + (uint32_t)i * 2u) & 0xFFFF;
+    uint16_t e = (uint16_t)(vdp.vram[a] << 8 | vdp.vram[a + 1]);
+    *src = vdp.vram;
+    if (vdp_plane_a_override && vdp_plane_a_override[i] != 0xFFFF) {
+        e = vdp_plane_a_override[i];
+        if (vdp_plane_a_flags && (vdp_plane_a_flags[i] & 2) && vdp_tile_shadow) *src = vdp_tile_shadow;
+    }
+    return e;
+}
+static uint32_t bytes_hash(const uint8_t *p, int n) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
+    return h;
+}
+
+static void battle_frame(void) {
+    vdp_plane_a_art = NULL;
+    if (!narts && !logging) return;
+    int bases[5], any = 0;
+    for (int k = 0; k < 5; k++) bases[k] = r16(FIGHTERS + (unsigned)k * 0x40) ? (int)(r16(FIGHTERS + (unsigned)k * 0x40 + 0x0E) >> 5) : -1;
+    memset(cell_art, 0, sizeof cell_art);
+    for (int k = 0; k < 5; k++) {
+        Stance *st = &stance[k];
+        int lo = bases[k], hi = lo + 0x30;
+        if (lo < 0) { st->tiles = 0; continue; }
+        for (int j = 0; j < 5; j++) if (bases[j] > lo && bases[j] < hi) hi = bases[j];
+        if (st->base != lo) { st->tiles = 0; st->base = lo; }
+        /* where a block of theirs stands whole: six cells of their tiles along its foot (row 20), and nothing
+         * but their tiles in the 36 */
+        int col = -1;
+        for (int c = 0; c + 6 <= 64 && col < 0; c++) {
+            int ok = 1;
+            const uint8_t *src;
+            for (int i = 0; i < 6 && ok; i++) { int t = cell_now(B_ROW0 + 5, c + i, &src) & 0x7FF; ok = t > lo && t < hi; }
+            for (int i = 0; i < B_CELLS && ok; i++) { int t = cell_now(B_ROW0 + i / 6, c + i % 6, &src) & 0x7FF; ok = t >= lo && t < hi; }
+            if (ok) col = c;
+        }
+        if (col >= 0) {                                   /* learn it (again): the layout, the picture's hash */
+            uint8_t pic[48 * 48];
+            const uint8_t *from = vdp.vram;
+            int most = 0;
+            for (int i = 0; i < B_CELLS; i++) {
+                const uint8_t *src;
+                uint16_t e = cell_now(B_ROW0 + i / 6, col + i % 6, &src);
+                int t = (e & 0x7FF) - lo;
+                st->cell[i] = (uint16_t)(t | (e & 0x1800));
+                if (t) { st->attr = (uint8_t)((e >> 13 & 3) << 4 | (e & 0x8000 ? 0x80 : 0)); from = src; }
+                if (t + 1 > most) most = t + 1;
+                const uint8_t *tile = &src[((uint32_t)(e & 0x7FF) * 32u) & 0xFFFF];
+                for (int y = 0; y < 8; y++)
+                    for (int x = 0; x < 8; x++) {
+                        int tx = e & 0x0800 ? 7 - x : x, ty = e & 0x1000 ? 7 - y : y;
+                        uint8_t b = tile[ty * 4 + (tx >> 1)];
+                        pic[(i / 6 * 8 + y) * 48 + i % 6 * 8 + x] = tx & 1 ? b & 15 : b >> 4;
+                    }
+            }
+            uint32_t key = bytes_hash(pic, sizeof pic), set = bytes_hash(&from[((uint32_t)lo * 32u) & 0xFFFF], most * 32);
+            if (key != st->key || !st->tiles) {
+                st->art = NULL;
+                for (int a = 0; a < narts && !st->art; a++)
+                    if (arts[a].kind == 'B' && arts[a].target == key && arts[a].w == 48 && arts[a].h == 48) st->art = &arts[a];
+                if (st->art)                              /* their picture, cut into the block's cells */
+                    for (int i = 0; i < B_CELLS; i++)
+                        for (int p = 0; p < 64; p++) cell_px[k][i][p] = st->art->px[(i / 6 * 8 + p / 8) * 48 + i % 6 * 8 + p % 8];
+                if (logging)
+                    fprintf(stderr, "spritemod: battle: fighter %d stands at column %d: key B%X (48 x 48 from %d tiles at %03X, palette line %d)%s\n",
+                            k, col, (unsigned)key, most, (unsigned)lo, st->attr >> 4 & 3, st->art ? ": replaced" : "");
+            }
+            st->key = key;
+            st->set = set;
+            st->tiles = most;
+        }
+        if (!st->tiles || !st->art) continue;
+        /* wherever cells show that layout from those tiles (their own, or the port's kept copy), the picture */
+        int vram_ok = bytes_hash(&vdp.vram[((uint32_t)lo * 32u) & 0xFFFF], st->tiles * 32) == st->set;
+        int shadow_ok = vdp_tile_shadow && bytes_hash(&vdp_tile_shadow[((uint32_t)lo * 32u) & 0xFFFF], st->tiles * 32) == st->set;
+        if (!vram_ok && !shadow_ok) continue;
+        int best = -1, most = 0;
+        for (int c = 0; c + 6 <= 64; c++) {
+            int n = 0;
+            for (int i = 0; i < B_CELLS; i++) {
+                const uint8_t *src;
+                uint16_t e = cell_now(B_ROW0 + i / 6, c + i % 6, &src);
+                if ((st->cell[i] & 0x7FF) && (uint16_t)(((e & 0x7FF) - lo) | (e & 0x1800)) == st->cell[i] && (src == vdp.vram ? vram_ok : shadow_ok)) n++;
+            }
+            if (n > most) { most = n; best = c; }
+        }
+        if (most < 4) continue;
+        for (int i = 0; i < B_CELLS; i++) {
+            const uint8_t *src;
+            int r = B_ROW0 + i / 6, c = best + i % 6;
+            uint16_t e = cell_now(r, c, &src);
+            if ((uint16_t)(((e & 0x7FF) - lo) | (e & 0x1800)) != st->cell[i] || !(src == vdp.vram ? vram_ok : shadow_ok)) continue;
+            cell_art[(r & 31) * 64 + (c & 63)].px = cell_px[k][i];
+            cell_art[(r & 31) * 64 + (c & 63)].attr = st->attr;
+            any = 1;
+        }
+    }
+    if (any) vdp_plane_a_art = cell_art;
+}
+
 void spritemod_frame(void) {
     vdp_sprite_art = NULL;
+    vdp_plane_a_art = NULL;
     fine_any = 0;
     if (logging < 0) logging = getenv("PSIV_SPRITEMOD_LOG") != NULL;
+    if ((int)r16(GAME_MODE) / 4 == 5) { battle_frame(); return; }
+    memset(stance, 0, sizeof stance);
     static int said = -1;
     static long tick;
     tick++;

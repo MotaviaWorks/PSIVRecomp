@@ -99,6 +99,11 @@ extern const uint8_t *vdp_sprite_hidden;
  * collision flag the game can read is still worked out from its own pixels. */
 typedef struct { const uint8_t *px; int16_t x0, y0, w, h; } VdpSpriteArt;
 extern const VdpSpriteArt *vdp_sprite_art;
+/* Other pictures for cells of plane A (a mod's: the party standing in battle). NULL, or 32 x 64 entries by the
+ * name table's cell; where `px` is set the cell shows those 64 pixels (0 nothing, 1-15 a colour, 255 the
+ * game's own pixel) with `attr` (the palette line << 4, $80 priority). Display only. */
+typedef struct { const uint8_t *px; uint8_t attr; } VdpCellArt;
+extern const VdpCellArt *vdp_plane_a_art;
 /* With an override, per cell: bit 0 = its tile stays behind low-priority
  * sprites (a picture the port put back, which the game's own action sprites
  * pass in front of); bit 1 = its pixels come from vdp_tile_shadow, a copy of

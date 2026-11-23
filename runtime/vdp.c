@@ -195,6 +195,7 @@ uint32_t vdp_color(int index) {
 const uint16_t *vdp_plane_a_override;
 const uint8_t *vdp_sprite_hidden;
 const VdpSpriteArt *vdp_sprite_art;
+const VdpCellArt *vdp_plane_a_art;
 const uint8_t *vdp_plane_a_flags;
 const uint8_t *vdp_tile_shadow;
 const uint16_t *vdp_plane_a_back;
@@ -306,6 +307,13 @@ static void render_plane(int y, int plane, uint8_t *out, uint16_t *entries, uint
                 out[i] = p;
                 e = back;
                 below = 1;
+            }
+        }
+        if (plane == 0 && vdp_plane_a_art && wcells == 64 && py < 256) {        /* a mod's picture for this cell */
+            const VdpCellArt *ca = &vdp_plane_a_art[(py >> 3) * 64 + (px >> 3)];
+            if (ca->px) {
+                uint8_t v = ca->px[(py & 7) * 8 + (px & 7)];
+                if (v != 0xFF) out[i] = (v & 15) ? (uint8_t)((v & 15) | ca->attr) : 0;
             }
         }
         if (entries) entries[i] = e;
