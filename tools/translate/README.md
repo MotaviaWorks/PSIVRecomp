@@ -10,10 +10,10 @@ Two tools for anyone who wants to translate Phantasy Star IV for PSIV Recomp, an
 
 Both write the same pack, and the editor opens packs, so work can pass between them and between people.
 
-**Where this stands:** the port shows a pack's **dialogue** (in builds after 0.7.1-beta). The names and
-messages can be translated here too and are kept in the pack, but the port still draws the game's own:
-that part comes next, and the pack's format may still change with it. The port's own words (its
-settings, its descriptions, the Journal) are not covered yet.
+**Where this stands:** the port shows a pack's **dialogue, names, messages and menus** (in builds after
+0.7.1-beta), and the pack's format may still change. Three kinds of lines: the game's **dialogue**; its **names and
+messages** (enemies, techniques, items and the rest); and **the port's own words** (its menus' labels and hints, and
+what techniques, skills and items do). The port's settings, its launcher and the Journal are not covered yet.
 
 A translation made this way is not a ROM patch. The port draws the game's text itself, with its own
 font, so a pack is only the translated words and a font that has your language's characters. It needs
@@ -68,8 +68,8 @@ python psiv_translate.py check   psiv-dialogue.csv --rom "Phantasy Star IV (USA)
 python psiv_translate.py pack    psiv-dialogue.csv --language "简体中文" --rom "Phantasy Star IV (USA).md"
 ```
 
-1. **extract** writes the workbook, `psiv-dialogue.csv`: 1,565 lines of dialogue and about 1,260
-   names and messages. Open it in any
+1. **extract** writes the workbook, `psiv-dialogue.csv`: 1,565 lines of dialogue, about 1,260
+   names and messages and about 300 of the port's own words. Open it in any
    spreadsheet (LibreOffice Calc, Excel, Google Sheets) as UTF-8, and write into the `translation`
    column. Run it again later over the same file and your work is kept.
 2. **check** reads your translation and lists what is wrong (a PROBLEM stops the pack) and what may
@@ -92,6 +92,9 @@ The same in the editor and in the workbook.
 | `speaker` | whose portrait the line puts up, if any |
 | `english` | the line as the game has it |
 | `translation` | yours. Empty means not translated yet: the game's own line is shown. |
+
+**The port's own words** may hold `%s`, `%d` and the like, where it puts a name or a number: keep each, in the same
+order. `port_words.py` reads these lines out of the port's sources.
 
 **Names and messages** are plain words: no codes, and the same number of lines as the game's where
 you can. The game has some of them twice (a menu word in two menus); the editor offers to fill the
@@ -161,9 +164,11 @@ or so and says so at the top of the screen. The box on the screen changes too.
 - A line too long for the box is set smaller, up to four lines.
 - With fewer `{page}` marks than the game's line, the last page stays up; with more, they share the
   game's boxes.
+- A name or a label much longer than the game's is set smaller. A message the game puts together ("Chaz" and
+  "has slept!") is put together the same way in yours.
 - Right-to-left languages are not handled.
 
-Not yet: names, menus, shops, inns, battles, and the opening's words.
+Not yet: the settings, the launcher, the Journal, and the opening's words.
 
 ## Questions, and telling us you are translating
 

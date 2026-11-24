@@ -5,26 +5,28 @@
 #include "m68k.h"
 
 #include <stdint.h>
+#include "translate_data.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ the pack */
-typedef struct { uint32_t id; char *text; } Entry;           /* id: bank << 12 | line, or the ROM address with the top bit */
-#define ROM_TEXT 0x80000000u
+typedef struct { uint64_t id; char *text; } Entry;           /* id: bank << 12 | line; a ROM address, with a top bit; a hash of the port's, with another */
+#define ROM_TEXT  0x80000000u
+#define PORT_TEXT ((uint64_t)1 << 40)
 static Entry *entries;
 static int nentries;
 static char language[64];
 
 static int by_id(const void *a, const void *b) {
-    uint32_t x = ((const Entry *)a)->id, y = ((const Entry *)b)->id;
+    uint64_t x = ((const Entry *)a)->id, y = ((const Entry *)b)->id;
     return x < y ? -1 : x > y;
 }
 
 static int hex(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
 
-/* [D07.01A] or [T2AC0DE], alone on its line: its id, or 0 */
-static uint32_t heading(const char *s, size_t n) {
+/* [D07.01A], [T2AC0DE] or [P8BA9331D], alone on its line: its id, or 0 */
+static uint64_t heading(const char *s, size_t n) {
     while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r')) n--;
     if (n == 9 && s[0] == '[' && s[1] == 'D' && s[4] == '.' && s[8] == ']') {
         int a = hex(s[2]), b = hex(s[3]), x = hex(s[5]), y = hex(s[6]), z = hex(s[7]);
@@ -39,6 +41,15 @@ static uint32_t heading(const char *s, size_t n) {
             v = v << 4 | (uint32_t)d;
         }
         return v | ROM_TEXT;
+    }
+    if (n == 11 && s[0] == '[' && s[1] == 'P' && s[10] == ']') {
+        uint32_t v = 0;
+        for (int i = 2; i < 10; i++) {
+            int d = hex(s[i]);
+            if (d < 0) return 0;
+            v = v << 4 | (uint32_t)d;
+        }
+        return v | PORT_TEXT;
     }
     return 0;
 }
@@ -84,6 +95,7 @@ int translate_is_pack(const char *text, size_t len, char *lang, size_t ln, int *
 }
 
 static void forget(void);
+static void words_forget(void);
 static char tried[256];
 
 int translate_load(const char *pack, size_t len) {
@@ -92,6 +104,7 @@ int translate_load(const char *pack, size_t len) {
     entries = NULL;
     nentries = 0;
     language[0] = 0;
+    words_forget();
     forget();
     tried[0] = 0;
     if (!pack) return 0;
@@ -99,11 +112,11 @@ int translate_load(const char *pack, size_t len) {
     translate_is_pack(pack, len, language, sizeof language, &count);
     if (!count || !(entries = calloc((size_t)count, sizeof *entries))) return 0;
     const char *p = pack + bom(pack, len), *end = pack + len, *from = NULL;
-    uint32_t id = 0;
+    uint64_t id = 0;
     for (;;) {
         size_t n = 0;
         const char *s = line_of(&p, end, &n);
-        uint32_t h = s ? heading(s, n) : 0;
+        uint64_t h = s ? heading(s, n) : 0;
         if (id && (h || !s)) {                               /* the one before is whole: its words, no \r, no blank lines about them */
             const char *e = s ? s : end;
             char *t = malloc((size_t)(e - from) + 1);
@@ -132,7 +145,7 @@ int translate_load(const char *pack, size_t len) {
 int translate_lines(void) { return nentries; }
 const char *translate_language(void) { return language; }
 
-static const char *entry(uint32_t id) {
+static const char *entry(uint64_t id) {
     int lo = 0, hi = nentries - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
@@ -545,18 +558,19 @@ void translate_frame(const char *key) {
         int lo = 0, hi = nentries - 1, best = -1;            /* the pack's last one that starts at or before p */
         while (lo <= hi) {
             int mid = (lo + hi) / 2;
-            if (entries[mid].id <= (p | ROM_TEXT)) { best = mid; lo = mid + 1; }
+            if (entries[mid].id <= (uint64_t)(p | ROM_TEXT)) { best = mid; lo = mid + 1; }
             else hi = mid - 1;
         }
         for (int j = best; j >= 0 && j > best - 2; j--) {    /* (or the one before it: at a text's end the place is the next one's start) */
-            if (!(entries[j].id & ROM_TEXT) || p - (entries[j].id & ~ROM_TEXT) >= 400) break;
-            uint32_t a = entries[j].id & ~ROM_TEXT;
+            if (!(entries[j].id & ROM_TEXT) || (entries[j].id & PORT_TEXT)) break;
+            uint32_t a = (uint32_t)entries[j].id & ~ROM_TEXT;
+            if (p - a >= 400) break;
             Box box[16];
             int next, n = m68k_rom_size - a < 600 ? (int)(m68k_rom_size - a) : 600, at = (int)(p - a);
             int c = boxes_of(m68k_rom + a, n, 0, 0, 0, box, 16, &next);
             for (int i = 0; i < c; i++)
                 if (at >= box[i].start && at <= box[i].end + 2
-                    && show(m68k_rom + a, n, box, c, i, at, 0, entries[j].text, entries[j].id ^ (uint32_t)i << 26, key)) return;
+                    && show(m68k_rom + a, n, box, c, i, at, 0, entries[j].text, (uint32_t)entries[j].id ^ (uint32_t)i << 26, key)) return;
         }
     }
     /* not typing: the box stays as it was while its letters do (the game waits for a button, or asks yes or no) */
@@ -589,5 +603,211 @@ void translate_frame(const char *key) {
             show(bank[b].bytes, bank[b].n, x + f, e - f, found - f, x[found].end, two_bytes(b), entry(id),
                  id | (uint32_t)(found - f + 1) << 20, key);
         }
+    }
+}
+
+/* ------------------------------------------------------------------ names, messages and the port's own words */
+typedef struct { char *key, *text; int entry, row, next; } Word;   /* key: the English letters and digits, lower case */
+#define BUCKETS 2048
+static Word *word;
+static int nwords, words_max, words_made, bucket[BUCKETS];
+static int last_entry, last_row;                             /* the line of a message shown last (its next one is the likelier) */
+
+static void words_forget(void) {
+    for (int i = 0; i < nwords; i++) { free(word[i].key); free(word[i].text); }
+    nwords = 0;
+    words_made = 0;
+    last_entry = -1;
+}
+
+static uint32_t fnv(const char *s) {
+    uint32_t h = 0x811C9DC5u;
+    for (; *s; s++) h = (h ^ (uint8_t)*s) * 0x01000193u;
+    return h;
+}
+
+static char *copy_of(const char *s, size_t n) {
+    char *d = malloc(n + 1);
+    if (d) { memcpy(d, s, n); d[n] = 0; }
+    return d;
+}
+
+static void word_add(const char *key, const char *text, size_t n, int e, int row) {
+    while (n && (*text == ' ' || *text == '\n')) { text++; n--; }
+    while (n && (text[n - 1] == ' ' || text[n - 1] == '\n')) n--;
+    if (strlen(key) < 2 || !n) return;
+    if (nwords == words_max) {
+        Word *w = realloc(word, (size_t)(words_max + 1024) * sizeof *w);
+        if (!w) return;
+        word = w;
+        words_max += 1024;
+    }
+    Word *w = &word[nwords];
+    w->key = copy_of(key, strlen(key));
+    w->text = copy_of(text, n);
+    if (!w->key || !w->text) { free(w->key); free(w->text); return; }
+    for (char *c = w->text; *c; c++) if (*c == '\n') *c = ' ';
+    w->entry = e;
+    w->row = row;
+    int *at = &bucket[fnv(key) % BUCKETS];
+    while (*at >= 0) at = &word[*at].next;                   /* (the first of two that read the same comes first) */
+    w->next = -1;
+    *at = nwords++;
+}
+
+/* the pack's words for each name and message of the ROM's it has, under their English */
+static void words_ready(void) {
+    if (words_made) return;
+    words_made = 1;
+    for (int i = 0; i < BUCKETS; i++) bucket[i] = -1;
+    for (int i = 0; i < N_SHORT_TEXTS; i++) {
+        const ShortText *q = &SHORT_TEXTS[i];
+        const char *t = entry(q->at | ROM_TEXT), *line[3] = {NULL, NULL, NULL};
+        if (!t) continue;
+        char key[3][48], all[144];
+        uint32_t at = q->at;
+        int rows = 0, n = 0;
+        all[0] = 0;
+        for (; rows < 3 && q->len[rows]; rows++) {
+            int k = 0;
+            for (int j = 0; j < q->len[rows]; j++) {
+                int v = rom(at + (uint32_t)j);
+                char l = q->dialogue ? letter(v) : WINDOW_LETTER[v];
+                if (l && k < 47) key[rows][k++] = l;
+            }
+            key[rows][k] = 0;
+            strcat(all, key[rows]);
+            at += q->len[rows] + 1u;
+        }
+        for (const char *c = t; c && n < 3; n++) {           /* the translation's lines */
+            line[n] = c;
+            c = strchr(c, '\n');
+            if (c) c++;
+        }
+        int have = n;
+        if (rows == 1) word_add(all, t, strlen(t), i, 0);
+        else {
+            word_add(all, t, strlen(t), i, 0);
+            for (int r = 0; r < rows; r++) {
+                if (have >= rows) {                          /* a line for each of the game's (the last takes what is over) */
+                    const char *e = r + 1 < rows ? strchr(line[r], '\n') : line[r] + strlen(line[r]);
+                    word_add(key[r], line[r], (size_t)(e - line[r]), i, r);
+                } else {                                     /* fewer: its words shared out, as the game's lines are long */
+                    size_t len = strlen(t), from = r ? len * strlen(key[0]) / (strlen(all) ? strlen(all) : 1) : 0, to = len;
+                    if (!r) to = len * strlen(key[0]) / (strlen(all) ? strlen(all) : 1);
+                    while (from && from < len && t[from - 1] != ' ') from++;
+                    while (to < len && to && t[to - 1] != ' ') to++;
+                    word_add(key[r], t + from, to - from, i, r);
+                }
+            }
+        }
+    }
+}
+
+/* s's letters and digits, lower case; 0 if it has others than the game's (words already translated) */
+static int key_of(const char *s, size_t n, char *out, size_t max) {
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c >= 'A' && c <= 'Z') c += 32;
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) { if (k + 1 >= max) return 0; out[k++] = (char)c; }
+        else if (c >= 0x80) {
+            if (c == 0xE2 && i + 2 < n) i += 2;              /* (a typographic quote or dash) */
+            else if (c == 0xC2 && i + 1 < n) i += 1;
+            else return 0;
+        }
+    }
+    out[k] = 0;
+    return k >= 2;
+}
+
+static const char *look(const char *key) {
+    const Word *best = NULL;
+    for (int i = bucket[fnv(key) % BUCKETS]; i >= 0; i = word[i].next) {
+        const Word *w = &word[i];
+        if (strcmp(w->key, key)) continue;
+        if (!best) best = w;
+        if (w->entry == last_entry && w->row == last_row + 1) { best = w; break; }
+        if (best->row && !w->row) best = w;                  /* (a line of its own before another's second) */
+    }
+    if (!best) return NULL;
+    last_entry = best->entry;
+    last_row = best->row;
+    return best->text;
+}
+
+const char *translate_word(const char *s) {
+    char key[96];
+    if (!nentries || !s || !*s) return NULL;
+    const char *t = entry(fnv(s) | PORT_TEXT);
+    if (t) return t;
+    words_ready();
+    return nwords && key_of(s, strlen(s), key, sizeof key) ? look(key) : NULL;
+}
+
+int translate_phrase(const char *s, char *out, size_t n) {
+    const char *t = translate_word(s), *at[33], *upto[33];
+    int words = 0, any = 0;
+    if (t) { snprintf(out, n, "%s", t); return 1; }
+    if (!nentries) return 0;
+    words_ready();
+    if (!nwords) return 0;
+    for (const char *c = s; *c && words < 32;) {             /* its words; a colon ends one ("Chaz:Attack") */
+        while (*c == ' ') c++;
+        if (!*c) break;
+        at[words] = c;
+        while (*c && *c != ' ' && *c != ':') c++;
+        if (*c == ':') c++;
+        upto[words++] = c;
+    }
+    size_t k = 0;
+    for (int i = 0; i < words;) {
+        int j = words, spaced = k && at[i] > s && at[i][-1] == ' ';
+        char key[96];
+        for (; j > i; j--) {                                 /* the most words from here that are known */
+            t = key_of(at[i], (size_t)(upto[j - 1] - at[i]), key, sizeof key) ? look(key) : NULL;
+            if (t) break;
+        }
+        const char *from = at[i], *to = upto[i];
+        int colon = 0;
+        if (j > i) {
+            colon = upto[j - 1][-1] == ':' && *t && t[strlen(t) - 1] != ':';
+            from = t;
+            to = t + strlen(t);
+            any = 1;
+            i = j;
+        } else i++;
+        if (k + (size_t)(to - from) + 3 >= n) break;
+        if (spaced) out[k++] = ' ';
+        memcpy(out + k, from, (size_t)(to - from));
+        k += (size_t)(to - from);
+        if (colon) out[k++] = ':';
+    }
+    out[k] = 0;
+    return any;
+}
+
+/* the next conversion of a format: its length (at *p), 0 at the end */
+static int conversion(const char **p) {
+    while (**p) {
+        if (**p != '%') { (*p)++; continue; }
+        const char *c = *p + 1;
+        if (*c == '%') { *p = c + 1; continue; }
+        while (*c && strchr("-+ 0#.123456789lhz", *c)) c++;
+        return *c ? (int)(c + 1 - *p) : 1;
+    }
+    return 0;
+}
+
+const char *translate_format(const char *fmt) {
+    if (!nentries) return fmt;
+    const char *t = entry(fnv(fmt) | PORT_TEXT), *a = fmt, *b = t;
+    if (!t) return fmt;
+    for (;;) {
+        int x = conversion(&a), y = conversion(&b);
+        if (x != y || (x && memcmp(a, b, (size_t)x))) return fmt;   /* (one with other numbers or names in it: not taken) */
+        if (!x) return t;
+        a += x;
+        b += y;
     }
 }

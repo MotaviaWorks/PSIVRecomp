@@ -1010,23 +1010,23 @@ static void item_line(int id, char *out, size_t n) {
     static const int ORDER[7] = {4, 5, 6, 0, 1, 2, 3};
     int kind = item_kind(id), len;
     const char *does = battledesc_item(id);
-    if (kind < 1 || kind > 7) { snprintf(out, n, "%s", does ? does : ""); return; }
-    len = snprintf(out, n, "%s.", KIND[kind]);
+    if (kind < 1 || kind > 7) { snprintf(out, n, "%s", does ? TR(does) : ""); return; }
+    len = snprintf(out, n, "%s.", TR(KIND[kind]));
     for (int k = 0, first = 1; k < 7; k++) {
         int v = item_bonus(id, 0x0B + ORDER[k]);
         if (!v || len >= (int)n) continue;
-        len += snprintf(out + len, n - (size_t)len, "%s %s %+d", first ? "" : ",", BONUS[ORDER[k]], v);
+        len += snprintf(out + len, n - (size_t)len, "%s %s %+d", first ? "" : ",", TR(BONUS[ORDER[k]]), v);
         first = 0;
     }
-    if (does && len < (int)n) snprintf(out + len, n - (size_t)len, ". In battle: %s", does);   /* used as an item there */
+    if (does && len < (int)n) snprintf(out + len, n - (size_t)len, TRF(". In battle: %s"), TR(does));   /* used as an item there */
 }
 
 static void item_wearers(int id, char *out, size_t n) {
     unsigned who = id > 0 ? ui_rom16(ITEM_DATA + (uint32_t)(id - 1) * 0x16u + I_WHO) : 0;
-    int len = snprintf(out, n, "For ");
+    int len = snprintf(out, n, "%s ", TR("For"));
     for (int c = 0, first = 1; c < 11; c++)
         if (who >> c & 1 && len < (int)n) {
-            len += snprintf(out + len, n - (size_t)len, "%s%s", first ? "" : ", ", UI_CHAR_NAMES[c]);
+            len += snprintf(out + len, n - (size_t)len, "%s%s", first ? "" : ", ", TR(UI_CHAR_NAMES[c]));
             first = 0;
         }
 }
@@ -1126,6 +1126,12 @@ static void draw_picture(const Win *w, float x, float y) {
         }
 }
 
+/* a window's words in a translation's, what is known of them (translate.h) */
+static void known_words(char *s, size_t n) {
+    char t[256];
+    if (translate_phrase(s, t, sizeof t)) snprintf(s, n, "%.*s", (int)(n - 1), t);
+}
+
 /* a row of a window that holds a line of dialogue: as text, the game's own capitals; 0 if it holds none */
 static int tall_text(const Win *w, int cy, char *out, int max, int *first) {
     int n = 0, gap = 0, any = 0;
@@ -1179,6 +1185,7 @@ static void draw_plain(const Win *w, float ox, float oy, int has_cursor, int cco
             s[n] = 0;
             soften(s);
             if (!strcmp(s, "Dsc")) snprintf(s, sizeof s, "Drop");      /* (the game's short for "discard") */
+            if (!num) known_words(s, sizeof s);
             float x0 = ox + (float)(w->x + 1 + start) * 8.0f + 0.5f, x1 = ox + (float)(w->x + 1 + end) * 8.0f - 0.5f;
             uint32_t c = w->pal[cy][start] != w->usual ? FAINT : WHITE;
             if (has_cursor && !lit && start > 0
@@ -1391,9 +1398,9 @@ pack_done:;
     party_routine = 0;
 
     char a[200] = "", b[120] = "";
-    if (now == R_ITEM_WHO) snprintf(a, sizeof a, "Use the %s on whom?", ui_item_name(item));
-    else if (now == R_ITEM_DO && choice == 1) snprintf(a, sizeof a, "Look the %s over.", ui_item_name(item));
-    else if (now == R_ITEM_DO && choice == 2) snprintf(a, sizeof a, "Throw the %s away.", ui_item_name(item));
+    if (now == R_ITEM_WHO) snprintf(a, sizeof a, TRF("Use the %s on whom?"), ui_item_name(item));
+    else if (now == R_ITEM_DO && choice == 1) snprintf(a, sizeof a, TRF("Look the %s over."), ui_item_name(item));
+    else if (now == R_ITEM_DO && choice == 2) snprintf(a, sizeof a, TRF("Throw the %s away."), ui_item_name(item));
     else if (item) {
         int k = item_kind(item);
         item_line(item, a, sizeof a);
@@ -1421,7 +1428,7 @@ static void draw_arts(float x0, float y0, float x1, float y1, int skills) {
     uint32_t r_who = skills ? R_SKILL_WHO : R_TECH_WHO, r_list = skills ? R_SKILL_LIST : R_TECH_LIST;
     uint32_t r_target = skills ? R_SKILL_TARGET : R_TECH_TARGET, data = skills ? SKILL_DATA : TECH_DATA;
     uint32_t now = routine_of(r16(WINDOW_INDEX));
-    const char *what = skills ? "skill" : "technique";
+    const char *what = TR(skills ? "skill" : "technique");
     int members[5], n = party(members), sel = (int)r8(OPTION_2);
     if (!n) return;
     if (sel >= n) sel = n - 1;
@@ -1473,7 +1480,7 @@ static void draw_arts(float x0, float y0, float x1, float y1, int skills) {
     if (head) {
         text(x0 + 9.0f, by0 + 13.5f, UI_CHAR_NAMES[id], now == r_who ? SOFT : WHITE);
         if (!skills) {
-            snprintf(t, sizeof t, "TP %d/%u", tp, r16(rec + C_TP + 2));
+            snprintf(t, sizeof t, TRF("TP %d/%u"), tp, r16(rec + C_TP + 2));
             text_right(lx1 - 9.0f, by0 + 13.5f, t, SOFT);
         }
     }
@@ -1489,7 +1496,7 @@ static void draw_arts(float x0, float y0, float x1, float y1, int skills) {
             cannot = left == 0;
         } else {
             int cost = (int)ui_rom8(TECH_DATA + (uint32_t)(a - 1) * 8u + 1);
-            snprintf(t, sizeof t, "%d TP", cost);
+            snprintf(t, sizeof t, TRF("%d TP"), cost);
             cannot = cost > tp;
         }
         uint32_t c = cannot ? FAINT : now == r_who ? SOFT : WHITE, sc = cannot ? FAINT : SOFT;
@@ -1512,10 +1519,10 @@ static void draw_arts(float x0, float y0, float x1, float y1, int skills) {
     int art = cursor >= 0 ? ids[cursor] : 0;
     const char *name = art ? (skills ? ui_skill_name(art) : ui_tech_name(art)) : "";
     if (now == r_who) {
-        snprintf(a, sizeof a, "Whose %ss?", what);
+        snprintf(a, sizeof a, TRF("Whose %ss?"), what);
         snprintf(b, sizeof b, "Those that can be used outside battle.");
     } else if (now == r_target) {
-        snprintf(a, sizeof a, "Use %s on whom?", name);
+        snprintf(a, sizeof a, TRF("Use %s on whom?"), name);
     } else if (art) {
         const char *does = skills ? battledesc_skill(art) : battledesc_tech(art);
         snprintf(a, sizeof a, "%s", does ? does : name);
@@ -1615,10 +1622,10 @@ static void draw_status(float x0, float y0, float x1, float y1) {
         text(tx, by0 + 17.0f, UI_CHAR_NAMES[id], WHITE);
         job_name(r16(rec + C_JOB), t, (int)sizeof t);
         text(tx, by0 + 29.0f, t, SOFT);
-        snprintf(t, sizeof t, "Level %u", r16(rec + C_LEVEL));
+        snprintf(t, sizeof t, TRF("Level %u"), r16(rec + C_LEVEL));
         text(tx, by0 + 41.0f, t, ink);
         unsigned age = ui_rom16(AGES + (uint32_t)id * 2u);
-        if (age) snprintf(t, sizeof t, "Age %u", age);
+        if (age) snprintf(t, sizeof t, TRF("Age %u"), age);
         else snprintf(t, sizeof t, "Age ?");
         text(tx, by0 + 53.0f, t, ink);
         float gy = by0 + (P + 22.0f > 68.0f ? P + 22.0f : 68.0f);
@@ -1657,7 +1664,7 @@ static void draw_status(float x0, float y0, float x1, float y1) {
         }
         if (!page) snprintf(a, sizeof a, "Whose status?");
         else {
-            snprintf(a, sizeof a, "%s: the profile, page 1 of 3.", UI_CHAR_NAMES[id]);
+            snprintf(a, sizeof a, TRF("%s: the profile, page 1 of 3."), TR(UI_CHAR_NAMES[id]));
             snprintf(b, sizeof b, "Choose again for the techniques.");
         }
     } else {                                             /* the techniques, or the skills: all of them, for battle and camp */
@@ -1670,7 +1677,7 @@ static void draw_status(float x0, float y0, float x1, float y1) {
         win(x0, by0, x1, by1);
         text(x0 + 9.0f, by0 + 13.5f, skills ? "Skills" : "Techniques", SOFT);
         if (!skills) {
-            snprintf(t, sizeof t, "TP %d/%u", tp, r16(rec + C_TP + 2));
+            snprintf(t, sizeof t, TRF("TP %d/%u"), tp, r16(rec + C_TP + 2));
             text_right(x1 - 9.0f, by0 + 13.5f, t, SOFT);
         }
         int per = skills ? 4 : 8;
@@ -1686,17 +1693,17 @@ static void draw_status(float x0, float y0, float x1, float y1) {
                 cannot = left == 0;
             } else {
                 int cost = (int)ui_rom8(TECH_DATA + (uint32_t)(art - 1) * 8u + 1);
-                snprintf(t, sizeof t, "%d TP", cost);
+                snprintf(t, sizeof t, TRF("%d TP"), cost);
                 cannot = cost > tp;
             }
             text(cx0 + 5.0f, base, skills ? ui_skill_name(art) : ui_tech_name(art), cannot ? FAINT : WHITE);
             text_right(cx0 + cw - 9.0f, base, t, cannot ? FAINT : SOFT);
         }
         if (skills) {
-            snprintf(a, sizeof a, "%s: the skills and the uses left, page 3 of 3.", UI_CHAR_NAMES[id]);
+            snprintf(a, sizeof a, TRF("%s: the skills and the uses left, page 3 of 3."), TR(UI_CHAR_NAMES[id]));
             snprintf(b, sizeof b, "Choose again to pick another member.");
         } else {
-            snprintf(a, sizeof a, "%s: the techniques and what each costs, page 2 of 3.", UI_CHAR_NAMES[id]);
+            snprintf(a, sizeof a, TRF("%s: the techniques and what each costs, page 2 of 3."), TR(UI_CHAR_NAMES[id]));
             snprintf(b, sizeof b, "Choose again for the skills.");
         }
     }
@@ -1774,10 +1781,10 @@ static void draw_shop(float x0, float y0, float x1, float y1) {
         char line[2][128];
         int lines = 0, first;
         for (int cy = 0; cy < words->h - 2 && cy < 28 && lines < 2; cy++)
-            if (tall_text(words, cy, line[lines], (int)sizeof line[0], &first) || row_text(words, cy, line[lines], (int)sizeof line[0])) lines++;
+            if (tall_text(words, cy, line[lines], (int)sizeof line[0], &first) || row_text(words, cy, line[lines], (int)sizeof line[0])) known_words(line[lines++], sizeof line[0]);
         if (buy.qty > 1 && now == R_SHOP_BUY_Q && open_now(R_SHOP_BUY)) {   /* several: what it comes to */
             int it = buy_item_now();
-            snprintf(line[0], sizeof line[0], "%d x %s: %d meseta in all.", buy.qty, ui_item_name(it), buy.qty * item_price(it));
+            snprintf(line[0], sizeof line[0], TRF("%d x %s: %d meseta in all."), buy.qty, ui_item_name(it), buy.qty * item_price(it));
             snprintf(line[1], sizeof line[1], "Is that OK?");
             lines = 2;
         }
@@ -1874,9 +1881,9 @@ static void draw_shop(float x0, float y0, float x1, float y1) {
     if (item) {
         int owned = 0;
         for (int i = 0; i < 40; i++) owned += (int)r8(INVENTORY + (unsigned)i) == item;
-        if (sell) snprintf(t, sizeof t, item_price(item) ? "Sells for %d mst" : "Cannot be sold", item_price(item) / 2);
-        else if (buy.qty > 1) snprintf(t, sizeof t, "In the pack: %d   Buying %d", owned, buy.qty);
-        else snprintf(t, sizeof t, "In the pack: %d", owned);
+        if (sell) snprintf(t, sizeof t, item_price(item) ? TRF("Sells for %d mst") : "Cannot be sold", item_price(item) / 2);
+        else if (buy.qty > 1) snprintf(t, sizeof t, TRF("In the pack: %d   Buying %d"), owned, buy.qty);
+        else snprintf(t, sizeof t, TRF("In the pack: %d"), owned);
         text(px0 + 9.0f, py0 + 13.5f, t, SOFT);
     } else {
         text(px0 + 9.0f, py0 + 13.5f, "Party", FAINT);
@@ -1888,7 +1895,7 @@ static void draw_shop(float x0, float y0, float x1, float y1) {
         text(px0 + 9.0f, base, UI_CHAR_NAMES[members[i]], !item ? FAINT : worn && !can ? FAINT : WHITE);
         if (!item) continue;
         if (!worn) {
-            snprintf(t, sizeof t, "HP %u/%u", r16(rec + C_HP), r16(rec + C_HP + 2));
+            snprintf(t, sizeof t, TRF("HP %u/%u"), r16(rec + C_HP), r16(rec + C_HP + 2));
             text_right(x1 - 9.0f, base, t, SOFT);
         } else if (!can) {
             text_right(x1 - 9.0f, base, "cannot use", FAINT);
@@ -1897,7 +1904,7 @@ static void draw_shop(float x0, float y0, float x1, float y1) {
             int wearing = 0;
             for (int k = 0; k < 4; k++) wearing |= (int)r8(rec + C_EQUIP + (unsigned)k) == item;
             if (wearing && !d) snprintf(t, sizeof t, "wearing it");
-            else snprintf(t, sizeof t, "%s %+d", weapon ? "Attack" : "Defense", d);
+            else snprintf(t, sizeof t, "%s %+d", TR(weapon ? "Attack" : "Defense"), d);
             text_right(x1 - 9.0f, base, t, d > 0 ? UP : d < 0 ? DOWN : SOFT);
         }
     }
@@ -1906,9 +1913,9 @@ static void draw_shop(float x0, float y0, float x1, float y1) {
 /* ---- macros: the eight across the top, the turns of the one chosen, who acts next, what they do */
 static void macro_turn(unsigned at, int brief, char *out, size_t n) {
     int what = (int)r8(at + 1), id = (int)r8(at + 2);
-    if (what == 2) snprintf(out, n, "%s: %s", brief ? "Tech" : "Technique", ui_tech_name(id));
-    else if (what == 3) snprintf(out, n, "Skill: %s", ui_skill_name(id));
-    else if (what == 4) snprintf(out, n, "Item: %s", ui_item_name(id));
+    if (what == 2) snprintf(out, n, "%s: %s", TR(brief ? "Tech" : "Technique"), ui_tech_name(id));
+    else if (what == 3) snprintf(out, n, TRF("Skill: %s"), ui_skill_name(id));
+    else if (what == 4) snprintf(out, n, TRF("Item: %s"), ui_item_name(id));
     else snprintf(out, n, "%s", what == 1 ? "Attack" : what == 5 ? "Defend" : "");
 }
 
@@ -1947,7 +1954,7 @@ static void draw_macros(float x0, float y0, float x1, float y1) {
     if (who_open && n > chosen) n = chosen;
     char t[64];
     win(x0, by0, px1, by1);
-    snprintf(t, sizeof t, "Macro %c", 'A' + letter);
+    snprintf(t, sizeof t, TRF("Macro %c"), 'A' + letter);
     text(x0 + 9.0f, by0 + 13.5f, t, SOFT);
     if (!n && !setting) text(x0 + 9.0f, by0 + 30.0f, "Not set", FAINT);
     for (int i = 0; i < n || (i == n && who_open && i < 5); i++) {
@@ -1974,7 +1981,7 @@ static void draw_macros(float x0, float y0, float x1, float y1) {
     win(px1 + 3.0f, by0, x1, by1);
     if (who_open && chosen < 5) {
         int left = turns - chosen, cursor = (int)r8(OPTION_3);
-        snprintf(t, sizeof t, "Acts %s", NTH[chosen]);
+        snprintf(t, sizeof t, TRF("Acts %s"), TR(NTH[chosen]));
         text(px1 + 12.0f, by0 + 13.5f, t, SOFT);
         for (int i = 0; i < left && i < 5; i++) {
             float base = by0 + 30.0f + (float)i * 14.5f;
@@ -2010,14 +2017,14 @@ static void draw_macros(float x0, float y0, float x1, float y1) {
 
     char a[160] = "", b[120] = "";
     if (now == R_MACRO_LETTERS) {
-        if (n) snprintf(a, sizeof a, "Macro %c: %d turn%s. Choose it to set it up anew.", 'A' + letter, n, n == 1 ? "" : "s");
-        else snprintf(a, sizeof a, "Macro %c is not set. Choose it to set it up.", 'A' + letter);
+        if (n) snprintf(a, sizeof a, TRF("Macro %c: %d turn%s. Choose it to set it up anew."), 'A' + letter, n, n == 1 ? "" : "s");
+        else snprintf(a, sizeof a, TRF("Macro %c is not set. Choose it to set it up."), 'A' + letter);
         snprintf(b, sizeof b, "In battle a macro plays its turns in this order.");
     } else if (now == R_MACRO_WHO && chosen < 5) {
-        snprintf(a, sizeof a, "Who acts %s?", NTH[chosen]);
+        snprintf(a, sizeof a, TRF("Who acts %s?"), TR(NTH[chosen]));
     } else if (now == R_MACRO_DO) {
         int id = (int)r8(MACRO_LEFT + (unsigned)chosen * 5u + (r8(OPTION_3) % 5u));
-        snprintf(a, sizeof a, "What does %s do?", id < 11 ? UI_CHAR_NAMES[id] : "this one");
+        snprintf(a, sizeof a, TRF("What does %s do?"), id < 11 ? TR(UI_CHAR_NAMES[id]) : TR("this one"));
     } else if (now == R_MACRO_TECHS) snprintf(a, sizeof a, "Which technique?");
     else if (now == R_MACRO_SKILLS) snprintf(a, sizeof a, "Which skill?");
     else if (now == R_MACRO_ITEMS) snprintf(a, sizeof a, "Which item?");
@@ -2153,7 +2160,7 @@ static void draw_equip(float x0, float y0, float x1, float y1) {
             if (focus == F_LIST) c = sc = NAVY;
         }
         text(rx0 + 8.0f, base, ui_item_name(item), c);
-        snprintf(t, sizeof t, "%s %d", weapon ? "Atk" : "Def", item_bonus(item, weapon ? 0x0F : 0x10));
+        snprintf(t, sizeof t, "%s %d", TR(weapon ? "Atk" : "Def"), item_bonus(item, weapon ? 0x0F : 0x10));
         text_right(x1 - 8.0f, base, t, sc);
     }
     if (first > 0) ui_triangle(&cv, (x1 - 7.0f) * S, (by0 + 4.5f) * S, 2.6f * S, 1, WHITE, 255);
@@ -2164,7 +2171,7 @@ static void draw_equip(float x0, float y0, float x1, float y1) {
     int about = 0;
     if (focus == F_MEMBER) snprintf(a, sizeof a, "Whose equipment?");
     else if (focus == F_NOTHING) {
-        snprintf(a, sizeof a, "%s has nothing else to put on.", UI_CHAR_NAMES[id]);
+        snprintf(a, sizeof a, TRF("%s has nothing else to put on."), TR(UI_CHAR_NAMES[id]));
         snprintf(b, sizeof b, "Left: take something off.");
     } else if (focus == F_FULL) snprintf(a, sizeof a, "The pack is full: nothing can be taken off.");
     else if (focus == F_HAND) {
@@ -2236,7 +2243,7 @@ static void draw_system(float x0, float y0, float x1, float y1) {
     if (sel == 0) {
         int saving = at == R_SYS_SAVE || at == R_SYS_YESNO, cur = (int)r8(OPTION_2), page = savepages_page();
         if (savepages_count() > 1) {                     /* which of the twelve these are; Left / Right: the others */
-            snprintf(t, sizeof t, "%d to %d of %d", page * 3 + 1, page * 3 + 3, savepages_count() * 3);
+            snprintf(t, sizeof t, TRF("%d to %d of %d"), page * 3 + 1, page * 3 + 3, savepages_count() * 3);
             text_right(x1 - 30.0f, y0 + 14.0f, t, SOFT);
             ui_triangle(&cv, (x1 - 22.0f) * S, (y0 + 11.2f) * S, 5.0f * S, 3, saving ? WHITE : FAINT, 255);
             ui_triangle(&cv, (x1 - 12.0f) * S, (y0 + 11.2f) * S, 5.0f * S, 2, saving ? WHITE : FAINT, 255);
@@ -2277,13 +2284,13 @@ static void draw_system(float x0, float y0, float x1, float y1) {
             float tx = cx0 + 24.0f + (ps >= 10.0f ? 5.0f * (ps + 2.0f) + 5.0f : 0.0f);
             if (n) {
                 text(tx, mid - 2.2f, UI_CHAR_NAMES[ids[0]], WHITE);
-                snprintf(t, sizeof t, "LV %u", (unsigned)(slot[0x400 + ids[0] * 0x80 + 8] << 8 | slot[0x400 + ids[0] * 0x80 + 9]));
+                snprintf(t, sizeof t, TRF("LV %u"), (unsigned)(slot[0x400 + ids[0] * 0x80 + 8] << 8 | slot[0x400 + ids[0] * 0x80 + 9]));
                 text_right(cx1 - 7.0f, mid - 2.2f, t, WHITE);
             }
             text(tx, mid + 9.0f, slot[0x300] < 6 ? WORLDS[slot[0x300]] : "", SOFT);
             thousands((unsigned long)slot[0x338] << 24 | (unsigned long)slot[0x339] << 16 | (unsigned long)slot[0x33A] << 8
                       | slot[0x33B], t, sizeof t - 5);
-            strcat(t, " mst");
+            snprintf(t + strlen(t), sizeof t - strlen(t), " %s", TR("mst"));
             text_right(cx1 - 7.0f, mid + 9.0f, t, SOFT);
         }
     } else if (sel == 1 || sel == 2) {
@@ -2303,7 +2310,7 @@ static void draw_system(float x0, float y0, float x1, float y1) {
         text(x + 6.0f, base, "Slow", SOFT);
         /* the other speed, as it is set: both are in view */
         int other = (int)r8(sel == 1 ? BATTLE_SPEED : MESSAGE_SPEED);
-        snprintf(t, sizeof t, "%s: %d of 5", NAMES[sel == 1 ? 2 : 1], other + 1);
+        snprintf(t, sizeof t, TRF("%s: %d of 5"), TR(NAMES[sel == 1 ? 2 : 1]), other + 1);
         text(rx0 + 12.0f, base + 22.0f, t, FAINT);
     } else {
         /* the layouts, in the game's order: what A, B and C do */
@@ -2339,11 +2346,12 @@ static void draw_system(float x0, float y0, float x1, float y1) {
     }
     if (!strncmp(said, "Save in number", 14)) snprintf(said, sizeof said, "Save in which slot?");
     else if (said[0] >= '1' && said[0] <= '3' && !strncmp(said + 1, "-File has been saved", 20))    /* "2-File has been saved." */
-        snprintf(said, sizeof said, "Saved in slot %d.", savepages_page() * 3 + (said[0] - '0'));
+        snprintf(said, sizeof said, TRF("Saved in slot %d."), savepages_page() * 3 + (said[0] - '0'));
     else if (!strncmp(said, "Choose message speed", 20) || !strncmp(said, "Choose battle speed", 19))
         snprintf(said, sizeof said, "Left and Right change it; it is set as you go.");
     else if (!strncmp(said, "Choose button settings", 22)) snprintf(said, sizeof said, "Choose what A, B and C do.");
     else if (!strncmp(said, "Previous Data", 13)) memcpy(said, "Previous data", 13);
+    known_words(said, sizeof said);
     foot(rx0, x1, y1, said[0] ? said : HELP[sel],
          at == R_SYS_SAVE && savepages_count() > 1 ? "Left and Right: the other slots." : NULL);
     if (at == R_SYS_YESNO) {                             /* its yes and no, at the foot's right */
@@ -2423,7 +2431,7 @@ void fieldmenu_draw(uint32_t *out, int stride, int scale, int w, int h) {
         /* a banner while the game is taken through it: "Starting Land-Rover", the dots counting */
         char t[64];
         int dots = (vseq.shown++ / 12) % 4;
-        snprintf(t, sizeof t, "Starting %s", ui_item_name(VEH_ITEM[vseq.kind]));
+        snprintf(t, sizeof t, TRF("Starting %s"), ui_item_name(VEH_ITEM[vseq.kind]));
         float cap = CAP * 1.25f, tw = ui_text_width(t, cap * S) / S, dw = ui_text_width("...", cap * S) / S;
         float cx = (rx0 + W - m) / 2.0f, cy = H / 2.0f, bw = tw + dw + 36.0f;
         win(cx - bw / 2.0f, cy - 16.0f, cx + bw / 2.0f, cy + 16.0f);
@@ -2463,7 +2471,7 @@ void fieldmenu_draw(uint32_t *out, int stride, int scale, int w, int h) {
             char line[3][128];
             int lines = 0;
             for (int cy = 0; cy < p->h - 2 && cy < 28 && lines < 3; cy++)
-                if (row_text(p, cy, line[lines], (int)sizeof line[0])) lines++;
+                if (row_text(p, cy, line[lines], (int)sizeof line[0])) known_words(line[lines++], sizeof line[0]);
             if (!p->boxes && lines <= 2 && p->w >= 20) {     /* a message */
                 if (!pass) continue;
                 win(rx0, H - m - 27.0f, W - m, H - m);

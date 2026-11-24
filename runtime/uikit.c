@@ -8,6 +8,7 @@
 #include "par.h"
 #include "scalex.h"
 #include "spritemod.h"
+#include "translate.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -74,9 +75,9 @@ static void load_names(void) {
     names_ready = 1;
 }
 
-const char *ui_item_name(int id) { load_names(); return id > 0 && id < 256 ? items[id].name : ""; }
-const char *ui_tech_name(int id) { load_names(); return id > 0 && id <= 40 ? techs[id].name : ""; }
-const char *ui_skill_name(int id) { load_names(); return id > 0 && id <= 54 ? skills[id].name : ""; }
+const char *ui_item_name(int id) { load_names(); return id > 0 && id < 256 ? TR(items[id].name) : ""; }
+const char *ui_tech_name(int id) { load_names(); return id > 0 && id <= 40 ? TR(techs[id].name) : ""; }
+const char *ui_skill_name(int id) { load_names(); return id > 0 && id <= 54 ? TR(skills[id].name) : ""; }
 
 /* ------------------------------------------------------------------ portraits */
 #define FACE_FRAMES 8                                /* a mod's portrait may have frames that play (spritemod_still_now) */
@@ -656,22 +657,31 @@ float ui_text_center(const UiCanvas *cv, float x_mid, float base, float cap, con
     return ui_text(cv, x_mid - ui_text_width(s, cap) / 2, base, cap, s, c, alpha);
 }
 
-int ui_text_lines(float width, float cap, const char *s) {
+/* how much of s fits into `width`: whole words, or (Chinese, Japanese, Korean) whole characters; its bytes */
+int ui_text_fit(const char *s, float width, float cap) {
     char line[256];
+    int best = 0, i = 0;
+    while (s[i]) {
+        unsigned char c = (unsigned char)s[i];
+        int n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4, wide = c >= 0xE3 && c <= 0xED;
+        for (int k = 1; k < n; k++) if (!s[i + k]) n = k;
+        i += n;
+        if (s[i] && s[i] != ' ' && !wide) continue;          /* a place it may break at */
+        if (i >= (int)sizeof line) break;
+        memcpy(line, s, (size_t)i);
+        line[i] = 0;
+        if (best && ui_text_width(line, cap) > width) break;
+        best = i;
+    }
+    return best;
+}
+
+int ui_text_lines(float width, float cap, const char *s) {
     int lines = 0;
+    s = TR(s);
     while (*s) {
         while (*s == ' ') s++;
-        int best = 0, i = 0;
-        for (;;) {
-            while (s[i] && s[i] != ' ') i++;
-            if (i >= (int)sizeof line) break;
-            memcpy(line, s, (size_t)i);
-            line[i] = 0;
-            if (best && ui_text_width(line, cap) > width) break;
-            best = i;
-            if (!s[i]) break;
-            i++;
-        }
+        int best = ui_text_fit(s, width, cap);
         if (!best) break;
         lines++;
         s += best;
@@ -681,31 +691,23 @@ int ui_text_lines(float width, float cap, const char *s) {
 
 int ui_text_wrap(const UiCanvas *cv, float x, float base, float width, float line_h, int max_lines,
                  float cap, const char *s, uint32_t c, int alpha) {
-    char line[256];
+    char line[260];
     int lines = 0;
+    s = TR(s);
     while (*s && lines < max_lines) {
         while (*s == ' ') s++;
-        /* the longest run of whole words that fits */
-        int best = 0, i = 0;
-        for (;;) {
-            while (s[i] && s[i] != ' ') i++;
-            if (i >= (int)sizeof line) break;
-            memcpy(line, s, (size_t)i);
-            line[i] = 0;
-            if (best && ui_text_width(line, cap) > width) break;
-            best = i;
-            if (!s[i]) break;
-            i++;
-        }
+        int best = ui_text_fit(s, width, cap);
         if (!best) break;
+        memcpy(line, s, (size_t)best);
+        line[best] = 0;
         if (lines == max_lines - 1 && s[best]) {                 /* last line: cut with an ellipsis */
             int n = best;
-            memcpy(line, s, (size_t)n);
             strcpy(line + n, "\xE2\x80\xA6");
-            while (n > 0 && ui_text_width(line, cap) > width) { n--; memcpy(line + n, "\xE2\x80\xA6", 4); }
-        } else {
-            memcpy(line, s, (size_t)best);
-            line[best] = 0;
+            while (n > 0 && ui_text_width(line, cap) > width) {
+                n--;
+                while (n > 0 && ((unsigned char)line[n] & 0xC0) == 0x80) n--;
+                memcpy(line + n, "\xE2\x80\xA6", 4);
+            }
         }
         ui_text(cv, x, base + (float)lines * line_h, cap, line, c, alpha);
         lines++;

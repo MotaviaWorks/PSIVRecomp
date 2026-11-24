@@ -97,6 +97,312 @@ Vehicles|0|6C024.F
 The opening's words|1|2AAB9C.1A;2AABB7.1E;2AABD6.15;2AABEC.1E;2AAC0B.12;2AAC1E.16;2AAC35.17;2AAC4D.19;2AAC68.16;2AAC7F.15;2AAC96.1D;2AACB4.10;2AACC5.1F;2AACE5.18;2AACFE.17;2AAD16.9;2AAD21.1A;2AAD3C.7;2AAD44.1A;2AAD5F.1B;2AAD7B.A;2AAD86.1F;2AADA6.18;2AADBF.18;2AADD8.1E;2AADF7.9;2AAE02.11;2AAE14.19;2AAE2E.1C;2AAE4B.1C;2AAE68.17;2AAE81.18;2AAE9B.1D;2AAEB9.20;2AAEDA.7;2AAEE2.1B;2AAEFE.1B;2AAF1A.16;2AAF31.D;2AAF40.17;2AAF58.1C;2AAF75.1F;2AAF95.1A
 """
 
+# The port's own words (port_words.py writes them here): heading|id|words.
+PORT_WORDS = """\
+Field menu and shops|P8BA9331D|Attack
+Field menu and shops|PFCBB60F3|Defense
+Field menu and shops|PA87EB75B|Magic def
+Field menu and shops|PDA4D03D0|Strength
+Field menu and shops|P9763A898|Mental
+Field menu and shops|P1878A5D8|Agility
+Field menu and shops|P43A80F2F|Dexterity
+Field menu and shops|PEC626DC8|Weapon, one hand
+Field menu and shops|P4F23606B|Weapon, one hand, wide
+Field menu and shops|P96C33718|Weapon, both hands
+Field menu and shops|PB2A2629B|Weapon, both hands, wide
+Field menu and shops|P798A26D0|Shield
+Field menu and shops|PED90E9C4|Headgear
+Field menu and shops|P84B84174|Armor
+Field menu and shops|P29539674|. In battle: %s
+Field menu and shops|P0F7E1B30|For
+Field menu and shops|PA4995035|Down
+Field menu and shops|PC85B0F08|Par
+Field menu and shops|PE19FB9BB|Paralyzed
+Field menu and shops|PD47DB42E|Psn
+Field menu and shops|P45133928|Poisoned
+Field menu and shops|P36C2FDCE|Slp
+Field menu and shops|P2972214F|Asleep
+Field menu and shops|PD87CA2C0|Seal
+Field menu and shops|P0FEB83C1|Sealed
+Field menu and shops|P70EB52E5|HP
+Field menu and shops|P28F56EE9|TP
+Field menu and shops|P7AE26847|LV
+Field menu and shops|P1436F39F|MST
+Field menu and shops|PB75D3688|EXP
+Field menu and shops|P549C27B9|ATK
+Field menu and shops|P2F0C9694|DFS
+Field menu and shops|P9CE88735|POW
+Field menu and shops|P4A398738|MTL
+Field menu and shops|P85E4B82F|OK
+Field menu and shops|P108524AC|Drop
+Field menu and shops|PE036382F|Items
+Field menu and shops|PAB77E26E|Techniques
+Field menu and shops|PAB6A56BF|Skills
+Field menu and shops|PFBA7F597|Equipment
+Field menu and shops|P005EF20F|Status
+Field menu and shops|P96D3996F|Talk
+Field menu and shops|P91333700|Macros
+Field menu and shops|PEC508967|Mumble
+Field menu and shops|P7C5F00F4|Vehicles
+Field menu and shops|PCF80443F|mst
+Field menu and shops|PBA1C5C94|Use
+Field menu and shops|P69960BB6|Look
+Field menu and shops|P1E706C21|Discard
+Field menu and shops|PD953AEBA|Use the %s on whom?
+Field menu and shops|PA1D7DA9F|Look the %s over.
+Field menu and shops|P271110E4|Throw the %s away.
+Field menu and shops|PCA15D036|skill
+Field menu and shops|P9C73CF49|technique
+Field menu and shops|P5B7A8AE1|TP %d/%u
+Field menu and shops|P1B2945BB|No skill to use here
+Field menu and shops|P9AB1A3F8|No technique to use here
+Field menu and shops|P204417A0|%d TP
+Field menu and shops|P1FA54467|Whose %ss?
+Field menu and shops|P9C0F77A4|Those that can be used outside battle.
+Field menu and shops|PBAEFDB69|Use %s on whom?
+Field menu and shops|P18E78237|Order
+Field menu and shops|PB90ADEB3|The order the party stands in.
+Field menu and shops|PEAEFF00F|Each member's profile, techniques and skills.
+Field menu and shops|PCFAF0169|Level %u
+Field menu and shops|PEC91B562|Age %u
+Field menu and shops|PBC1ED0B1|Age ?
+Field menu and shops|PACE39749|Experience
+Field menu and shops|P3B536F9F|To next level
+Field menu and shops|PB2972AE3|Head
+Field menu and shops|P21164B06|R hand
+Field menu and shops|P305EACAC|L hand
+Field menu and shops|P428A1095|Body
+Field menu and shops|P1709CAA1|(both hands)
+Field menu and shops|PF037C20C|Whose status?
+Field menu and shops|P085E6F39|%s: the profile, page 1 of 3.
+Field menu and shops|P08770D23|Choose again for the techniques.
+Field menu and shops|P326E1CB6|No skills yet
+Field menu and shops|PCE6E932F|No techniques yet
+Field menu and shops|P95414953|%s: the skills and the uses left, page 3 of 3.
+Field menu and shops|PE854C185|Choose again to pick another member.
+Field menu and shops|PB8C547C6|%s: the techniques and what each costs, page 2 of 3.
+Field menu and shops|P6857410C|Choose again for the skills.
+Field menu and shops|PCADA780B|Buy
+Field menu and shops|PDE897825|Sell
+Field menu and shops|PE50B9F5E|%d x %s: %d meseta in all.
+Field menu and shops|P8D007269|Is that OK?
+Field menu and shops|P6EA71022|The pack is empty
+Field menu and shops|P9A583AF4|Nothing for sale
+Field menu and shops|PBE45E90A|Sells for %d mst
+Field menu and shops|PDCF47B7B|Cannot be sold
+Field menu and shops|PE71225A0|In the pack: %d   Buying %d
+Field menu and shops|PD8E4AD6D|In the pack: %d
+Field menu and shops|P32B29937|Party
+Field menu and shops|PA7C0EBD8|HP %u/%u
+Field menu and shops|P3794C319|cannot use
+Field menu and shops|PCE42F3DB|wearing it
+Field menu and shops|P24254D91|Tech
+Field menu and shops|P6AC350E9|Technique
+Field menu and shops|PD82E6888|Skill: %s
+Field menu and shops|P595DD1F8|Item: %s
+Field menu and shops|P3D4856E1|Defend
+Field menu and shops|P4881D841|first
+Field menu and shops|PABF8D4DD|second
+Field menu and shops|P69F9493E|third
+Field menu and shops|P4B3E1071|fourth
+Field menu and shops|PAC93D31E|fifth
+Field menu and shops|P1DBB4005|Macro %c
+Field menu and shops|PD7958FC6|Not set
+Field menu and shops|P6FD141D6|Skill
+Field menu and shops|P1F648006|Item
+Field menu and shops|P024E587C|Acts %s
+Field menu and shops|P87F628D1|Macro %c: %d turn%s. Choose it to set it up anew.
+Field menu and shops|P5F77DCE9|Macro %c is not set. Choose it to set it up.
+Field menu and shops|PB08318C7|In battle a macro plays its turns in this order.
+Field menu and shops|P1AEE6A81|Who acts %s?
+Field menu and shops|P797DB4C6|What does %s do?
+Field menu and shops|PEB010571|this one
+Field menu and shops|P8ABD2C4D|Which technique?
+Field menu and shops|P26F85EA0|Which skill?
+Field menu and shops|P5A7915EE|Which item?
+Field menu and shops|PBB02E857|Nothing to put on
+Field menu and shops|P74EC0BF9|Atk
+Field menu and shops|P2A5E7F2C|Def
+Field menu and shops|P47082FD4|Whose equipment?
+Field menu and shops|PA6D470A6|%s has nothing else to put on.
+Field menu and shops|P2BF5E98E|Left: take something off.
+Field menu and shops|PAB32603A|The pack is full: nothing can be taken off.
+Field menu and shops|PD484CAFC|Which hand?
+Field menu and shops|PA7006E9A|Nothing here.
+Field menu and shops|P780CC8CC|Choose it to take it off. Right: the list.
+Field menu and shops|P100E9C04|Right: the list.
+Field menu and shops|P4D2D5D68|Save
+Field menu and shops|P16203207|Message speed
+Field menu and shops|P4333FCB0|Battle speed
+Field menu and shops|P014251C6|Buttons
+Field menu and shops|P4EE1BEAD|Save the game in one of these slots.
+Field menu and shops|P5B79CD9B|How fast the words appear when someone speaks.
+Field menu and shops|P08445B7D|How fast a battle's messages go by.
+Field menu and shops|P60F6DF63|What the A, B and C buttons do.
+Field menu and shops|PA67AA5FE|Motavia
+Field menu and shops|PE02B66EF|Dezolis
+Field menu and shops|P96FD54BF|Rykros
+Field menu and shops|P73CDCAEB|Zelan
+Field menu and shops|P5DBCA69E|Kuran
+Field menu and shops|P9B263934|The Air Castle
+Field menu and shops|P8F3184BC|System
+Field menu and shops|PB5B99330|%d to %d of %d
+Field menu and shops|PD1571F8E|Empty
+Field menu and shops|P0483A22F|LV %u
+Field menu and shops|P853AB7CF|Fast
+Field menu and shops|PEDC18ED8|Slow
+Field menu and shops|PA0314A68|%s: %d of 5
+Field menu and shops|P61C4D853|Camp menu
+Field menu and shops|P35AFCA3B|Cancel
+Field menu and shops|P28B19AF7|now
+Field menu and shops|P3661C397|Save in which slot?
+Field menu and shops|P3C3D2698|Saved in slot %d.
+Field menu and shops|PD52EBAAF|Left and Right change it; it is set as you go.
+Field menu and shops|PB2740F0C|Choose what A, B and C do.
+Field menu and shops|P714CE57B|Left and Right: the other slots.
+Field menu and shops|PB3A43630|Yes
+Field menu and shops|P61E6BE1A|No
+Field menu and shops|P1A1148CB|Starting %s
+Battle menus|P360BA433|Strike an enemy with your weapon.
+Battle menus|P785BBBFD|Use a technique. Costs TP.
+Battle menus|P7FAD3983|Use a skill. Its uses come back with rest.
+Battle menus|P909472E9|Use something from the pack, or what you wear.
+Battle menus|P1EFF2909|Brace, and take less damage this turn.
+Battle menus|PC67C8F52|Command
+Battle menus|P089E4D73|Macro
+Battle menus|P8D57E66A|Run
+Battle menus|P0FE27C62|Choose what each member does.
+Battle menus|P330BC192|Play back a plan you have saved.
+Battle menus|PB5046167|Try to get away.
+Battle menus|P26691DA4|TP %u/%u
+Battle menus|PC86BA556|uses left
+Battle menus|PC87BBF5A|Equipped.
+Battle menus|P8ACAF570|column %d/%d
+Battle menus|PDC07C1E0|Land Rover
+Battle menus|P3D43DE4E|Ice Digger
+Battle menus|PC9481D47|Hydrofoil
+Battle menus|PF06BB5ED|Cluster
+Battle menus|PB15AEBB7|Graviton
+Battle menus|P2DF49E97|Thunder Grid
+Battle menus|PC9AE279C|X-Burst
+Battle menus|P7CCC78C0|Napalm
+Battle menus|PF4D1ACE9|N-Sphere
+Battle menus|P4F63BD71|Physical damage to all enemies.
+Battle menus|PDB6A4466|Gravity damage to all enemies.
+Battle menus|P1B8C05DF|Electric damage to all enemies.
+Battle menus|P68D58656|Energy damage to all enemies.
+Battle menus|P59507522|Fire damage to all enemies.
+Battle menus|P2D1276DB|May destroy all enemies outright.
+Battle menus|P56D7D556|Weapons
+Battle menus|P26514F15|Fire the main gun.
+Battle menus|PD64BE424|Use one of the vehicle's special weapons.
+Battle menus|P67029C76|SP
+Battle menus|P5A8F5C46|None left.
+Battle menus|P38DBEB04|On whom?  %s
+Battle menus|PF483D9A0|On whom?
+Battle menus|P59049079|Choose a technique.
+Battle menus|P7A4F8DD4|Choose a skill.
+Battle menus|P2A9CD318|Choose an item.
+What techniques, skills and items do|P17C2417B|Fire damage to one enemy.
+What techniques, skills and items do|PEE8B31D2|Strong fire damage to one enemy.
+What techniques, skills and items do|P165CDF24|Very strong fire damage to one enemy.
+What techniques, skills and items do|PD1BE9F8C|Ice damage to one enemy.
+What techniques, skills and items do|PC282FC7F|Strong ice damage to one enemy.
+What techniques, skills and items do|PF70326D9|Very strong ice damage to one enemy.
+What techniques, skills and items do|P610D5476|Light-element damage to one enemy.
+What techniques, skills and items do|PA8053905|Strong light-element damage to one enemy.
+What techniques, skills and items do|P89DB0713|Very strong light-element damage to one enemy.
+What techniques, skills and items do|PE2902698|Wind damage to all enemies (physical).
+What techniques, skills and items do|P683F4B9B|Strong wind damage to all enemies (physical).
+What techniques, skills and items do|PC6E3C6F5|Very strong wind damage to all enemies (physical).
+What techniques, skills and items do|PC5E9201D|Strong gravity damage to all enemies.
+What techniques, skills and items do|PA142791B|Very strong gravity damage to all enemies.
+What techniques, skills and items do|P19822375|Massive light-element damage to all enemies.
+What techniques, skills and items do|P5543BEC7|May instantly destroy all enemies; works best on machines.
+What techniques, skills and items do|P0F8C24C0|May instantly defeat one enemy (bio).
+What techniques, skills and items do|P194BA6FD|May instantly defeat all enemies (bio).
+What techniques, skills and items do|P5694CF6B|May lower all enemies' attack power (bio).
+What techniques, skills and items do|PB1EB15C7|May lower all enemies' agility (bio).
+What techniques, skills and items do|PB3A8628C|May seal all enemies' techniques (psychic).
+What techniques, skills and items do|P723261AA|May put all enemies to sleep (psychic).
+What techniques, skills and items do|P92DAEA03|Restores some HP to one ally (not androids).
+What techniques, skills and items do|P95ECAEC0|Restores a good amount of HP to one ally (not androids).
+What techniques, skills and items do|PBE14E964|Restores a large amount of HP to one ally (not androids).
+What techniques, skills and items do|P9BE1830E|Restores some HP to all allies (not androids).
+What techniques, skills and items do|PB31C155D|Restores a good amount of HP to all allies (not androids).
+What techniques, skills and items do|PB0B9F331|Restores a large amount of HP to all allies (not androids).
+What techniques, skills and items do|P60925059|Raises one ally's attack power (not androids).
+What techniques, skills and items do|P6015580D|Raises the whole party's agility.
+What techniques, skills and items do|P9DEC5EB8|Raises the whole party's defense.
+What techniques, skills and items do|P87745511|Makes the whole party resistant to psychic effects.
+What techniques, skills and items do|PA5873D88|Cures one ally of poison.
+What techniques, skills and items do|PEFACF64E|Cures one ally of paralysis.
+What techniques, skills and items do|PD6E04DAC|Revives one fallen ally at 1/4 max HP (not androids).
+What techniques, skills and items do|P0AB82EC1|Fully restores one ally, reviving if fallen (not androids).
+What techniques, skills and items do|PDBDD60F1|Wakes up all sleeping allies.
+What techniques, skills and items do|PB4AB7A3A|Outside battle: warps the party to a visited town.
+What techniques, skills and items do|P030A4AE2|Outside battle: warps the party out of the dungeon.
+What techniques, skills and items do|PD56AA11A|Powerful weapon strike on one enemy; needs sword or dagger.
+What techniques, skills and items do|PD3D3F93B|Light-element strike on one enemy; needs sword or dagger.
+What techniques, skills and items do|PFE103540|Powerful weapon strike on one enemy; needs a claw.
+What techniques, skills and items do|PA349A164|Very strong energy damage to one enemy.
+What techniques, skills and items do|PF9EB9983|Focuses a slasher throw on one enemy for extra damage.
+What techniques, skills and items do|P16953621|Weapon attack on all enemies; needs sword or dagger.
+What techniques, skills and items do|P319C3389|Weapon attack on all enemies; needs a claw.
+What techniques, skills and items do|P31B00D4F|Very strong lightning damage to all enemies.
+What techniques, skills and items do|PB15A9243|Very strong holy damage to all enemies.
+What techniques, skills and items do|P9DA7B154|Massive energy damage to all enemies.
+What techniques, skills and items do|P4A912F8A|Very strong physical damage to all enemies.
+What techniques, skills and items do|P2E8F1912|Weapon attack on all enemies; needs an axe.
+What techniques, skills and items do|P0FFCEB9C|May instantly destroy one enemy.
+What techniques, skills and items do|P27AC549D|May instantly defeat one enemy (bio); needs a dagger.
+What techniques, skills and items do|P9597831E|May instantly destroy one enemy (mechanical).
+What techniques, skills and items do|P1CCBB99B|May instantly defeat one enemy (bio); needs a slasher.
+What techniques, skills and items do|P6BC501A6|May instantly exorcise one enemy.
+What techniques, skills and items do|PE218F1E1|May instantly destroy all enemies.
+What techniques, skills and items do|P44F4A79E|May lower all enemies' agility (psychic).
+What techniques, skills and items do|P121B58AA|May lower all enemies' attack power (psychic).
+What techniques, skills and items do|P9DE3A493|May put one enemy to sleep (psychic); needs sword or dagger.
+What techniques, skills and items do|P5465DAF6|May put all enemies to sleep (mechanical).
+What techniques, skills and items do|PC811DE11|May put all enemies to sleep (psychic); needs a slasher.
+What techniques, skills and items do|PB786AA45|May instantly destroy one enemy; needs an axe.
+What techniques, skills and items do|P0E7D4265|May put one enemy to sleep (psychic).
+What techniques, skills and items do|PB96864B6|Raises the whole party's defense against techniques.
+What techniques, skills and items do|PD13A7071|Raises the user's attack power.
+What techniques, skills and items do|PAFFDD47B|Restores a large amount of the user's HP.
+What techniques, skills and items do|PBB6646FC|Restores a good amount of HP to one ally, androids too.
+What techniques, skills and items do|P4E1D1B47|Restores a good amount of HP to all allies, androids too.
+What techniques, skills and items do|PE1663FE6|Revives, cures and heals all allies (not androids).
+What techniques, skills and items do|P2EB2D37C|Restores TP to all allies.
+What techniques, skills and items do|P28961DEA|Slightly raises all allies' dexterity (not androids).
+What techniques, skills and items do|P0F9569DE|May instantly defeat one enemy (bio); needs a claw.
+What techniques, skills and items do|PAAC3F5F9|Restores about 32 HP to one ally (not androids).
+What techniques, skills and items do|P944ECA43|Cancels all enemies' stat changes and protective effects.
+What techniques, skills and items do|P163D34CF|Lightning damage to one enemy.
+What techniques, skills and items do|P2D42AE0B|Wind damage to one enemy (physical).
+What techniques, skills and items do|P933433A9|Restores about 64 HP to all allies (not androids).
+What techniques, skills and items do|PB4C35928|Holy damage to all enemies.
+What techniques, skills and items do|P8589CB5B|Raises the user's agility (not androids).
+What techniques, skills and items do|PAA89A885|Raises the user's attack power (not androids).
+What techniques, skills and items do|P9BBDAE5A|Restores about 48 HP to one ally (not androids).
+What techniques, skills and items do|P458EA793|Restores about 96 HP to one ally (not androids).
+What techniques, skills and items do|P863D7941|Restores about 320 HP to one ally (not androids).
+What techniques, skills and items do|P45C2EA3E|Restores about 128 HP to all allies (not androids).
+What techniques, skills and items do|P74765E0D|Revives one fallen ally at full HP (not androids).
+What techniques, skills and items do|P570A240E|Raises the user's defense.
+What techniques, skills and items do|P05407D37|Blasts one enemy with fire damage.
+What techniques, skills and items do|P416CB56F|Fully restores one android ally, even if broken down.
+What techniques, skills and items do|P28E64DFC|Restores about 11 HP to one ally (not androids).
+What techniques, skills and items do|PCD25872D|Restores just 1-2 HP to one ally (not androids).
+Side panels|P85ED22CF|Lv %u
+Side panels|PBC3E60D1|Poison
+Side panels|PD7A2E319|max
+Side panels|P27A1C166|%lu to go
+Side panels|PF12457D4|MESETA
+Side panels|P1C70E0E7|ITEMS  %d/40
+Side panels|P7C785E94|+%d more
+"""
+
 COLUMNS = ['id', 'where', 'speaker', 'english', 'translation']
 PAGE = '{page}'
 CUT = '{cut}'                      # $F7: the box closes or the scene does something, then the line goes on
@@ -279,6 +585,9 @@ def game_lines(rom):
             if has_words(tokens):
                 out['D%02d.%03X' % (n, k)] = (WHERE[n - 1], speakers(tokens), line_text(tokens))
     out.update(short_lines(rom))
+    for row in PORT_WORDS.strip().split('\n'):
+        heading, i, text = row.split('|', 2)
+        out[i] = (heading, '', text.replace('\\n', '\n'))
     return out, total
 
 
@@ -295,6 +604,7 @@ def read_workbook(path):
 
 
 TAG = re.compile(r'\{[^{}]*\}')
+FILLS = re.compile(r'%[-+ 0#]*[0-9.]*[lhz]*[a-zA-Z]')    # what a line of the port's puts a name or a number in place of
 
 
 def tags_of(text):
@@ -326,7 +636,9 @@ def check_rows(rows, originals):
         stray = TAG.sub('', tr)
         if '{' in stray or '}' in stray:
             problems.append((i, 'a { or } that is not part of a code'))
-        if i.startswith('T'):                              # a name or a message: no codes, no boxes
+        if i.startswith('P') and FILLS.findall(tr.replace('%%', '')) != FILLS.findall(en.replace('%%', '')):
+            problems.append((i, 'it has to keep %s, in that order' % (' '.join(FILLS.findall(en)) or 'no % at all')))
+        if i[0] in 'TP':                                   # a name or a message: no codes, no boxes
             if TAG.search(tr):
                 problems.append((i, 'a name or a message takes no codes'))
             a, b = len(en.split('\n')), len(tr.strip('\n').split('\n'))

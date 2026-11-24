@@ -4,6 +4,7 @@
 #include "panels.h"
 #include "hdtext.h"
 #include "uikit.h"
+#include "translate.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -124,7 +125,7 @@ void panels_draw(uint32_t *out, int stride, int S, int margin, int view_w, int h
         float tx = px + ps + ip, name_cap = fmaxf(ps * 0.27f, P * 0.1f);   /* text grows with the panel */
         text(&left, tx, py + name_cap * 1.35f, name_cap, NAMES[ids[k]], dead ? 0x8890A8 : 0xFFFFFF);
         char buf[48];
-        snprintf(buf, sizeof buf, "Lv %u", level);
+        snprintf(buf, sizeof buf, TRF("Lv %u"), level);
         text(&left, tx, py + name_cap * 2.9f, name_cap * 0.78f, buf, 0x9FB4E8);
         /* status tag */
         const char *st = NULL;
@@ -160,7 +161,7 @@ void panels_draw(uint32_t *out, int stride, int S, int margin, int view_w, int h
         } else {
             uint32_t next = rom32(table + (level - init) * 22);
             uint32_t prev = level > init ? rom32(table + (level - init - 1) * 22) : 0;
-            snprintf(nums, sizeof nums, "%lu to go", (unsigned long)(next > exp ? next - exp : 0));
+            snprintf(nums, sizeof nums, TRF("%lu to go"), (unsigned long)(next > exp ? next - exp : 0));
             text(&left, bx0, y + lab * 1.25f, lab, "EXP", 0x9FB4E8);
             text_right(&left, bx1, y + lab * 1.25f, lab, nums, 0xFFFFFF);
             float f = next > prev ? (float)(exp > prev ? exp - prev : 0) / (float)(next - prev) : 1.0f;
@@ -184,7 +185,7 @@ void panels_draw(uint32_t *out, int stride, int S, int margin, int view_w, int h
     round_rect(&right, rx0, list_top, rx1, list_bottom, P * 0.05f, 0x2E4C9A, 140);
     round_rect(&right, rx0 + 1, list_top + 1, rx1 - 1, list_bottom - 1, P * 0.05f, 0x12204A, 235);
     char head[32];
-    snprintf(head, sizeof head, "ITEMS  %d/40", count);
+    snprintf(head, sizeof head, TRF("ITEMS  %d/40"), count);
     text(&right, rx0 + pad * 0.7f, y + cap * 1.75f, cap * 0.72f, head, 0x9FB4E8);
     float line = cap * 1.75f, item_cap = cap * 0.82f;
     y += cap * 2.3f;
@@ -195,7 +196,7 @@ void panels_draw(uint32_t *out, int stride, int S, int margin, int view_w, int h
         if (!id) continue;
         if (shown == fits - 1 && count - shown > 1) {            /* the last line says how many more */
             char more[32];
-            snprintf(more, sizeof more, "+%d more", count - shown);
+            snprintf(more, sizeof more, TRF("+%d more"), count - shown);
             text(&right, rx0 + pad * 0.7f, y + line * 0.8f, item_cap, more, 0x9FB4E8);
             break;
         }

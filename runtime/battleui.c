@@ -10,6 +10,7 @@
 #include "hdtext.h"
 #include "m68k.h"
 #include "uikit.h"
+#include "translate.h"
 #include "vdp.h"
 #include "par.h"
 
@@ -1238,7 +1239,7 @@ static int party_span(void) {
     return any;
 }
 
-typedef struct { char name[24]; char cost[12]; int usable; const char *desc; } Entry;
+typedef struct { char name[64]; char cost[12]; int usable; const char *desc; } Entry;
 
 /* a list in pages of four: the pages side by side, as many as fit. What the
  * entry under the cursor does goes to the bar (list_line). */
@@ -1324,7 +1325,7 @@ static void draw_techs(int fighter, int id, float alpha) {
     char info[32] = "";
     if (id >= 0) {
         unsigned base = CHAR_STATS + (unsigned)id * 0x80;
-        snprintf(info, sizeof info, "TP %u/%u", r16(base + 0x12), r16(base + 0x14));
+        snprintf(info, sizeof info, TRF("TP %u/%u"), r16(base + 0x12), r16(base + 0x14));
     }
     draw_list(M_TECH, "Techniques", info, entries, n, shown_cur(M_TECH, fighter, (int)r16(TECH_INDEX + (unsigned)fighter * 2) & 15), alpha);
 }
@@ -1410,14 +1411,14 @@ static void draw_items(int fighter, int id, float alpha) {
         groups.valid = 1;
         int row = group_row(cur);                     /* (cur: where a walk is going, shown_cur) */
         char info[24];
-        snprintf(info, sizeof info, "column %d/%d", row / 4 + 1, (groups.n + 3) / 4 > 0 ? (groups.n + 3) / 4 : 1);
+        snprintf(info, sizeof info, TRF("column %d/%d"), row / 4 + 1, (groups.n + 3) / 4 > 0 ? (groups.n + 3) / 4 : 1);
         list_slot = groups.slot;
         draw_list(M_ITEM, "Items", info, rows, groups.n, row, alpha);
         list_slot = NULL;
         return;
     }
     char info[24];
-    snprintf(info, sizeof info, "column %d/%d", cur / 4 + 1, (n + 3) / 4 > 0 ? (n + 3) / 4 : 1);
+    snprintf(info, sizeof info, TRF("column %d/%d"), cur / 4 + 1, (n + 3) / 4 > 0 ? (n + 3) / 4 : 1);
     draw_list(M_ITEM, "Items", info, entries, n, cur, alpha);
 }
 
@@ -1497,6 +1498,8 @@ static void draw_window(const Win *w, int names, float alpha) {
             }
             buf[n] = 0;
             if (names || !digits) soften(buf);
+            char known[160];
+            if (!digits && translate_phrase(buf, known, sizeof known)) memcpy(buf, known, sizeof buf);   /* (a message's words in a translation's) */
             uint32_t col = r == w->cursor ? NAVY : w->dim[r][s] ? FAINT : WHITE;
             float gx = (float)(w->x + 1 + s) * 8.0f;
             if (digits) text_right((float)(w->x + 2 + e) * 8.0f - 1.0f, base, buf, col, alpha);
@@ -1674,13 +1677,13 @@ static void draw_vehicle(int menu, int frame, float alpha) {
         text(x + 5.0f, base, MAIN[0], WHITE, alpha);
         x += w;
         static char lbuf[64];
-        char name[32] = "";
+        char name[64] = "";
         int f = nth_fighter(5, 10, (int)r16(ENEMY_INDEX));
         if (f >= 0) {
             uint32_t st = ui_ram32(FIGHTERS + (unsigned)f * 0x40 + 4) & 0xFFFF;
             if (st >= ENEMY_STATS && st < ENEMY_STATS + 0x200) ui_decode_name(&m68k_ram[st], 14, name, (int)sizeof name);
         }
-        if (name[0]) snprintf(lbuf, sizeof lbuf, "On whom?  %s", name);
+        if (name[0]) snprintf(lbuf, sizeof lbuf, TRF("On whom?  %s"), TR(name));
         else snprintf(lbuf, sizeof lbuf, "On whom?");
         line = lbuf;
         lc = WHITE;
@@ -1804,7 +1807,7 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
         line = list_line && *list_line ? list_line : "Choose an item.";
         break;
     case M_TARGET_ENEMY: case M_TARGET_ALLY: {
-        char name[32] = "";
+        char name[64] = "";
         if (menu == M_TARGET_ENEMY) {
             /* the one pointed at: the game's cursor -- or, while the port walks that to where the mouse is, the
              * one it is going to (the game's cursor steps from enemy to enemy on the way). The pointer is then
@@ -1838,11 +1841,11 @@ void battleui_draw(uint32_t *out, int out_stride, int scale, int view_w, int h) 
             }
             draw_target(name, 0, frame, menu_alpha, at);
         } else if (target_id >= 0) {
-            snprintf(name, sizeof name, "%s", UI_CHAR_NAMES[target_id]);
+            snprintf(name, sizeof name, "%s", TR(UI_CHAR_NAMES[target_id]));
         }
         if (fighter < 5) command_tag(fighter, cbuf, sizeof cbuf, &unused);   /* the technique, skill or item by name */
         chosen = cbuf[0] ? cbuf : COMMANDS[0];
-        if (name[0]) snprintf(lbuf, sizeof lbuf, "On whom?  %s", name);
+        if (name[0]) snprintf(lbuf, sizeof lbuf, TRF("On whom?  %s"), TR(name));
         else snprintf(lbuf, sizeof lbuf, "On whom?");
         line = lbuf;
         break;

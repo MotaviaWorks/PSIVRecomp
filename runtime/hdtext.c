@@ -506,6 +506,55 @@ void hdtext_translation(const VdpLine *lines, int h, uint32_t *out, int stride, 
     }
 }
 
+/* Cells a..b-1 of a window, where a translation has words for any of it: its columns (parted by two blanks) each from
+ * where it stands, in the room up to the next; 0 if it has none. */
+static int put_utf8(char *o, uint32_t c) {
+    if (c < 0x80) { o[0] = (char)c; return 1; }
+    if (c < 0x800) { o[0] = (char)(0xC0 | c >> 6); o[1] = (char)(0x80 | (c & 63)); return 2; }
+    o[0] = (char)(0xE0 | c >> 12); o[1] = (char)(0x80 | (c >> 6 & 63)); o[2] = (char)(0x80 | (c & 63));
+    return 3;
+}
+
+static int draw_known(const VdpLine *lines, int h, uint32_t *out, int stride, int S, int a, int b, float sc, float base_y,
+                      uint32_t fg, int ry0, int clip_y1) {
+    struct { int from, to; char text[160]; int known; } part[12];
+    int n = 0, known = 0;
+    for (int i = a; i < b && n < 12;) {
+        while (i < b && cells[i].ch == ' ') i++;
+        if (i >= b) break;
+        int e = i, k = 0;
+        char s[200];
+        for (int j = i, gap = 0; j < b && gap < 2; j++) {
+            if (cells[j].ch == ' ') gap++;
+            else { gap = 0; e = j + 1; }
+        }
+        for (int j = i; j < e && k < 190; j++) k += put_utf8(s + k, cells[j].ch);
+        s[k] = 0;
+        part[n].from = i;
+        part[n].to = e;
+        part[n].known = translate_phrase(s, part[n].text, sizeof part[n].text);
+        known |= part[n].known;
+        n++;
+        i = e;
+    }
+    if (!known) return 0;
+    for (int i = 0; i < n; i++) {
+        if (!part[i].known) { draw_words(lines, h, out, stride, S, part[i].from, part[i].to, sc, base_y, fg, ry0, clip_y1); continue; }
+        int x0 = cells[part[i].from].x * S, end = i + 1 < n ? (cells[part[i + 1].from].x - 4) * S : (cells[b - 1].x + 8) * S;
+        float room = (float)(end - x0) - 0.5f * (float)S, width = 0, k = 1.0f, q = 1.0f;
+        for (const char *p = part[i].text; *p;) width += advance(next_codepoint(&p), sc);
+        if (width > room) { k = room / width > 0.7f ? room / width : 0.7f; q = width * k > room ? room / (width * k) : 1.0f; }
+        float pen = (float)x0 + 0.5f * (float)S;
+        for (const char *p = part[i].text; *p;) {
+            uint32_t cp = next_codepoint(&p);
+            const Glyph *g = cp != ' ' ? glyph(cp, sc * k) : NULL;
+            if (g) blit(lines, h, out, stride, S, g, pen, base_y, fg, x0, ry0, end + S, clip_y1);
+            pen += advance(cp, sc * k) * q;
+        }
+    }
+    return 1;
+}
+
 void hdtext_draw(const VdpLine *lines, int w, int h, uint32_t *out, int stride, int scale) {
     if (!enabled) return;
     int tr = translate_showing(), tx = 0, ty = 0, tpal = -1;
@@ -551,6 +600,7 @@ void hdtext_draw(const VdpLine *lines, int w, int h, uint32_t *out, int stride, 
             int all_numeric = 1;
             for (int k = a; k < b; k++) all_numeric &= numeric(cells[k].ch);
             if (tr && c0->h == 16) ;
+            else if (translate_lines() && draw_known(lines, h, out, stride, S, a, b, sc, base_y, fg, ry0, clip_y1)) ;
             else if (all_numeric) draw_cells(lines, h, out, stride, S, a, b, sc, base_y, fg, rx0, ry0, rx1, clip_y1);
             else draw_words(lines, h, out, stride, S, a, b, sc, base_y, fg, ry0, clip_y1);
             a = b;
@@ -611,36 +661,54 @@ static uint32_t next_codepoint(const char **p) {
     return c;
 }
 
-float hdtext_string_width(const char *text, float cap_px) {
-    if (!loaded) return 0;
+static float string_advance(uint32_t prev, uint32_t cp, float sc) {
+    float cap, k = prev && font_of(prev, &cap) == &font && font_of(cp, &cap) == &font
+                 ? (float)stbtt_GetCodepointKernAdvance(&font, (int)prev, (int)cp) * sc : 0.0f;
+    return k;
+}
+
+static float plain_width(const char *text, float cap_px) {
     float sc = cap_px / cap_units, w = 0;
     uint32_t prev = 0;
     for (const char *p = text; *p;) {
         uint32_t c = next_codepoint(&p);
-        int adv, lsb;
-        stbtt_GetCodepointHMetrics(&font, (int)c, &adv, &lsb);
-        if (prev) w += (float)stbtt_GetCodepointKernAdvance(&font, (int)prev, (int)c) * sc;
-        w += (float)adv * sc;
+        w += string_advance(prev, c, sc) + advance(c, sc);
         prev = c;
     }
     return w;
 }
 
+/* a translation's words in the text's place (translate.h), smaller where they are a good deal longer than it */
+static const char *translated(const char *text, float *cap) {
+    const char *t = translate_word(text);
+    if (!t) return text;
+    float w0 = plain_width(text, *cap), w1 = plain_width(t, *cap), room = w0 * 1.25f;
+    float short_room = w0 + 3.5f * *cap < 9.0f * *cap ? w0 + 3.5f * *cap : 9.0f * *cap;
+    if (short_room > room) room = short_room;
+    if (w1 > room) *cap *= room / w1 > 0.66f ? room / w1 : 0.66f;
+    return t;
+}
+
+float hdtext_string_width(const char *text, float cap_px) {
+    if (!loaded) return 0;
+    text = translated(text, &cap_px);
+    return plain_width(text, cap_px);
+}
+
 float hdtext_string(uint32_t *out, int stride, int cx0, int cy0, int cx1, int cy1, float x, float baseline,
                     float cap_px, const char *text, uint32_t color) {
     if (!loaded) return 0;
+    text = translated(text, &cap_px);
     float sc = cap_px / cap_units, pen = x;
     uint32_t prev = 0;
     for (const char *p = text; *p;) {
         uint32_t c = next_codepoint(&p);
-        if (prev) pen += (float)stbtt_GetCodepointKernAdvance(&font, (int)prev, (int)c) * sc;
+        pen += string_advance(prev, c, sc);
         if (c != ' ') {
             const Glyph *g = glyph(c, sc);
             if (g) blit(NULL, 0, out, stride, 1, g, pen, baseline, color, cx0, cy0, cx1, cy1);
         }
-        int adv, lsb;
-        stbtt_GetCodepointHMetrics(&font, (int)c, &adv, &lsb);
-        pen += (float)adv * sc;
+        pen += advance(c, sc);
         prev = c;
     }
     return pen - x;
