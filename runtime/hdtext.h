@@ -25,6 +25,8 @@
 int  hdtext_init(const char *font_path);    /* 1 if the font loaded */
 /* the same from a font file already in memory (malloc'd: the text keeps it) */
 int  hdtext_init_mem(void *data, size_t size);
+/* a second font (malloc'd: the text keeps it), for the characters the first has not; NULL: none */
+int  hdtext_second_font(void *data, size_t size);
 void hdtext_set_enabled(int on);
 int  hdtext_enabled(void);
 
@@ -34,6 +36,12 @@ int  hdtext_has_text(const VdpLine *lines, int w, int h);
 /* draw the frame's text over an image of the frame at `scale` times the
  * game's resolution (out, out_stride pixels per row) */
 void hdtext_draw(const VdpLine *lines, int w, int h, uint32_t *out, int out_stride, int scale);
+
+/* the translation's words (translate.h) in the box x0..x1, y0..y1 of `out` (pixels): capitals `cap` tall in two
+ * lines, the first one's baseline `base1`, `pitch` apart; smaller where there are more. `lines` and h: the frame's, for the sprites over
+ * it, or NULL; S: output pixels to one of the game's */
+void hdtext_translation(const VdpLine *lines, int h, uint32_t *out, int stride, int S, float x0, float y0, float x1, float y1,
+                        float cap, float base1, float pitch, uint32_t fg);
 
 /* text for the port's own UI (side panels): UTF-8 at (x, baseline) in output
  * pixels, capital letters cap_px tall, clipped to the box; returns the width */

@@ -7,6 +7,7 @@
 #include "hdtext.h"
 #include "m68k.h"
 #include "savepages.h"
+#include "translate.h"
 #include "uikit.h"
 #include "vdp.h"
 
@@ -1145,13 +1146,21 @@ static void draw_plain(const Win *w, float ox, float oy, int has_cursor, int cco
     float fx0 = ox + (float)w->x * 8.0f + 1.5f, fx1 = ox + (float)(w->x + w->w) * 8.0f - 1.5f;
     if (w->framed) win(fx0, oy + (float)w->y * 8.0f + 1.5f, fx1, oy + (float)(w->y + w->h) * 8.0f - 1.5f);
     if (w->picture) draw_picture(w, ox + (float)w->x * 8.0f, oy + (float)w->y * 8.0f);
-    int iw = w->w - 2, ih = w->h - 2;
+    int iw = w->w - 2, ih = w->h - 2, tr_done = 0;
     for (int cy = 0; cy < ih && cy < 28; cy++) {
         float base = oy + (float)(w->y + 1 + cy) * 8.0f + 6.9f;
         int lit = has_cursor && crow == w->y + 1 + cy, lit_done = 0;
         char said[128];
         int first = 0;
         if (tall_text(w, cy, said, (int)sizeof said, &first)) {     /* a line of dialogue: larger, over two rows */
+            if (translate_showing()) {                              /* a translation's words for the whole of it */
+                float x = (ox + (float)(w->x + 1) * 8.0f + 0.5f) * S, y = oy + (float)(w->y + 1) * 8.0f;
+                if (!tr_done)
+                    hdtext_translation(NULL, 0, cv.px, cv.stride, (int)S, x, y * S, (ox + (float)(w->x + w->w - 1) * 8.0f - 0.5f) * S,
+                                       (y + (float)(ih < 5 ? ih : 5) * 8.0f) * S, 6.3f * S, (y + 11.5f) * S, 16.0f * S, WHITE);
+                tr_done = 1;
+                continue;
+            }
             ui_text(&cv, (ox + (float)(w->x + 1 + first) * 8.0f + 0.5f) * S, (base + 4.6f) * S, 6.3f * S, said, WHITE, 255);
             continue;
         }
@@ -1772,8 +1781,12 @@ static void draw_shop(float x0, float y0, float x1, float y1) {
             snprintf(line[1], sizeof line[1], "Is that OK?");
             lines = 2;
         }
-        if (lines > 0) text(rx0 + 8.0f, y1 - 16.6f, line[0], WHITE);
-        if (lines > 1) text(rx0 + 8.0f, y1 - 6.4f, line[1], WHITE);
+        int tr = translate_showing() && !(buy.qty > 1 && now == R_SHOP_BUY_Q && open_now(R_SHOP_BUY));
+        if (lines > 0 && tr)
+            hdtext_translation(NULL, 0, cv.px, cv.stride, (int)S, (rx0 + 8.0f) * S, (y1 - 26.0f) * S, (x1 - 6.0f) * S, (y1 - 1.0f) * S,
+                               CAP * S, (y1 - 16.6f) * S, 10.2f * S, WHITE);
+        else if (lines > 0) text(rx0 + 8.0f, y1 - 16.6f, line[0], WHITE);
+        if (lines > 1 && !tr) text(rx0 + 8.0f, y1 - 6.4f, line[1], WHITE);
     }
     if (!trade && !buying && !selling) return;           /* an inn: the keeper, their words, yes or no */
 

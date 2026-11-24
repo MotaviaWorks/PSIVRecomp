@@ -7,6 +7,7 @@
 #include "par.h"
 #include "romart.h"
 #include "spritemod.h"
+#include "translate.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -40,6 +41,9 @@ static int enabled, loaded;
 static stbtt_fontinfo font;
 static unsigned char *font_data;
 static float cap_units;                 /* height of 'H' in font units */
+static stbtt_fontinfo font2;            /* a translation's own font: the characters the first has not */
+static unsigned char *font2_data;
+static float cap2_units;
 
 static uint32_t win_char[128];          /* general/tables/wincharset.asm, plus the status labels */
 static uint32_t dlg_char[128];          /* script/charset.asm */
@@ -89,6 +93,28 @@ int hdtext_init(const char *path) {
         free(data);
         return 0;
     }
+    return 1;
+}
+
+/* the font a character is drawn with, and how tall a capital of it is */
+static const stbtt_fontinfo *font_of(uint32_t cp, float *cap) {
+    if (font2_data && !stbtt_FindGlyphIndex(&font, (int)cp) && stbtt_FindGlyphIndex(&font2, (int)cp)) { *cap = cap2_units; return &font2; }
+    *cap = cap_units;
+    return &font;
+}
+
+static void glyphs_forget(void);
+int hdtext_second_font(void *data, size_t size) {
+    stbtt_fontinfo f;
+    int offset = data && size >= 12 ? stbtt_GetFontOffsetForIndex(data, 0) : -1, ok = offset >= 0 && stbtt_InitFont(&f, data, offset);
+    glyphs_forget();
+    free(font2_data);
+    font2_data = NULL;
+    if (!ok) { free(data); return 0; }
+    font2 = f;
+    font2_data = data;
+    int x0, y0, x1, y1;
+    cap2_units = stbtt_GetCodepointBox(&font2, 'H', &x0, &y0, &x1, &y1) && y1 > y0 ? (float)(y1 - y0) : 700.0f;
     return 1;
 }
 
@@ -274,6 +300,11 @@ typedef struct { uint32_t cp; int key; unsigned char *bmp; int w, h, xoff, yoff;
 static Glyph glyphs[GLYPHS];
 static int nglyphs;
 
+static void glyphs_forget(void) {
+    for (int k = 0; k < GLYPHS; k++) { stbtt_FreeBitmap(glyphs[k].bmp, NULL); glyphs[k].bmp = NULL; }
+    nglyphs = 0;
+}
+
 static const Glyph *glyph(uint32_t cp, float scale) {
     int key = (int)lrintf(scale * 1000000.0f);
     unsigned slot = (cp * 2654435761u ^ (unsigned)key) % GLYPHS;
@@ -282,11 +313,13 @@ static const Glyph *glyph(uint32_t cp, float scale) {
         if (g->bmp && g->cp == cp && g->key == key) return g;
         if (!g->bmp) {
             if (nglyphs > GLYPHS * 3 / 4) {                       /* full: start over */
-                for (int k = 0; k < GLYPHS; k++) { stbtt_FreeBitmap(glyphs[k].bmp, NULL); glyphs[k].bmp = NULL; }
-                nglyphs = 0;
+                glyphs_forget();
                 return glyph(cp, scale);
             }
-            g->bmp = stbtt_GetCodepointBitmap(&font, scale, scale, (int)cp, &g->w, &g->h, &g->xoff, &g->yoff);
+            float cap;
+            const stbtt_fontinfo *f = font_of(cp, &cap);
+            float sc = scale * cap_units / cap;              /* (as tall as the first font's) */
+            g->bmp = stbtt_GetCodepointBitmap(f, sc, sc, (int)cp, &g->w, &g->h, &g->xoff, &g->yoff);
             if (!g->bmp) g->bmp = (unsigned char *)calloc(1, 1);  /* blank (space) */
             g->cp = cp; g->key = key;
             nglyphs++;
@@ -392,8 +425,90 @@ static void draw_words(const VdpLine *lines, int h, uint32_t *out, int stride, i
     }
 }
 
+/* ------------------------------------------------------------------ a translation's words (translate.h) */
+static uint32_t next_codepoint(const char **p);
+
+static float advance(uint32_t cp, float sc) {                /* sc: the first font's, as glyph()'s */
+    float cap;
+    const stbtt_fontinfo *f = font_of(cp, &cap);
+    int adv, lsb;
+    stbtt_GetCodepointHMetrics(f, (int)cp, &adv, &lsb);
+    return (float)adv * sc * cap_units / cap;
+}
+
+/* may a line break after this character? (Chinese, Japanese, Korean: anywhere) */
+static int wide(uint32_t c) { return (c >= 0x2E80 && c < 0xD7A4) || (c >= 0xF900 && c < 0xFB00) || (c >= 0xFF00 && c < 0xFFE0); }
+
+#define TL_MAX 6
+typedef struct { const char *s, *e; float width; } TLine;
+
+/* the words broken into lines of at most `room`: how many (TL_MAX + 1: too many) */
+static int tr_lines(const char *t, float room, float sc, TLine *l) {
+    int n = 0;
+    while (*t) {
+        const char *end = strchr(t, '\n'), *s = t;
+        if (!end) end = t + strlen(t);
+        do {
+            const char *c = s, *brk = NULL;
+            float x = 0, at = 0;
+            while (c < end) {
+                const char *from = c;
+                uint32_t cp = next_codepoint(&c);
+                float a = advance(cp, sc);
+                if (x + a > room && from > s && cp != ' ') { c = from; break; }
+                x += a;
+                if (cp == ' ') { brk = c; at = x - a; }
+                else if (wide(cp)) { brk = c; at = x; }
+            }
+            if (c < end && brk) { c = brk; x = at; }
+            if (n >= TL_MAX) return TL_MAX + 1;
+            l[n].s = s;
+            l[n].e = c;
+            l[n++].width = x;
+            s = c;
+            while (s < end && *s == ' ') s++;
+        } while (s < end);
+        t = *end ? end + 1 : end;
+    }
+    return n;
+}
+
+void hdtext_translation(const VdpLine *lines, int h, uint32_t *out, int stride, int S, float x0, float y0, float x1, float y1,
+                        float cap_px, float base1, float pitch, uint32_t fg) {
+    const char *t = translate_text();
+    TLine l[TL_MAX];
+    float room = x1 - x0, cap = cap_px;
+    int n = 0, left = translate_shown();
+    for (float k = 1.0f;; k -= 0.04f) {                      /* smaller only as far as it must: two lines, then three, then four */
+        int fit = k > 0.70f ? 2 : k > 0.52f ? 3 : 4;
+        cap = cap_px * k;
+        n = tr_lines(t, room / 0.9f, cap / cap_units, l);    /* (a little over: set closer, not broken) */
+        if (n > fit && k > 0.5f) continue;
+        if (n > 2) {
+            pitch = (y1 - y0) / (float)n;
+            base1 = y0 + pitch * 0.80f;
+        }
+        break;
+    }
+    if (n > 4) n = 4;
+    float sc = cap / cap_units;
+    for (int i = 0; i < n && left > 0; i++) {
+        float q = l[i].width > room ? room / l[i].width : 1.0f, pen = x0, base = base1 + pitch * (float)i;
+        for (const char *c = l[i].s; c < l[i].e && left > 0; left--) {
+            uint32_t cp = next_codepoint(&c);
+            if (cp != ' ') {
+                const Glyph *g = glyph(cp, sc);
+                if (g) blit(lines, h, out, stride, S, g, pen, base, fg, (int)x0 - S, (int)y0, (int)x1 + S, (int)y1 + S);
+            }
+            pen += advance(cp, sc) * q;
+        }
+        if (i + 1 < n) left -= (int)(l[i + 1].s > l[i].e);   /* (the line's end counts as one) */
+    }
+}
+
 void hdtext_draw(const VdpLine *lines, int w, int h, uint32_t *out, int stride, int scale) {
     if (!enabled) return;
+    int tr = translate_showing(), tx = 0, ty = 0, tpal = -1;
     draw_face(lines, w, h, out, stride, scale);
     find_cells(lines, w, h);
     int S = scale;
@@ -405,6 +520,10 @@ void hdtext_draw(const VdpLine *lines, int w, int h, uint32_t *out, int stride, 
             j++;
         const Cell *c0 = &cells[i];
         uint32_t fg = vdp_color(c0->pal * 16 + 15), bg = vdp_color(c0->pal * 16 + 14);
+        if (tr && c0->h == 16) {                             /* (the translation's words instead, below) */
+            if (tpal < 0 || c0->y < ty || (c0->y == ty && c0->x < tx)) { tx = c0->x; ty = c0->y; }
+            tpal = c0->pal;
+        }
         int rx0 = c0->x * S, rx1 = (cells[j - 1].x + 8) * S, ry0 = c0->y * S, ry1 = (c0->y + c0->h) * S;
         /* cover the original letters (not where a sprite is on top) */
         for (int k = i; k < j; k++)
@@ -431,12 +550,16 @@ void hdtext_draw(const VdpLine *lines, int w, int h, uint32_t *out, int stride, 
                 b = j;
             int all_numeric = 1;
             for (int k = a; k < b; k++) all_numeric &= numeric(cells[k].ch);
-            if (all_numeric) draw_cells(lines, h, out, stride, S, a, b, sc, base_y, fg, rx0, ry0, rx1, clip_y1);
+            if (tr && c0->h == 16) ;
+            else if (all_numeric) draw_cells(lines, h, out, stride, S, a, b, sc, base_y, fg, rx0, ry0, rx1, clip_y1);
             else draw_words(lines, h, out, stride, S, a, b, sc, base_y, fg, ry0, clip_y1);
             a = b;
         }
         i = j;
     }
+    if (tpal >= 0)
+        hdtext_translation(lines, h, out, stride, S, ((float)tx + 0.5f) * (float)S, (float)(ty * S), (float)((tx + 256) * S) - 0.5f * (float)S,
+                           (float)((ty + 32) * S), 10.0f * (float)S, ((float)ty + 13.0f) * (float)S, 16.0f * (float)S, vdp_color(tpal * 16 + 15));
 }
 
 /* (the game's rows in pieces on several cores, par.h: each fills its own
@@ -478,7 +601,11 @@ static uint32_t next_codepoint(const char **p) {
     uint32_t c = *s++;
     if (c >= 0xC0 && (*s & 0xC0) == 0x80) {                  /* 2- and 3-byte UTF-8 */
         if (c < 0xE0) { c = (c & 0x1F) << 6 | (*s++ & 0x3F); }
-        else if ((s[1] & 0xC0) == 0x80) { c = (c & 0x0F) << 12 | (uint32_t)(s[0] & 0x3F) << 6 | (s[1] & 0x3F); s += 2; }
+        else if (c < 0xF0 && (s[1] & 0xC0) == 0x80) { c = (c & 0x0F) << 12 | (uint32_t)(s[0] & 0x3F) << 6 | (s[1] & 0x3F); s += 2; }
+        else if (c >= 0xF0 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) {
+            c = (c & 7) << 18 | (uint32_t)(s[0] & 0x3F) << 12 | (uint32_t)(s[1] & 0x3F) << 6 | (s[2] & 0x3F);
+            s += 3;
+        }
     }
     *p = (const char *)s;
     return c;

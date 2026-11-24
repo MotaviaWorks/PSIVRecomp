@@ -10,10 +10,9 @@ Two tools for anyone who wants to translate Phantasy Star IV for PSIV Recomp, an
 
 Both write the same pack, and the editor opens packs, so work can pass between them and between people.
 
-**Where this stands:** these are the first piece. **The port does not load packs yet**: that part comes
-next, and the pack's format may still change with it. They cover the game's own text: its dialogue,
-and its names and messages (enemies, techniques, skills, items and their descriptions, places, the
-battle's and the menus' messages, inns and shops, the opening's words). The port's own words (its
+**Where this stands:** the port shows a pack's **dialogue** (in builds after 0.7.1-beta). The names and
+messages can be translated here too and are kept in the pack, but the port still draws the game's own:
+that part comes next, and the pack's format may still change with it. The port's own words (its
 settings, its descriptions, the Journal) are not covered yet.
 
 A translation made this way is not a ROM patch. The port draws the game's text itself, with its own
@@ -42,6 +41,17 @@ Things worth knowing:
 - **Theme**, at the top: light, dark, high contrast, or blue like the game's own windows.
 - **Ctrl + Enter** goes to the next line to translate.
 
+### The Windows app
+
+The same page in a window of its own: `TranslationEditor.exe` (keep the `.dll` files beside it). It does three
+things more. It remembers your ROM. It keeps your work in a file (`%LOCALAPPDATA%\PSIV Translation Editor`)
+instead of the browser's storage. And **Save to the game** (Ctrl + S) writes the pack straight into the game's
+`mods` folder, with the `mod.txt` the Mods page reads; it asks where that folder is the first time. Work you began
+in the browser comes over with **Export pack** there and **Open a pack** here.
+
+To build it: `app\build.bat WEBVIEW2_FOLDER OUT_FOLDER`, with the compiler that comes with Windows.
+`WEBVIEW2_FOLDER` holds three files of Microsoft's, from the Microsoft.Web.WebView2 package (they are named in
+`build.bat`).
 ## The command-line tool
 
 ### What you need
@@ -136,7 +146,26 @@ language = 简体中文
 现在我安心多了。
 ```
 
+## Trying it in the game
+
+1. In the folder that holds your saves and `psiv.ini`, make a folder `mods`, and in it one for your
+   translation, with any name: `mods/spanish`.
+2. Export your pack into it: `mods/spanish/psiv-spanish.txt`. If your language needs characters the
+   game's font has not (Chinese, Japanese, Korean ...), put a font there too (`.ttf` or `.otf`).
+3. On the launcher, **Mods**, switch it on. The port must be in Enhanced, with **Text: Modern**.
+
+**While you play, export again over the same file:** the game reads it again by itself within a second
+or so and says so at the top of the screen. The box on the screen changes too.
+
+- A line you have not translated stays in English, so a pack can be tried from its first line on.
+- A line too long for the box is set smaller, up to four lines.
+- With fewer `{page}` marks than the game's line, the last page stays up; with more, they share the
+  game's boxes.
+- Right-to-left languages are not handled.
+
+Not yet: names, menus, shops, inns, battles, and the opening's words.
+
 ## Questions, and telling us you are translating
 
 The Discord (https://discord.gg/YmgWfQGJAr) or an issue on GitHub. If you start a translation, say so:
-the port's side is being built, and a real pack to try it with is the best help there is.
+a real pack to try the port with is the best help there is.

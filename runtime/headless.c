@@ -34,6 +34,7 @@
  *                        save made for it (Continued with the usual presses unless --press is given);
  *                        stops when the fight is won or lost
  *     --arena-scan N:FILE  the same fight only staged: its picture recorded (arenapic.h) into FILE
+ *     --translation FILE a translation pack (tools/translate): its dialogue (with --text FONT)
  *     --voices DIR       the party's battle voices from DIR/<name>_<moment>_<n>.wav (battlevox.h)
  *     --scene-voices DIR a voiced-scenes pack: DIR/scenes.txt and its clips (scenevox.h)
  *     --auto-text        auto-advance voiced scenes (scenevox.h)
@@ -144,6 +145,7 @@
 #include "sha256.h"
 #include "sound.h"
 #include "testbot.h"
+#include "translate.h"
 #include "vdp.h"
 #include "clip.h"
 #include "worldmap.h"
@@ -1379,6 +1381,16 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--proto-algol")) {
             algol_set_enabled(1);                          /* ... on Proto Algol, the first */
             algol_set_version(1);
+        } else if (!strcmp(argv[i], "--translation") && i + 1 < argc) {
+            FILE *f = fopen(argv[++i], "rb");              /* a translation pack (translate.h) */
+            long n = 0;
+            if (f) { fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET); }
+            char *d = n > 0 ? malloc((size_t)n) : NULL;
+            size_t got = d ? fread(d, 1, (size_t)n, f) : 0;
+            if (f) fclose(f);
+            printf("translation: %d lines", translate_load(got ? d : NULL, got));
+            printf(" (%s)\n", translate_language());
+            free(d);
         } else if (!strcmp(argv[i], "--teleport") && i + 1 < argc && nteleport < 16) {
             char *e;                                       /* F:MAP:X:Y[:FACE[:ALIGN]], hex after F */
             teleports[nteleport].frame = strtoull(argv[++i], &e, 10);

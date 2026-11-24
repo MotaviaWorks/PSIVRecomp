@@ -52,6 +52,7 @@
 #include "walkto.h"
 #include "worldmap.h"
 #include "titleart.h"
+#include "translate.h"
 #include "perf.h"
 #include "par.h"
 #include "savepages.h"
@@ -1911,6 +1912,8 @@ static void apply_cheats(void) {
     cheats_set(CHEAT_WEAK, !SDL_strcasecmp(setting("cheat.weak"), "on"));
 }
 
+static void translation_find(const char *dir, char *file, size_t fn, char *font, size_t tn);
+static void translation_set(const char *file, const char *font);
 static void apply_enhancements(void) {
     int m = wide_margin();
     if (m != frame_wide_margin) { frame_wide_margin = m; fit_window(); }
@@ -1957,6 +1960,7 @@ static void apply_enhancements(void) {
          * mod can hold sprite files (.spr: spritemod.h). Never in Classic. (PSIV_SPRITEMOD=FILE[;FILE...]
          * names files directly, for trying one out.) */
         static char loaded[8192], want[8192];
+        char tr_file[1300] = "", tr_font[1300] = "";    /* a translation's pack, and its font */
         size_t len = 0;
         want[0] = 0;
         if (!classic_mode() && SDL_getenv("PSIV_SPRITEMOD")) len = (size_t)snprintf(want, sizeof want, "%s", SDL_getenv("PSIV_SPRITEMOD"));
@@ -1975,10 +1979,12 @@ static void apply_enhancements(void) {
                     for (int i = 0; files && i < count && len + strlen(dir) + strlen(files[i]) + 3 < sizeof want; i++)
                         len += (size_t)snprintf(want + len, sizeof want - len, "%s/%s;", dir, files[i]);
                     SDL_free(files);
+                    translation_find(dir, tr_file, sizeof tr_file, tr_font, sizeof tr_font);
                 }
                 name = end ? end + 1 : NULL;
             }
         }
+        translation_set(tr_file, tr_font);
         if (strcmp(want, loaded)) { spritemod_set_file(want); snprintf(loaded, sizeof loaded, "%s", want); }
     }
     walkto_set_enabled(!classic_mode() && SDL_strcasecmp(setting("enhance.click_walk"), "off") != 0);
@@ -2896,13 +2902,89 @@ static void wave_enter(void) {
     menu_screen = MENU_WAVE;
     menu_sel = wave_sel_run >= 0 && wave_sel_run < wave_count() ? wave_sel_run : 0;
 }
+/* ------------------------------------------------------------------ a mod's translation (translate.h)
+ * A pack (the .txt tools/translate exports) in a mod's folder, beside its mod.txt; with it, if the language needs
+ * one, a font (.ttf, .otf, .ttc). While the game runs the pack is read again when its file changes, so a
+ * translator sees a line as soon as it is exported. */
+static char tr_path[1300], tr_font_path[1300];
+static SDL_Time tr_time, tr_new_time;
+static Uint64 tr_size, tr_new_size;
+
+static void translation_find(const char *dir, char *file, size_t fn, char *font, size_t tn) {
+    static const char *const FONTS[3] = {"*.ttf", "*.otf", "*.ttc"};
+    int count = 0;
+    char **t = SDL_GlobDirectory(dir, "*.txt", SDL_GLOB_CASEINSENSITIVE, &count);
+    for (int i = 0; t && i < count; i++) {
+        char path[1300];
+        if (strpbrk(t[i], "/\\") || !SDL_strcasecmp(t[i], "mod.txt")) continue;
+        snprintf(path, sizeof path, "%s/%s", dir, t[i]);
+        size_t len = 0;
+        char *d = SDL_LoadFile(path, &len);
+        int is = d && translate_is_pack(d, len, NULL, 0, NULL);
+        SDL_free(d);
+        if (!is) continue;
+        snprintf(file, fn, "%s", path);
+        font[0] = 0;
+        for (int k = 0; k < 3 && !font[0]; k++) {
+            int n = 0;
+            char **f = SDL_GlobDirectory(dir, FONTS[k], SDL_GLOB_CASEINSENSITIVE, &n);
+            if (f && n > 0 && !strpbrk(f[0], "/\\")) snprintf(font, tn, "%s/%s", dir, f[0]);
+            SDL_free(f);
+        }
+        break;
+    }
+    SDL_free(t);
+}
+
+static void translation_read(void) {
+    size_t len = 0;
+    char *d = tr_path[0] ? SDL_LoadFile(tr_path, &len) : NULL;
+    SDL_PathInfo info;
+    if (tr_path[0] && SDL_GetPathInfo(tr_path, &info)) { tr_time = tr_new_time = info.modify_time; tr_size = tr_new_size = info.size; }
+    int n = translate_load(d, len);
+    SDL_free(d);
+    if (tr_path[0]) SDL_Log("translation: %d lines (%s) from %s", n, translate_language(), tr_path);
+}
+
+static void translation_set(const char *file, const char *font) {
+    if (strcmp(font, tr_font_path)) {
+        snprintf(tr_font_path, sizeof tr_font_path, "%s", font);
+        size_t len = 0;
+        void *d = font[0] ? SDL_LoadFile(font, &len) : NULL, *own = d ? malloc(len) : NULL;
+        if (own) memcpy(own, d, len);
+        SDL_free(d);
+        int ok = hdtext_second_font(own, len);
+        if (font[0]) SDL_Log("translation: font %s%s", font, ok ? "" : ": it can't be used");
+    }
+    if (strcmp(file, tr_path)) {
+        snprintf(tr_path, sizeof tr_path, "%s", file);
+        translation_read();
+    }
+}
+
+/* twice a second: has the pack's file changed? (read once it has stayed the same for a look, so never half written) */
+static void translation_watch(void) {
+    if (!tr_path[0] || frame_count % 30) return;
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(tr_path, &info) || !info.size) return;
+    if (info.modify_time == tr_time && info.size == tr_size) return;
+    if (info.modify_time != tr_new_time || info.size != tr_new_size) {
+        tr_new_time = info.modify_time;
+        tr_new_size = info.size;
+        return;
+    }
+    translation_read();
+    SDL_snprintf(rewind_msg, sizeof rewind_msg, "Translation read again: %d lines", translate_lines());
+    rewind_msg_until = SDL_GetTicks() + 2600;
+}
+
 /* ------------------------------------------------------------------ Mods (the launcher's page)
  * A mod is a folder in mods/, beside the saves. A mod.txt in it may say what it is:
  *     name = ...      author = ...      about = ...   (a line on what it changes)
  * The page lists the folders and switches each on or off (psiv.ini's mods.enabled); a change is in force
  * at once. Enhanced only: Classic takes no mod. */
 #define MODS_MAX 32
-typedef struct { char folder[64], name[64], author[48], about[220]; int sprites, on; } ModInfo;
+typedef struct { char folder[64], name[64], author[48], about[220], language[64]; int sprites, lines, on; } ModInfo;
 static ModInfo mod_list[MODS_MAX];
 static int mod_count;
 
@@ -2933,6 +3015,15 @@ static void mods_scan(void) {
         char **spr = SDL_GlobDirectory(path, "*.spr", SDL_GLOB_CASEINSENSITIVE, &n);
         m->sprites = spr ? n : 0;
         SDL_free(spr);
+        char pack[1300] = "", font[1300] = "";
+        translation_find(path, pack, sizeof pack, font, sizeof font);
+        if (pack[0]) {
+            size_t len = 0;
+            char *d = SDL_LoadFile(pack, &len);
+            if (d) translate_is_pack(d, len, m->language, sizeof m->language, &m->lines);
+            SDL_free(d);
+            if (m->language[0]) memcpy(m->name, m->language, sizeof m->name);
+        }
         snprintf(txt, sizeof txt, "%s/mod.txt", path);
         FILE *f = fopen(txt, "r");
         if (f) {
@@ -5360,8 +5451,11 @@ static void draw_mods(float W, float H, const char *hint) {
         int n = 0;
         if (m->author[0]) n = snprintf(t, sizeof t, "by %s", m->author);
         if (m->sprites)
-            snprintf(t + n, sizeof t - (size_t)n, "%s%d sprite file%s", n ? "   " : "", m->sprites, m->sprites == 1 ? "" : "s");
-        else if (!n) snprintf(t, sizeof t, "nothing in it this version can use");
+            n += snprintf(t + n, sizeof t - (size_t)n, "%s%d sprite file%s", n ? "   " : "", m->sprites, m->sprites == 1 ? "" : "s");
+        if (m->lines)
+            n += snprintf(t + n, sizeof t - (size_t)n, "%sa translation: %d line%s%s", n ? "   " : "", m->lines, m->lines == 1 ? "" : "s",
+                          SDL_strcasecmp(setting("enhance.text"), "modern") ? "   (needs Text: Modern)" : "");
+        else if (!m->sprites && n == 0) snprintf(t, sizeof t, "nothing in it this version can use");
         m_text(pad + 10.0f, a + 20.0f, 3.6f, t, sel ? C_INK_SOFT : C_SOFT, 0);
         if (m->about[0])
             m_wrap(pad + 10.0f, a + 27.0f, W - 2.0f * pad - 20.0f, 5.6f, 1, 3.6f, m->about, sel ? C_INK_SOFT : C_VALUE, 0);
@@ -7789,6 +7883,7 @@ void platform_frame(const uint32_t *pixels, int w, int h) {
         SDL_snprintf(rewind_msg, sizeof rewind_msg, "Journal updated");
         rewind_msg_until = SDL_GetTicks() + 2600;
     }
+    translation_watch();
     if (test_rumble_frame && frame_count == test_rumble_frame) rumble_test();
     if (test_rewind_frame && frame_count == test_rewind_frame) rewind_now();   /* testing: Backspace then */
     if (test_rewind_menu && frame_count == test_rewind_menu) { rewind_menu_open(); menu_opened = 0; }   /* ... held */

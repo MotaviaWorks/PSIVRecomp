@@ -35,6 +35,8 @@
 #include "wave.h"
 #include "widemap.h"
 #include "titleart.h"
+#include "translate.h"
+#include "hdtext.h"
 #include "perf.h"
 
 #include <string.h>
@@ -113,6 +115,11 @@ void frame_run(void) {
     perf_end(PERF_VDP);
     titleart_frame(frame_pixels, w, h);                /* the port's IV and RECOMP beside the title's logo */
     scenevox_frame(frame_lines, w, h);                 /* a voiced page of dialogue (reads only) */
+    if (translate_lines()) {                           /* a translation's words for the dialogue's box (reads only) */
+        static char key[256];
+        hdtext_dialogue_key(frame_lines, w, h, key, (int)sizeof key);
+        translate_frame(key);
+    }
     frame_logical += (uint64_t)frame_vint_will_fire();
     game_show_frame(frame_pixels, w, h);           /* platform_frame, from the program's own stack (rewind.h) */
     frame_count++;
