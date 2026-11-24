@@ -9,7 +9,8 @@
   It reads the dialogue out of the player's own Phantasy Star IV (USA) ROM (in the browser; the ROM
   goes nowhere), lets them type a translation line by line, and exports the pack to share: the
   translation alone, by line number, with none of the game's own words in it.
-  The same reading, checks and pack as psiv_translate.py beside it (see README.md).
+  The same reading, checks and pack as psiv_translate.py beside it (see README.md). The same page runs in a browser
+  and in the Windows app (app/Translator.cs).
 -->
 <script>
 /* the theme, before anything is drawn */
@@ -213,6 +214,7 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
     </select>
     <button id="openpack" title="Carry on from a pack: yours, or someone else's">Open a pack</button>
     <button id="export" class="main" disabled>Export pack</button>
+    <button id="togame" class="main hidden" disabled title="Ctrl + S. Written into the game's mods folder; a game that is running reads it again by itself">Save to the game</button>
     <span id="progress"></span>
     <input id="packfile" type="file" accept=".txt,text/plain" class="hidden">
     <input id="romfile" type="file" accept=".bin,.md,.gen,.smd" class="hidden">
@@ -230,7 +232,7 @@ Share the result as a pack.</div>
         <span> or drop the file here (.bin, .md, .gen or .smd; unzip a .zip first)</span>
         <p id="romerror" role="alert"></p>
       </div>
-      <p style="margin-top:14px;color:var(--soft)">Your work is kept in this browser as you type, and
+      <p id="kept" style="margin-top:14px;color:var(--soft)">Your work is kept in this browser as you type, and
          the pack you export holds your translation only, with none of the game's own words.</p>
     </div>
   </main>
@@ -279,6 +281,7 @@ Share the result as a pack.</div>
           <dt>One field for each box</dt><dd>The game shows the line in boxes, one after another. Write each one's words in its own field; the game's codes are kept for you.</dd>
           <dt>A new line</dt><dd>A new line in the box. The box shows two lines of about 32 letters; a full-width character counts as two. The game sets a longer one smaller.</dd>
           <dt>Show the codes</dt><dd>The line as the pack holds it: <b>{page}</b> starts a new box, <b>{cut}</b> is where the scene does something, and the others, like {F4:01}, are the game's portraits, choices and pauses. You only need this to move one.</dd>
+          <dt class="app hidden">Ctrl + S</dt><dd class="app hidden">Saves the pack into the game's mods folder. A game that is running shows it within a second or so.</dd>
           <dt>Ctrl + Enter</dt><dd>Goes to the next line to translate.</dd>
         </dl>
       </details>
@@ -625,6 +628,9 @@ if (typeof module !== 'undefined') module.exports = {piecesOf, joinPieces, field
 /* ---------------------------------------------------------------- the page */
 const $ = id => document.getElementById(id);
 const STORE = 'psiv-translate-1';
+/* the Windows app, when the page is in it: it remembers the ROM, keeps the work in a file and writes into the game's mods */
+const host = window.chrome && window.chrome.webview && location.hostname === 'translation.invalid' ? window.chrome.webview : null;
+const tell = o => host.postMessage(JSON.stringify(o));
 let talk = 0, lines = [], byId = new Map(), tr = {}, language = '', bank = 0, cur = null, status = new Map();
 let shut = {};                                       /* the groups of places folded away: {talk, names} */
 try { shut = JSON.parse(localStorage.getItem(STORE + '-folded') || '{}') || {}; } catch (e) { shut = {}; }
@@ -639,7 +645,9 @@ let saveTimer = 0;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    try { localStorage.setItem(STORE, JSON.stringify({language, tr})); } catch (e) { /* see load() */ }
+    const kept = JSON.stringify({language, tr});
+    if (host) tell({what: 'keep', text: kept});
+    else try { localStorage.setItem(STORE, kept); } catch (e) { /* see load() */ }
   }, 300);
 }
 function toast(words) {
@@ -660,6 +668,7 @@ async function openRom(file) {
   if (!rom) {
     $('romerror').textContent = file.name + ' is not the Phantasy Star IV (USA) ROM that PSIV Recomp plays. ' +
       'A .zip has to be unzipped first.';
+    if (host) tell({what: 'badrom'});
     return;
   }
   lines = gameLines(rom);
@@ -671,7 +680,7 @@ async function openRom(file) {
   lines.forEach(restate);
   $('start').classList.add('hidden');
   $('work').classList.remove('hidden');
-  $('export').disabled = false;
+  $('export').disabled = $('togame').disabled = false;
   drawPlaces();
   drawList();
   pick((lines.find(l => status.get(l.id) === 'todo') || lines[0]).id, false);
@@ -957,13 +966,28 @@ function download(name, text) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
+function slug() { return language.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase().slice(0, 70) || 'translation'; }
+/* the app: the pack into the game's mods folder (what is there, problems and all: it is being tried) */
+function saveToGame() {
+  if (!host || !lines.length) return;
+  language = $('lang').value.trim();
+  if (!language) { ask('Name the language first', 'Players will see this name on the Mods page: write it as its speakers do, for example 简体中文 or Español.', [['OK', true, () => $('lang').focus()]]); return; }
+  const n = lines.filter(l => done(status.get(l.id))).length, draft = lines.some(l => status.get(l.id) === 'bad');
+  if (!n) { ask('Nothing to save yet', 'Translate a line first.', [['OK', true]]); return; }
+  tell({what: 'game', folder: slug(), name: 'psiv-' + slug() + '.txt', language, lines: n, text: packText(lines, tr, language, draft)});
+}
 function exportPack() {
   language = $('lang').value.trim();
   if (!language) { ask('Name the language first', 'Players will see this name when they pick your pack: write it as its speakers do, for example 简体中文 or Español.', [['OK', true, () => $('lang').focus()]]); return; }
   const n = lines.filter(l => done(status.get(l.id))).length, bad = lines.filter(l => status.get(l.id) === 'bad');
   if (!n) { ask('Nothing to export yet', 'Translate a line first.', [['OK', true]]); return; }
-  const name = 'psiv-' + (language.normalize('NFKD').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'translation') + '.txt';
-  const go = draft => { download(name, packText(lines, tr, language, draft)); toast('Exported ' + name + ': ' + n + ' lines'); };
+  const name = 'psiv-' + slug() + '.txt';
+  const go = draft => {
+    const text = packText(lines, tr, language, draft);
+    if (host) { tell({what: 'export', name, text}); return; }
+    download(name, text);
+    toast('Exported ' + name + ': ' + n + ' lines');
+  };
   if (bad.length)
     ask(bad.length + (bad.length === 1 ? ' line has a problem' : ' lines have problems'),
         'You can export a draft to keep or pass on your work, and it is marked as one.',
@@ -991,11 +1015,34 @@ async function openPack(file) {
   else take(false);
 }
 
-load();
+if (host) {
+  document.querySelectorAll('#togame, .app').forEach(x => x.classList.remove('hidden'));
+  $('export').classList.remove('main');
+  $('togame').onclick = saveToGame;
+  document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveToGame(); } });
+  host.addEventListener('message', async e => {
+    const m = JSON.parse(e.data);
+    if (m.what === 'say') toast(m.words);
+    if (m.what === 'rom') {
+      const r = await fetch('/rom');
+      if (r.ok) { const b = await r.arrayBuffer(); openRom({name: 'That file', arrayBuffer: async () => b}); }
+    }
+  });
+  $('kept').textContent = 'Your work is kept on this computer as you type, and the pack holds your translation only, with none of the game\'s own words.';
+  (async () => {
+    try {
+      const r = await fetch('/work'), s = r.ok ? await r.json() : null;
+      if (s && s.tr) { tr = s.tr; language = s.language || ''; }
+    } catch (e) { /* no work yet */ }
+    $('lang').value = language;
+    drawProgress();
+    tell({what: 'ready'});
+  })();
+} else load();
 $('lang').value = language;
 drawProgress();
 $('lang').oninput = () => { language = $('lang').value.trim(); document.querySelectorAll('#text, #fields textarea').forEach(x => { x.lang = language; }); save(); };
-$('openrom').onclick = () => $('romfile').click();
+$('openrom').onclick = () => { if (host) tell({what: 'pickrom'}); else $('romfile').click(); };
 $('romfile').onchange = e => { if (e.target.files[0]) openRom(e.target.files[0]); };
 $('openpack').onclick = () => $('packfile').click();
 $('packfile').onchange = e => { if (e.target.files[0]) openPack(e.target.files[0]); e.target.value = ''; };
