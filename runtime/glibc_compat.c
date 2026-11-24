@@ -6,6 +6,13 @@
  * so every reference in the program -- ours, SDL's, libstdc++'s -- binds to
  * this file, and these call the old versions or do the job themselves.
  *
+ * They are hidden: seen inside the program, not from outside it. A math
+ * function the program exports would stand before libm's when the program
+ * starts, for the old version as well, and then call itself for ever (the
+ * Linux builds up to 0.7.0: atan2f, at the drifting rocks of the Air Castle's
+ * and the Edge's battles). Nothing below may be in the program's dynamic table:
+ *   objdump -T psiv | grep -w Base         (prints nothing)
+ *
  * Check a build with:  objdump -T psiv | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
  */
 #if defined(__linux__) && defined(__x86_64__) && !defined(__ANDROID__)
@@ -33,6 +40,8 @@ OLD(float, log10f, (float), "GLIBC_2.2.5");
 OLD(float, sqrtf, (float), "GLIBC_2.2.5");
 OLD(double, fmod, (double, double), "GLIBC_2.2.5");
 OLD(float, fmodf, (float, float), "GLIBC_2.2.5");
+
+#pragma GCC visibility push(hidden)
 
 float acosf(float x) { return psiv_old_acosf(x); }
 float asinf(float x) { return psiv_old_asinf(x); }
@@ -106,5 +115,7 @@ uint32_t arc4random(void) {
     if (getrandom(&v, sizeof v, 0) != (ssize_t)sizeof v) v = (uint32_t)time(NULL) * 2654435761u;
     return v;
 }
+
+#pragma GCC visibility pop
 
 #endif
