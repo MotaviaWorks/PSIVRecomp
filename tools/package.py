@@ -117,6 +117,15 @@ def mac_app(build, app, ver):
     subprocess.run(['codesign', '--verify', '--deep', '--strict', app], check=True)
 
 
+def linux_check(program):
+    """no function of the program's own in its dynamic table: an exported atan2f calls itself for ever when the
+    program runs (runtime/glibc_compat.c; the Linux builds up to 0.7.0)"""
+    out = subprocess.run(['objdump', '-T', program], check=True, capture_output=True, text=True).stdout
+    own = [l.split()[-1] for l in out.splitlines() if '.text' in l.split()]
+    if own:
+        sys.exit('not packaged: the program exports ' + ' '.join(own))
+
+
 def stage(kind, build, folder, sdl_license, ver=''):
     os.makedirs(folder)
     if kind == 'macos':
@@ -179,6 +188,7 @@ def main():
                             os.path.join(tmp, top), dest], check=True)
         else:
             top = 'psiv-recomp'
+            linux_check(os.path.join(args.build, 'psiv'))
             stage('linux', args.build, os.path.join(tmp, top), args.sdl_license)
             dest = os.path.join(args.out, f'PSIV-Recomp-{name_ver}-linux-x86_64.tar.gz')
             with tarfile.open(dest, 'w:gz') as t:
