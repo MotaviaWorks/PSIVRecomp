@@ -22,6 +22,7 @@ third_party/
 psiv.ini
 psiv.log
 psiv-crash.txt
+/retro-menu.otf
 saves/
 screenshots/
 # made from your ROM (game art, never committed): the Boss Arena's pictures, the settings' previews

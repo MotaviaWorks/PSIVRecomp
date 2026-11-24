@@ -221,6 +221,12 @@ them (`runtime/mixbus.h`); `psiv_headless --levels M:E:V` renders with them
 Settings in the Esc menu (saved to `psiv.ini`). **Mode: Classic** is the
 original game, unchanged; **Enhanced** turns on the additions.
 
+**Settings > Display > Menu style** offers **Modern** (default) and **Retro**.
+Retro gives Settings and the system menu translucent square frames and red
+controls. To use your own retro typeface, place an OpenType font named
+`retro-menu.otf` beside `psiv.ini` and restart. The regular UI font covers
+characters missing from the optional font.
+
 **Previews.** Smoothing, Water and Trees (Display) and Depth, Fog, Camera,
 Weather and Effects (Battles) show what they do: a short clip with the
 setting off beside one as chosen. The game makes them once, from the
