@@ -333,9 +333,10 @@ def check_rows(rows, originals):
             if a != b:
                 warnings.append((i, '%d lines where the game\'s has %d' % (b, a)))
             continue
-        if tags_of(tr) != tags_of(en):
-            problems.append((i, 'the codes differ from the original: it has %s, the translation %s'
-                             % (' '.join(tags_of(en)) or 'none', ' '.join(tags_of(tr)) or 'none')))
+        if tags_of(tr) != tags_of(en):                     # (the game follows its own codes: only one it has not is wrong)
+            (problems if set(tags_of(tr)) - set(tags_of(en)) else warnings).append(
+                (i, 'the codes differ from the original: it has %s, the translation %s'
+                 % (' '.join(tags_of(en)) or 'none', ' '.join(tags_of(tr)) or 'none')))
         if tr.count(PAGE) != en.count(PAGE):
             warnings.append((i, '%d pages where the original has %d' % (tr.count(PAGE) + 1, en.count(PAGE) + 1)))
         for page in BREAK.split(tr):

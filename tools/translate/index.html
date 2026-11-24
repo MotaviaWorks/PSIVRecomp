@@ -11,38 +11,70 @@
   translation alone, by line number, with none of the game's own words in it.
   The same reading, checks and pack as psiv_translate.py beside it (see README.md).
 -->
+<script>
+/* the theme, before anything is drawn */
+(function () {
+  var t = null;
+  try { t = localStorage.getItem('psiv-translate-1-theme'); } catch (e) { t = null; }
+  if (!/^(light|dark|contrast|game)$/.test(t || '')) {
+    var m = function (q) { return window.matchMedia && matchMedia(q).matches; };
+    t = m('(prefers-contrast: more)') ? 'contrast' : m('(prefers-color-scheme: dark)') ? 'dark' : 'light';
+  }
+  document.documentElement.setAttribute('data-theme', t);
+})();
+</script>
 <style>
 :root {
-  --paper: #e8ecf5; --panel: #ffffff; --ink: #141a33; --soft: #556082; --rule: #c9d1e4;
-  --navy: #00246d; --bevel-hi: #b6b6b6; --bevel-lo: #6d6d6d; --gold: #ffd45a; --gold-ink: #7a5600;
-  --bad: #b3261e; --warn: #8a5a00; --good: #1b6a4c; --pick: #dfe6f7; --box-ink: #ffffff;
-  --talk: #7a5600; --names: #0a6a78;
   --ui: "Segoe UI Variable Text", "Segoe UI", "Noto Sans", "Helvetica Neue", "PingFang SC",
         "Microsoft YaHei", "Noto Sans CJK SC", "Hiragino Sans", "Malgun Gothic", sans-serif;
+  --navy: #00246d; --bevel-hi: #b6b6b6; --bevel-lo: #6d6d6d; --gold: #ffd45a; --box-ink: #ffffff;
 }
-@media (prefers-color-scheme: dark) {
-  :root { --paper: #0f1428; --panel: #171d38; --ink: #e6eaf7; --soft: #9aa5c7; --rule: #2c3560;
-          --pick: #232c55; --gold-ink: #ffd45a; --bad: #ff8a80; --warn: #ffc566; --good: #6fd3a8;
-          --talk: #ffd45a; --names: #6fdcec; }
+/* The themes (the Theme menu; data-theme on the page, always set: light, dark, contrast or game).
+   --field: what is typed into; --main: the main button; --pick: the chosen row. */
+:root, :root[data-theme=light] {
+  color-scheme: light;
+  --paper: #e8ecf5; --panel: #ffffff; --field: #ffffff; --ink: #141a33; --soft: #556082; --rule: #c9d1e4; --line: 1px;
+  --main: #00246d; --main-ink: #ffffff; --pick: #dfe6f7; --pick-ink: #141a33; --pick-soft: #4b5678; --focus: #9a6b00;
+  --bad: #b3261e; --warn: #8a5a00; --good: #1b6a4c; --talk: #7a5600; --names: #0a6a78;
+}
+:root[data-theme=dark] {
+  color-scheme: dark;
+  --paper: #0f1428; --panel: #171d38; --field: #171d38; --ink: #e6eaf7; --soft: #9aa5c7; --rule: #2c3560;
+  --main: #2f55b8; --pick: #232c55; --pick-ink: #e6eaf7; --pick-soft: #aab4d4; --focus: #ffd45a;
+  --bad: #ff8a80; --warn: #ffc566; --good: #6fd3a8; --talk: #ffd45a; --names: #6fdcec;
+}
+:root[data-theme=contrast] {
+  color-scheme: dark;
+  --paper: #000000; --panel: #000000; --field: #000000; --ink: #ffffff; --soft: #ffffff; --rule: #ffffff; --line: 2px;
+  --main: #ffff00; --main-ink: #000000; --pick: #ffffff; --pick-ink: #000000; --pick-soft: #000000; --focus: #ffff00;
+  --bad: #ffa8a0; --warn: #ffd45a; --good: #7dffb0; --talk: #ffff00; --names: #7df6ff;
+  --navy: #000000; --bevel-hi: #ffffff; --bevel-lo: #000000;
+}
+:root[data-theme=game] {                         /* the port's own menus: blue windows with a pale frame */
+  color-scheme: dark;
+  --paper: #0b1338; --panel: #22388f; --field: #14235f; --ink: #ffffff; --soft: #c3cef5; --rule: #6f83cf;
+  --main: #e9edfb; --main-ink: #14235f; --pick: #e9edfb; --pick-ink: #14235f; --pick-soft: #3b4c93; --focus: #ffd45a;
+  --bad: #ffbfb8; --warn: #ffd67a; --good: #9df0c4; --talk: #ffd45a; --names: #8fe9f7;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 var(--ui); }
 button, input, select, textarea { font: inherit; color: inherit; }
-button { cursor: pointer; border: 1px solid var(--rule); background: var(--panel); border-radius: 6px;
+button { cursor: pointer; border: var(--line) solid var(--rule); background: var(--panel); border-radius: 6px;
          padding: 6px 12px; }
+select { border: var(--line) solid var(--rule); background: var(--field); border-radius: 6px; padding: 5px 6px; }
 button:hover { border-color: var(--soft); }
-button.main { background: var(--navy); border-color: var(--navy); color: #fff; font-weight: 600; }
+button.main { background: var(--main); border-color: var(--main); color: var(--main-ink); font-weight: 600; }
 button:disabled { opacity: .45; cursor: default; }
-:focus-visible { outline: 3px solid var(--gold); outline-offset: 1px; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
 .hidden { display: none !important; }
 
 #app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
 header { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; padding: 10px 16px;
-         background: var(--panel); border-bottom: 1px solid var(--rule); }
+         background: var(--panel); border-bottom: var(--line) solid var(--rule); }
 header h1 { font-size: 17px; margin: 0 8px 0 0; font-weight: 650; letter-spacing: .01em; }
 header label { color: var(--soft); }
-header input[type=text] { border: 1px solid var(--rule); background: var(--paper); border-radius: 6px;
+header input[type=text] { border: var(--line) solid var(--rule); background: var(--field); border-radius: 6px;
                           padding: 6px 9px; width: 11em; }
 #progress { margin-left: auto; color: var(--soft); font-variant-numeric: tabular-nums; }
 #progress b { color: var(--ink); }
@@ -54,7 +86,7 @@ header input[type=text] { border: 1px solid var(--rule); background: var(--paper
 #start p { margin: 0 0 12px; max-width: 34em; }
 #start .box { margin: 22px 0 22px; }
 #drop { border: 2px dashed var(--rule); border-radius: 10px; padding: 18px; background: var(--panel); }
-#drop.over { border-color: var(--navy); background: var(--pick); }
+#drop.over { border-color: var(--main); background: var(--pick); color: var(--pick-ink); }
 #romerror { color: var(--bad); font-weight: 600; }
 
 /* the game's window, as the port draws it: navy with a grey bevel */
@@ -71,10 +103,11 @@ header input[type=text] { border: 1px solid var(--rule); background: var(--paper
 /* the three columns */
 #work { display: grid; grid-template-columns: 17em minmax(15em, 23em) 1fr; min-height: 0; }
 #places, #list, #editor { overflow: auto; min-height: 0; }
-#places { border-right: 1px solid var(--rule); padding: 8px; }
+#places { border-right: var(--line) solid var(--rule); padding: 8px; }
 #places button { display: grid; grid-template-columns: 1fr auto; gap: 0 10px; width: 100%; text-align: left; border: 0;
                  background: none; border-radius: 6px; padding: 7px 9px 9px; }
-#places button[aria-current=true] { background: var(--pick); }
+#places button[aria-current=true], #list button[aria-current=true] { background: var(--pick); color: var(--pick-ink); }
+#places button[aria-current=true] .n, #list button[aria-current=true] .id, #list button[aria-current=true] .tr { color: var(--pick-soft); }
 #places .n { color: var(--soft); font-variant-numeric: tabular-nums; font-size: 13px; white-space: nowrap; padding-top: 2px; }
 #places .bar { grid-column: 1 / -1; display: block; height: 3px; background: var(--rule); border-radius: 2px; margin-top: 5px; overflow: hidden; }
 #places .bar i { display: block; height: 100%; background: var(--good); }
@@ -92,13 +125,11 @@ header input[type=text] { border: 1px solid var(--rule); background: var(--paper
 #places summary .n { color: var(--head); opacity: .85; font-weight: 400; }
 #places .group > button { margin-top: 2px; }
 @media (prefers-reduced-motion: reduce) { #places summary::before { transition: none; } }
-#listwrap { display: grid; grid-template-rows: auto 1fr; border-right: 1px solid var(--rule); min-height: 0; }
-#filters { padding: 8px; display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--rule); }
-#filters input { flex: 1 1 8em; border: 1px solid var(--rule); background: var(--panel); border-radius: 6px; padding: 5px 8px; min-width: 0; }
-#filters select { border: 1px solid var(--rule); background: var(--panel); border-radius: 6px; padding: 5px 6px; }
+#listwrap { display: grid; grid-template-rows: auto 1fr; border-right: var(--line) solid var(--rule); min-height: 0; }
+#filters { padding: 8px; display: flex; gap: 6px; flex-wrap: wrap; border-bottom: var(--line) solid var(--rule); }
+#filters input { flex: 1 1 8em; border: var(--line) solid var(--rule); background: var(--field); border-radius: 6px; padding: 5px 8px; min-width: 0; }
 #list button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--rule);
                border-radius: 0; background: none; padding: 8px 10px 8px 12px; border-left: 4px solid transparent; }
-#list button[aria-current=true] { background: var(--pick); }
 #list button.ok { border-left-color: var(--good); }
 #list button.warn { border-left-color: var(--warn); }
 #list button.bad { border-left-color: var(--bad); }
@@ -111,23 +142,26 @@ header input[type=text] { border: 1px solid var(--rule); background: var(--paper
 #editor .meta { color: var(--soft); margin: 2px 0 12px; }
 #editor h3 { font-size: 13px; font-weight: 650; color: var(--soft); margin: 18px 0 6px; }
 #cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(19em, 1fr)); gap: 0 28px; align-items: start; }
-#text { width: 100%; min-height: 9em; resize: vertical; border: 1px solid var(--rule); background: var(--panel);
-        border-radius: 6px; padding: 9px 11px; font-size: 16px; line-height: 1.5; white-space: pre; overflow: auto; }
+#text, #fields textarea { display: block; width: 100%; resize: vertical; border: var(--line) solid var(--rule); background: var(--field);
+        color: var(--ink); border-radius: 6px; padding: 9px 11px; font-size: 16px; line-height: 1.5; white-space: pre; overflow: auto; }
+#text { min-height: 9em; }
+#fields label { display: block; color: var(--soft); font-size: 13px; margin: 0 0 4px; }
+#fields textarea + label { margin-top: 12px; }
 #chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
 #chips button { padding: 3px 9px; font-size: 13px; border-radius: 999px; }
 #chips button.used { opacity: .5; }
 #acts { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
 #notes { margin: 12px 0 0; padding: 0; list-style: none; }
-#notes li { padding: 3px 0 3px 22px; position: relative; }
-#notes li::before { content: ""; position: absolute; left: 4px; top: .62em; width: 9px; height: 9px; border-radius: 50%; }
-#notes li.bad { color: var(--bad); } #notes li.bad::before { background: var(--bad); }
-#notes li.warn { color: var(--warn); } #notes li.warn::before { background: var(--warn); }
-#notes li.ok { color: var(--good); } #notes li.ok::before { background: var(--good); }
+#notes li { padding: 3px 0 3px 24px; position: relative; }
+#notes li::before { position: absolute; left: 2px; top: 3px; font-weight: 700; width: 16px; text-align: center; }
+#notes li.bad { color: var(--bad); } #notes li.bad::before { content: "\2715"; }
+#notes li.warn { color: var(--warn); } #notes li.warn::before { content: "!"; }
+#notes li.ok { color: var(--good); } #notes li.ok::before { content: "\2713"; }
 #help { margin-top: 22px; color: var(--soft); max-width: 44em; }
 #help summary { cursor: pointer; color: var(--ink); }
 #help dt { color: var(--ink); margin-top: 8px; font-weight: 600; }
 #help dd { margin: 0; }
-dialog { border: 1px solid var(--rule); border-radius: 10px; background: var(--panel); color: var(--ink); max-width: 34em; padding: 20px; }
+dialog { border: var(--line) solid var(--rule); border-radius: 10px; background: var(--panel); color: var(--ink); max-width: 34em; padding: 20px; }
 dialog::backdrop { background: rgba(10, 16, 40, .5); }
 dialog h2 { margin: 0 0 8px; font-size: 18px; }
 dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
@@ -135,11 +169,30 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
          padding: 8px 14px; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity .2s; }
 #toast.on { opacity: 1; }
 @media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+/* Game blue: the three columns and the top as the port's windows */
+[data-theme=game] header, [data-theme=game] #places, [data-theme=game] #listwrap, [data-theme=game] #editor, [data-theme=game] dialog, [data-theme=game] #drop {
+  background: linear-gradient(#2c4bb0, #1d3285); border: 2px solid #e4e9fb; border-radius: 6px; box-shadow: 0 0 0 2px #050a24; }
+[data-theme=game] header { margin: 8px 8px 0; }
+[data-theme=game] #work { gap: 8px; padding: 8px; }
+[data-theme=game] header h1 { color: var(--gold); }
+[data-theme=game] button:not(.main) { background: #14235f; }
+[data-theme=game] #places button:not([aria-current=true]), [data-theme=game] #list button:not([aria-current=true]) { background: none; }
+[data-theme=game] #places button[aria-current=true], [data-theme=game] #list button[aria-current=true] { background: var(--pick); }
+[data-theme=game] .box { background: linear-gradient(#0a2f86, #001f5f); }
+/* High contrast: no shade carries a meaning alone */
+[data-theme=contrast] #places summary { background: none; }
+[data-theme=contrast] #places .bar { height: 8px; background: #000; border: 1px solid #fff; border-radius: 0; }
+[data-theme=contrast] #places .bar i { background: #ffff00; }
+[data-theme=contrast] .box .wide { background: #ffff00; color: #000; box-shadow: none; }
+[data-theme=contrast] #chips button.used { opacity: 1; border-style: dashed; }
+[data-theme=contrast] button:disabled { opacity: 1; border-style: dashed; background: #000; border-color: #fff; color: #fff; }
+[data-theme=contrast] #list button { border-left-width: 8px; }
+[data-theme=contrast] button:hover { border-color: #ffff00; }
 @media (max-width: 900px) {
   #work { grid-template-columns: 1fr; grid-auto-rows: auto; overflow: auto; }
   #places { border-right: 0; border-bottom: 1px solid var(--rule); max-height: 34vh; }
   #listwrap { border-right: 0; max-height: 40vh; }
-  #editor { overflow: visible; }
+  #editor { overflow: visible; min-height: max-content; }
   #progress { margin-left: 0; }
 }
 </style>
@@ -150,6 +203,14 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
     <h1>PSIV Recomp translation editor</h1>
     <label for="lang">Language</label>
     <input id="lang" type="text" placeholder="e.g. 简体中文" autocomplete="off">
+    <label for="theme">Theme</label>
+    <select id="theme">
+      <option value="">Same as my system</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+      <option value="contrast">High contrast</option>
+      <option value="game">Game blue</option>
+    </select>
     <button id="openpack" title="Carry on from a pack: yours, or someone else's">Open a pack</button>
     <button id="export" class="main" disabled>Export pack</button>
     <span id="progress"></span>
@@ -198,12 +259,14 @@ Share the result as a pack.</div>
         </div>
         <div>
           <h3>Your translation</h3>
-          <div id="chips" aria-label="The line's codes: press one to put it in"></div>
-          <textarea id="text" spellcheck="false" aria-label="Your translation"></textarea>
+          <div id="fields"></div>
+          <div id="chips" class="hidden" aria-label="The line's codes: press one to put it in"></div>
+          <textarea id="text" class="hidden" spellcheck="false" aria-label="Your translation, with its codes"></textarea>
           <div id="acts">
-            <button id="layout" title="Start with the game's codes and page marks in place">Copy the line's layout</button>
-            <button id="same" class="hidden"></button>
             <button id="next" class="main">Next line to translate</button>
+            <button id="same" class="hidden"></button>
+            <button id="codes" title="The line as the pack holds it, with the game's codes: for those who want to move one">Show the codes</button>
+            <button id="layout" class="hidden" title="Start with the game's codes and page marks in place">Copy the line's layout</button>
           </div>
           <ul id="notes"></ul>
           <h3>How it will read in the game</h3>
@@ -211,12 +274,11 @@ Share the result as a pack.</div>
         </div>
       </div>
       <details id="help">
-        <summary>What the marks in a line mean</summary>
+        <summary>How a line works</summary>
         <dl>
-          <dt>A new line</dt><dd>A new line in the box. The box shows two lines of about 32 letters; a full-width character counts as two.</dd>
-          <dt>{page} on a line of its own</dt><dd>The box is full: the game waits for a button, then shows the next box.</dd>
-          <dt>{cut} on a line of its own</dt><dd>The box closes, or the scene does something, and the line goes on.</dd>
-          <dt>Anything else in braces, like {F4:01}</dt><dd>A code of the game's: a portrait, a Yes / No choice, a picture, a pause. Keep every one, in the same order. The buttons above your translation put them in for you.</dd>
+          <dt>One field for each box</dt><dd>The game shows the line in boxes, one after another. Write each one's words in its own field; the game's codes are kept for you.</dd>
+          <dt>A new line</dt><dd>A new line in the box. The box shows two lines of about 32 letters; a full-width character counts as two. The game sets a longer one smaller.</dd>
+          <dt>Show the codes</dt><dd>The line as the pack holds it: <b>{page}</b> starts a new box, <b>{cut}</b> is where the scene does something, and the others, like {F4:01}, are the game's portraits, choices and pauses. You only need this to move one.</dd>
           <dt>Ctrl + Enter</dt><dd>Goes to the next line to translate.</dd>
         </dl>
       </details>
@@ -479,9 +541,9 @@ function checkLine(en, tr, short) {
   const a = tagsOf(en), b = tagsOf(tr);
   if (a.join(' ') !== b.join(' ')) {
     const missing = a.filter(t => !b.includes(t)), extra = b.filter(t => !a.includes(t));
-    if (missing.length) bad.push('Missing: ' + missing.join(' ') + '. The game needs every code of the line.');
+    if (missing.length) warn.push('Without its code' + (missing.length > 1 ? 's ' : ' ') + missing.join(' ') + ': the game keeps its own, so it still works.');
     if (extra.length) bad.push('Not in the game\'s line: ' + extra.join(' ') + '.');
-    if (!missing.length && !extra.length) bad.push('The codes are in another order than the game\'s: ' + a.join(' ') + '.');
+    if (!missing.length && !extra.length) warn.push('The codes are in another order than the game\'s: ' + a.join(' ') + '.');
   }
   const pe = en.split(PAGE).length, pt = tr.split(PAGE).length;
   if (pe !== pt) warn.push(pt + (pt === 1 ? ' page' : ' pages') + ' where the game\'s line has ' + pe + '.');
@@ -491,6 +553,40 @@ function checkLine(en, tr, short) {
       if (widthOf(x) > LINE_UNITS) warn.push('A line ' + widthOf(x) + ' wide; the box holds ' + LINE_UNITS + '.');
   }
   return {bad, warn, empty: false};
+}
+
+/* A line in the pieces the game shows one after another, parted by its marks (a new box, a cut, a choice ...): for
+ * each, the codes before its words, its words, the codes after them, and the mark that ends it. */
+const MARK = /(\{page\}|\{cut\}|\{F[01358BE](?::[^{}]*)?\})/;
+function piecesOf(text) {
+  const parts = text.split(MARK), out = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const body = parts[i].replace(/^\n+|\n+$/g, ''), bare = body.replace(TAG, '');
+    const first = bare.trim() ? body.replace(/^((?:\s*\{[^{}]*\})*)[\s\S]*$/, '$1') : body;
+    const lead = (first.match(TAG) || []).join(''), rest = (body.slice(first.length).match(TAG) || []).join('');
+    out.push({lead, rest, words: bare.split('\n').map(x => x.trim()).join('\n').replace(/^\n+|\n+$/g, ''), end: parts[i + 1] || ''});
+  }
+  return out;
+}
+/* the fields' words back among the game's codes; '' when there are none */
+function joinPieces(en, words) {
+  const P = piecesOf(en);
+  let k = 0, s = '';
+  if (!words.some(w => w.trim())) return '';
+  for (const p of P) {
+    const own = p.words ? (words[k++] || '').replace(/\s+$/, '') : '';
+    s += p.lead + own + p.rest;
+    s += p.end === PAGE || p.end === CUT ? '\n' + p.end + '\n' : p.end;
+  }
+  return s.replace(/\n*(\{page\}|\{cut\})\n*/g, '\n$1\n').replace(/^\n+|\n+$/g, '');
+}
+/* a translation's words for each of the line's fields, whatever marks it has */
+function fieldsOf(en, text) {
+  const n = piecesOf(en).filter(p => p.words).length, E = piecesOf(en), T = piecesOf(text);
+  if (T.length === E.length) return E.map((p, i) => [p.words, T[i].words]).filter(x => x[0]).map(x => x[1]);
+  const w = T.map(p => p.words).filter(Boolean), out = [];
+  for (let i = 0; i < n; i++) out.push(i < n - 1 ? w[i] || '' : w.slice(i).join('\n'));
+  return out;
 }
 
 /* the line's layout with no words: its codes and its page marks where they stand */
@@ -522,7 +618,7 @@ function readPack(text) {
   return out;
 }
 
-if (typeof module !== 'undefined') module.exports = {plainRom, gameLines, shortLines, checkLine, layoutOf, packText, readPack, sha1, widthOf};
+if (typeof module !== 'undefined') module.exports = {piecesOf, joinPieces, fieldsOf, plainRom, gameLines, shortLines, checkLine, layoutOf, packText, readPack, sha1, widthOf};
 </script>
 
 <script>
@@ -707,12 +803,48 @@ function pick(id, focus) {
   $('lineid').textContent = l.id;
   $('linemeta').textContent = l.where + (l.speaker ? '. Speaking: ' + l.speaker : '');
   drawBoxes($('original'), l.en);
-  $('layout').classList.toggle('hidden', !!l.short);
-  $('text').value = tr[id] || '';
-  $('text').lang = language || '';
-  drawChips(l);
+  drawFields(l);
   drawNotes(l);
-  if (focus) $('text').focus();
+  if (focus) focusField();
+}
+
+/* what is typed into: a field for each of the game's boxes, or (Show the codes) the line as the pack holds it */
+let raw = false;
+function focusField() {
+  const f = raw ? $('text') : [...$('fields').querySelectorAll('textarea')].find(x => !x.value.trim()) || $('fields').querySelector('textarea');
+  if (f) f.focus();
+}
+function drawFields(l) {
+  const box = $('fields'), as = raw && !l.short;
+  box.textContent = '';
+  box.classList.toggle('hidden', as);
+  $('text').classList.toggle('hidden', !as);
+  $('chips').classList.toggle('hidden', !as);
+  $('layout').classList.toggle('hidden', !as);
+  $('codes').classList.toggle('hidden', !!l.short);
+  $('codes').textContent = raw ? 'Hide the codes' : 'Show the codes';
+  $('text').value = tr[l.id] || '';
+  $('text').lang = language || '';
+  if (as) { drawChips(l); return; }
+  const P = l.short ? [{words: l.en, lead: ''}] : piecesOf(l.en), w = l.short ? [tr[l.id] || ''] : fieldsOf(l.en, tr[l.id] || '');
+  const many = P.filter(p => p.words).length;
+  let k = 0, who = '';
+  for (const p of P) {
+    for (const m of p.lead.matchAll(/\{F4:([0-9A-F]{2})/g)) who = PORTRAITS[parseInt(m[1], 16)] || '';
+    if (!p.words) continue;
+    const ta = document.createElement('textarea'), lab = document.createElement('label');
+    ta.id = 'field-' + k;
+    ta.rows = Math.max(2, p.words.split('\n').length);
+    ta.spellcheck = false;
+    ta.lang = language || '';
+    ta.value = w[k] || '';
+    ta.oninput = typed;
+    ta.onkeydown = keys;
+    lab.htmlFor = ta.id;
+    lab.textContent = l.short ? 'In your language' : (many > 1 ? 'Box ' + (k + 1) + ' of ' + many : 'The box') + (who ? ', ' + who + ' speaking' : '');
+    box.append(lab, ta);
+    k++;
+  }
 }
 
 const CODE_NAMES = {F5: 'a Yes / No choice', FA: 'if it already happened', F2: 'the scene does something', F9: 'a pause',
@@ -755,7 +887,9 @@ function drawNotes(l) {
   const add = (cls, words) => { const li = document.createElement('li'); li.className = cls; li.textContent = words; ul.append(li); };
   c.bad.forEach(w => add('bad', w));
   c.warn.forEach(w => add('warn', w));
-  if (!c.empty && !c.bad.length && !c.warn.length) add('ok', 'This line is ready.');
+  const blank = l.short || c.empty ? 0 : fieldsOf(l.en, tr[l.id]).filter(x => !x.trim()).length;
+  if (blank) add('warn', blank + (blank === 1 ? ' box has' : ' boxes have') + ' no words yet: the game\'s own show there.');
+  if (!c.empty && !blank && !c.bad.length && !c.warn.length) add('ok', 'This line is ready.');
   drawBoxes($('preview'), tr[l.id] || '', l.short);
   if (c.empty) { const d = document.createElement('div'); d.className = 'who'; d.textContent = 'Nothing yet: the game\'s own line is shown until you translate it.'; $('preview').append(d); }
 }
@@ -774,13 +908,14 @@ function drawSame(l) {
 function typed() {
   const l = byId.get(cur);
   if (!l) return;
-  const v = $('text').value;
+  const w = [...$('fields').querySelectorAll('textarea')].map(x => x.value);
+  const v = raw && !l.short ? $('text').value : l.short ? w[0] : joinPieces(l.en, w);
   if (v.trim()) tr[cur] = v; else delete tr[cur];
   const before = status.get(cur);
   restate(l);
   save();
   drawNotes(l);
-  drawChips(l);
+  if (raw) drawChips(l);
   const row = $('row-' + cur);
   if (row) row.replaceWith(rowOf(l));
   if (done(before) !== done(status.get(cur)) || before !== status.get(cur)) { drawProgress(); drawPlaces(); }
@@ -831,7 +966,7 @@ function exportPack() {
   const go = draft => { download(name, packText(lines, tr, language, draft)); toast('Exported ' + name + ': ' + n + ' lines'); };
   if (bad.length)
     ask(bad.length + (bad.length === 1 ? ' line has a problem' : ' lines have problems'),
-        'A line with a missing or changed code would break in the game. You can export a draft to keep or pass on your work, and it is marked as one.',
+        'You can export a draft to keep or pass on your work, and it is marked as one.',
         [['Show me the problems', false, () => { bank = 0; $('show').value = 'bad'; $('search').value = ''; drawPlaces(); drawList(); pick(bad[0].id, true); }],
          ['Export a draft', true, () => go(true)]]);
   else go(false);
@@ -859,14 +994,26 @@ async function openPack(file) {
 load();
 $('lang').value = language;
 drawProgress();
-$('lang').oninput = () => { language = $('lang').value.trim(); $('text').lang = language; save(); };
+$('lang').oninput = () => { language = $('lang').value.trim(); document.querySelectorAll('#text, #fields textarea').forEach(x => { x.lang = language; }); save(); };
 $('openrom').onclick = () => $('romfile').click();
 $('romfile').onchange = e => { if (e.target.files[0]) openRom(e.target.files[0]); };
 $('openpack').onclick = () => $('packfile').click();
 $('packfile').onchange = e => { if (e.target.files[0]) openPack(e.target.files[0]); e.target.value = ''; };
 $('export').onclick = exportPack;
 $('text').oninput = typed;
-$('text').onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); nextTodo(); } };
+function keys(e) { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); nextTodo(); } }
+$('text').onkeydown = keys;
+$('codes').onclick = () => { const l = byId.get(cur); if (!l) return; raw = !raw; drawFields(l); drawNotes(l); focusField(); };
+/* the theme: kept in this browser; none chosen follows the system's */
+const systemDark = matchMedia('(prefers-color-scheme: dark)'), systemContrast = matchMedia('(prefers-contrast: more)');
+function drawTheme() {
+  const t = $('theme').value || (systemContrast.matches ? 'contrast' : systemDark.matches ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-theme', t);
+}
+try { const t = localStorage.getItem(STORE + '-theme'); if (/^(light|dark|contrast|game)$/.test(t || '')) $('theme').value = t; } catch (e) { /* none kept */ }
+$('theme').onchange = () => { try { localStorage.setItem(STORE + '-theme', $('theme').value); } catch (e) { /* for this visit only */ } drawTheme(); };
+systemDark.onchange = systemContrast.onchange = drawTheme;
+drawTheme();
 $('next').onclick = nextTodo;
 $('layout').onclick = () => {
   const l = byId.get(cur);

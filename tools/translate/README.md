@@ -34,11 +34,12 @@ Things worth knowing:
 - **Your work is kept in the browser as you type.** Export a pack now and then all the same: clearing
   the browser's data clears it, and a pack is also how you move to another computer.
 - **Open a pack** carries on from a pack: your own, or someone else's to continue or correct.
-- **The buttons above your translation** are the line's codes (a portrait, a new box, a choice). Press
-  one to put it in where the cursor is. **Copy the line's layout** puts them all in at once.
+- **A field for each box.** The game shows a line in boxes, one after another, and each has its own field. The
+  game's codes are put in for you. **Show the codes** shows the line as the pack holds it, for moving one.
 - A line is marked green when it is ready, amber when it may look wrong on screen (too long for the
-  box, a different number of boxes), and red when a code is missing or changed: that would break in
-  the game. A pack with red lines can only be exported as a draft.
+  box, a box with no words yet), and red when it has a code the game's line has not. A pack with red
+  lines can only be exported as a draft.
+- **Theme**, at the top: light, dark, high contrast, or blue like the game's own windows.
 - **Ctrl + Enter** goes to the next line to translate.
 
 ## The command-line tool
@@ -93,7 +94,7 @@ itself. Some entries begin with a space or two, the game's own padding: you can 
   a full-width character (Chinese, Japanese, Korean) counts as two.
 - **`{page}`** on a line of its own: the box is full, and the game waits for a button.
 - **`{cut}`** on a line of its own: the box closes, or the scene does something, and the line goes on.
-- **Everything else in braces is a code of the game's**, and must stay as it is, in the same order:
+- **Everything else in braces is a code of the game's**. Leave it where it is:
 
 | code | what it does |
 |---|---|
@@ -105,7 +106,8 @@ itself. Some entries begin with a space or two, the game's own padding: you can 
 | `{F3}` | a code the game carries in a few lines; keep it |
 
 You may move a code within a line when your language's word order asks for it (a portrait belongs
-before the words its speaker says), but **check** wants the same codes in the same order.
+before the words its speaker says). The game follows its own codes whatever the pack's are, so **check**
+only warns of one that is missing or moved.
 
 Keep the pages as they are where you can: the same number of `{page}` marks as the original. Where a
 translation needs more or fewer, **check** warns; how the port will handle that is not settled yet.
@@ -113,7 +115,7 @@ translation needs more or fewer, **check** warns; how the port will handle that 
 ## What check looks for
 
 - a line missing from the game, or in the workbook twice;
-- codes that differ from the original's: one missing, changed, added or out of order;
+- a code the original does not have (one missing or out of order is a warning);
 - a `{` or `}` that is not part of a code;
 - (warning) a different number of pages from the original;
 - (warning) more than two lines on a page, or a line wider than the box.
