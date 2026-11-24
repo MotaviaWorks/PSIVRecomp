@@ -569,9 +569,11 @@ The additions:
   forwarding and on a display slower than the game; `psiv.log` says
   `v-sync: on` when it takes.
 
-- **16:9 widescreen** (on / off; 400 pixels wide, 424 with the 4:3 TV
-  shape): the field and battles show more to the left and right. The game
-  only keeps what a 320-pixel screen needs in video memory, so the field's
+- **Widescreen**: choose Natural or Side panels in **Settings > Display**,
+  then set **Wide ratio** to 16:9 (default) or 16:10 for Steam Deck.
+  Natural shows more to the left and right in the field, and both modes
+  widen battles. The 16:10 view uses fractional scaling to fill a 1280×800
+  display. The game only keeps what a 320-pixel screen needs in video memory, so the field's
   margins are drawn from the map it keeps in RAM instead (`runtime/widemap.c`:
   checked against the screen every frame, the planes' own content when they
   disagree, the edge chunks repeated past a map's edge); objects are no

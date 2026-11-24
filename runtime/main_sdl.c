@@ -408,8 +408,9 @@ static Setting settings[] = {
     {"saves.page", "1", "the page of saves in use, 1 to 4, three slots each: Left / Right in the game's Save window, and past the ends of its Continue and Erase windows, turn the page (Enhanced; Classic keeps to page 1)"},
     {"video.detail", "auto", "the port's own picture (battles, modern text and menus) is drawn at up to 4 times the game's size: auto = at 3 or 2 times on a machine that cannot draw it in a frame's time, so the game never slows down for it; full = always at the display's size"},
     {"video.fullscreen", "0", "1 = start fullscreen (F11 toggles)"},
-    {"video.integer_scaling", INTEGER_SCALING_DEFAULT, "1 = whole-number scaling only (sharpest); 0 = fill the screen"},
-    {"video.widescreen", "1", "16:9 widescreen (other screens keep their shape): 0 off, 1 natural (more map in exploration), 2 side panels with the party in exploration; battles are wide either way"},
+    {"video.integer_scaling", INTEGER_SCALING_DEFAULT, "1 = whole-number scaling (except in the 16:10 view); 0 = fill the screen"},
+    {"video.widescreen", "1", "widescreen (other screens keep their shape): 0 off, 1 natural (more map in exploration), 2 side panels with the party in exploration; battles are wide either way"},
+    {"video.wide_ratio", "16:9", "widescreen shape: 16:9 or 16:10 (Steam Deck)"},
     {"video.aspect", "square", "square = square pixels; 4:3 = the console's TV shape (pixels a bit narrower)"},
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed; scale2x = the Scale2x / Scale3x filter: stair-steps rounded off, nothing blurred"},
     {"video.vsync", "off", "on = each picture waits for the display's refresh, so it never tears (on a display that refreshes 60 times a second or more); off = the game keeps its own time"},
@@ -1331,6 +1332,14 @@ static void game_picture(const uint32_t *pixels, int w, int h, int stride, int d
 /* compose = 0 when re-showing the same frame (paused): the depth camera
  * doesn't advance and the last image is shown again */
 static int panels_on;                  /* widescreen with side panels in exploration */
+static int wide_deck(void) { return !strcmp(setting("video.wide_ratio"), "16:10"); }
+
+/* Fit the symmetric whole-pixel raster to the exact Deck aspect ratio. */
+static float picture_width(int w, int h, int mode_w) {
+    if (w > 320 && wide_deck()) return (float)h * (8.0f / 5.0f);
+    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / ((float)mode_w / (float)h);
+    return (float)w * par;
+}
 
 /* where the last picture went in the window (render coordinates), for clicks */
 static SDL_FRect pic_dst;
@@ -1700,12 +1709,11 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     /* side panels: exploration keeps its 320 view, the margins show the party */
     int pm = !fpview_active() && panels_on && frame_wide_margin > 0 && w == 320 && panels_field() ? frame_wide_margin : 0;
     int fw = w + 2 * pm;                                 /* the picture's width in game pixels */
-    /* pixel aspect: square, or the 4:3 TV shape (the mode's 320x224 pixels
-     * are ~0.93 wide), whatever the picture's width */
-    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / ((float)vdp_width() / (float)h);
-    float sw = (float)fw * par, sh = (float)h;
+    /* A 224-line picture needs fractional scaling to fill the Deck's 800 lines.
+     * Keep the integer scaling setting for other ratios and original-width screens. */
+    float sw = picture_width(fw, h, vdp_width()), sh = (float)h;
     float s = fminf((float)ow / sw, (float)oh / sh);
-    if (setting_int("video.integer_scaling") && s >= 1.0f) s = floorf(s);
+    if (!(fw > 320 && wide_deck()) && setting_int("video.integer_scaling") && s >= 1.0f) s = floorf(s);
     SDL_FRect dst = {((float)ow - sw * s) / 2, ((float)oh - sh * s) / 2, sw * s, sh * s};
     pic_dst = dst;
     pic_fw = fw;
@@ -1885,11 +1893,13 @@ static void cycle_battle_fog(void) {
  * font for now. */
 static int classic_mode(void) { return !strcmp(setting("enhance.mode"), "classic"); }
 
-/* widescreen margin for the current settings: 16:9 is 400 pixels wide with
- * square pixels, 424 with the 4:3 TV pixel shape */
+/* Widescreen margins per side, rounded to whole pixels. Keep the original
+ * 400/424 rasters for 16:9. At 16:10 use 358/384 for square/TV pixels. */
 static int wide_margin(void) {
     if (classic_mode() || !setting_int("video.widescreen")) return 0;
-    return strcmp(setting("video.aspect"), "4:3") ? 40 : 52;
+    int tv = !strcmp(setting("video.aspect"), "4:3");
+    if (wide_deck()) return tv ? 32 : 19;
+    return tv ? 52 : 40;
 }
 
 /* keep the window's height and give it the frame's shape */
@@ -1897,8 +1907,7 @@ static void fit_window(void) {
     if (!window || SDL_GetWindowFlags(window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED)) return;
     int ww, wh;
     SDL_GetWindowSize(window, &ww, &wh);
-    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / (320.0f / 224.0f);
-    float fw = (float)(320 + 2 * wide_margin()) * par;
+    float fw = picture_width(320 + 2 * wide_margin(), 224, 320);
     SDL_SetWindowSize(window, (int)lrintf((float)wh * fw / 224.0f), wh);
 }
 
@@ -2105,8 +2114,10 @@ static const MenuItem DISPLAY_ITEMS[] = {
     {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0,
      "Fill the screen. F11 switches it too.", apply_video},
     {"Widescreen", "video.widescreen", {"0", "1", "2"}, {"Off", "Natural", "Side panels"}, 0, 0, 0, 1,
-     "16:9. Natural: more of the world on either side. Side panels: the party's cards in the margins while "
+     "Natural: more of the world on either side. Side panels: the party's cards in the margins while "
      "exploring. Battles are wide either way.", apply_enhancements},
+    {"Wide ratio", "video.wide_ratio", {"16:9", "16:10"}, {"16:9", "16:10"}, 0, 0, 0, 1,
+     "Choose 16:10 to fill the Steam Deck display when Widescreen is on.", apply_enhancements},
     {"Pixel shape", "video.aspect", {"square", "4:3"}, {"Square", "4:3 TV"}, 0, 0, 0, 0,
      "4:3 TV: the slightly narrow pixels the console showed on a television.", apply_enhancements},
     {"Smoothing", "video.filter", {"nearest", "linear", "scale2x"}, {"Off", "Soft", "Scale2x"}, 0, 0, 0, 0,
@@ -4100,6 +4111,8 @@ static const PreviewSpec PREVIEWS[] = {
     {"zio0", "zio", "--depth 1:1 --fog 1 --fx 1 --weather 0 --no-backdrops", 1},
     {"fieldw", "field", "--water 1 --wide 40", 0},
     {"fieldp", "field", "--water 1 --wide 40 --panels", 1},
+    {"field10", "field", "--water 1 --wide 19", 0},
+    {"fieldp10", "field", "--water 1 --wide 19 --panels", 1},
 };
 #define N_PREVIEWS (int)(sizeof PREVIEWS / sizeof PREVIEWS[0])
 #define PREVIEWS_VERSION "2"                         /* in the files' names: a new one makes them again */
@@ -4128,6 +4141,7 @@ static const PreviewOf PREVIEW_OF[] = {
     {"enhance.battle_strike", {"battle", "nostrike"}, 1, 0, 0},
     {"enhance.battle_backdrops", {"zio", "zio0"}, 1, 0, 0},
     {"video.widescreen", {"field", "fieldw", "fieldp"}, 0, 1, 0, 0, 0, 0, PK_FIT},
+    {"video.wide_ratio", {"fieldw", "field10"}, 0, 1, 0, 0, 0, 0, PK_FIT},
     {"video.vsync", {"field", "field"}, 0, 1, 0, 0, 0, 0, PK_TEAR},
     {"video.fullscreen", {"field", "field"}, 0, 1, 0, 0, 0, 0, PK_SCREEN},
 };
@@ -4299,14 +4313,13 @@ static struct {
 
 /* the game's picture as it is now (exploring: Widescreen and Pixel shape as set), in square pixels */
 static void preview_game_size(float *gw, float *gh) {
-    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / (320.0f / 224.0f);
-    *gw = (float)(320 + 2 * wide_margin()) * par;
+    *gw = picture_width(320 + 2 * wide_margin(), 224, 320);
     *gh = 224.0f;
 }
 /* ... and the clip that shows it */
-static const char *preview_field_now(void) {
-    int ws = classic_mode() ? 0 : setting_int("video.widescreen");
-    return ws == 2 ? "fieldp" : ws ? "fieldw" : "field";
+static const char *preview_field(int ws, int deck) {
+    if (ws == 2) return deck ? "fieldp10" : "fieldp";
+    return ws ? (deck ? "field10" : "fieldw") : "field";
 }
 /* the biggest rectangle shaped w:h = aspect in (x, y, w, h), centred: out[4] */
 static void fit_rect(float x, float y, float w, float h, float aspect, float *out) {
@@ -4349,8 +4362,14 @@ static void draw_previews(const MenuPage *pg, float x0, float x1, float y0, floa
         if (!SDL_strcasecmp(setting(it->key), it->values[k])) cur = k;
     int right = cur == po->off ? po->on : cur;       /* beside Off: what's chosen (or, Off chosen, the usual) */
     int kind = po->kind, drawn = kind >= PK_TEAR;    /* (drawn: the field as the game shows it now) */
-    int a = preview_index(drawn ? preview_field_now() : po->clip[po->off]);
+    int ws = classic_mode() ? 0 : setting_int("video.widescreen");
+    int a = preview_index(drawn ? preview_field(ws, wide_deck()) : po->clip[po->off]);
     int b = drawn ? a : preview_index(po->clip[right]);
+    if (!strcmp(it->key, "video.widescreen")) b = preview_index(preview_field(right, wide_deck()));
+    if (!strcmp(it->key, "video.wide_ratio") && ws == 2) {
+        a = preview_index(preview_field(ws, 0));
+        b = preview_index(preview_field(ws, 1));
+    }
     const Clip *ca = preview_clip(a), *cb = preview_clip(b);
     float gw, gh;
     preview_game_size(&gw, &gh);
@@ -8805,7 +8824,10 @@ int main(int argc, char **argv) {
 #if MOBILE
     wflags |= SDL_WINDOW_FULLSCREEN;                      /* the whole screen, system bars hidden */
 #endif
-    if (!SDL_CreateWindowAndRenderer("Phantasy Star IV", (320 + 2 * wide_margin()) * scale, 224 * scale,
+    int start_w = 320 + 2 * wide_margin();
+    if (start_w > 320 && wide_deck()) start_w = (int)lrintf(picture_width(start_w, 224, 320) * (float)scale);
+    else start_w *= scale;
+    if (!SDL_CreateWindowAndRenderer("Phantasy Star IV", start_w, 224 * scale,
                                      wflags, &window, &renderer)) {
         message(SDL_MESSAGEBOX_ERROR, SDL_GetError(), NULL);
         return 1;
