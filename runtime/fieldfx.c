@@ -154,9 +154,13 @@ static inline int over(int x, int y) { return overlay[y][x]; }
  * water's waves, sheen, caustic light and glints with nothing under them.
  * A frame is such a scene when black covers a good part of it, the picture
  * (what isn't the map, see find_overlays) a part, and the map next to
- * nothing. The sea: black background that isn't the picture's own, and any
- * 8 x 8 block that is wholly black. It follows the picture's palette in and
- * out, so the game's fades take it with them. */
+ * nothing. The sea: black background that isn't the picture's own, and the
+ * black bands a picture has along its outside (whole rows and columns of 8 x 8
+ * blocks, so it never comes up inside one). Not in space, the flights between
+ * the worlds (their song: GitHub issue 16). It follows the picture's palette
+ * in and out, so the game's fades take it with them. */
+#define SAVED_SOUND   0xECECu                    /* Saved_Sound_Index */
+#define SONG_FLIGHT   0x9Bu                      /* Take Off Landeel */
 static int void_mode;                            /* this frame's water is the void sea */
 static float void_amt;                           /* how much of it shows, 0..1 */
 static uint8_t void_black[VDP_MAX_H][VDP_MAX_W];
@@ -181,7 +185,9 @@ static int void_prepare(const VdpLine *lines, int w, int h) {
         }
     }
     int n = w * h;
-    int scene = black * 5 >= n && picture * 16 >= n && map * 50 <= n;
+    int flight = rb(SAVED_SOUND) == SONG_FLIGHT;
+    int scene = !flight && black * 5 >= n && picture * 16 >= n && map * 50 <= n;
+    if (flight) void_amt = 0.0f;
     float target = scene ? clampf((float)bright / 5.0f, 0.0f, 1.0f) : 0.0f;
     void_amt += (target - void_amt) * (target > void_amt ? 0.08f : 0.15f);
     if (void_amt < 0.01f && target == 0.0f) { void_amt = 0.0f; return 0; }
@@ -192,16 +198,36 @@ static int void_prepare(const VdpLine *lines, int w, int h) {
     }
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) mask[y][x] = void_black[y][x] && !over(x, y);
-    for (int by = 0; by < h; by += 8)                    /* the picture's own black tiles, whole */
-        for (int bx = 0; bx < w; bx += 8) {
-            int all = 1;
-            for (int y = by; y < by + 8 && y < h && all; y++)
-                for (int x = bx; x < bx + 8 && x < w; x++)
-                    if (!void_black[y][x]) { all = 0; break; }
+    /* the picture's own black, from its outside in: while the outermost row or column of it is all black */
+    int x0 = w, x1 = -1, y0 = h, y1 = -1;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            if (over(x, y)) {
+                if (x < x0) x0 = x;
+                if (x > x1) x1 = x;
+                if (y < y0) y0 = y;
+                if (y > y1) y1 = y;
+            }
+    for (int going = 1; going && x1 >= x0 && y1 >= y0;) {
+        going = 0;
+        for (int side = 0; side < 4 && x1 >= x0 && y1 >= y0; side++) {
+            int ax = x0, bx = x1, ay = y0, by = y1, all = 1;
+            if (side == 0) by = ay + 7 < y1 ? ay + 7 : y1;
+            if (side == 1) ay = by - 7 > y0 ? by - 7 : y0;
+            if (side == 2) bx = ax + 7 < x1 ? ax + 7 : x1;
+            if (side == 3) ax = bx - 7 > x0 ? bx - 7 : x0;
+            for (int y = ay; y <= by && all; y++)
+                for (int x = ax; x <= bx; x++) if (!void_black[y][x]) { all = 0; break; }
             if (!all) continue;
-            for (int y = by; y < by + 8 && y < h; y++)
-                for (int x = bx; x < bx + 8 && x < w; x++) mask[y][x] = 1;
+            for (int y = ay; y <= by; y++)
+                for (int x = ax; x <= bx; x++) mask[y][x] = 1;
+            if (side == 0) y0 = by + 1;
+            if (side == 1) y1 = ay - 1;
+            if (side == 2) x0 = bx + 1;
+            if (side == 3) x1 = ax - 1;
+            going = 1;
         }
+    }
     return 1;
 }
 

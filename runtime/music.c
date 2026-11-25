@@ -4,6 +4,12 @@
  * The song playing is known from $FF5020, where PlayMusic leaves its voice
  * table's address (unique for all 52 songs; table MusicPtrs at ROM $D1C40);
  * a restart from the music tracks ($FF5040 + $30 n, bit 7) coming back on.
+ * A song that loops in the game (all but Winners, $8B) plays its file again
+ * from the start when the file ends with no loop of its own: the game's own
+ * song, going on underneath, is not let through half way (GitHub issue 6).
+ * Dungeon Arrange 2 is two of the game's songs -- $B1 as Ladea Tower and the
+ * Air Castle are entered, $A7 from then on -- and a file for either plays
+ * for both unless each has its own (issue 7).
  * The driver's fade-out (sound command $FB) counts $FF5004 down from 15,
  * one step every other tick, then stops everything; $FF5007 pauses it.
  */
@@ -33,6 +39,7 @@ typedef struct {
     float gain;
     unsigned used;
 } Track;
+#define SONG_WINNERS 0x8B             /* the one song the game plays once */
 #define CACHE 4                       /* the battle theme, the field's, a town's, and one more */
 static Track cache[CACHE];
 static unsigned use_count;
@@ -236,9 +243,7 @@ static void load_finish(void) {
     memset(&loading.t, 0, sizeof loading.t);
 }
 
-/* The song's track, ready to play; or NULL: with *wait set, its file is
- * being read (ask again when no read is going), otherwise it has none. */
-static Track *track_for(int id, int *wait) {
+static Track *track_of(int id, int *wait) {
     *wait = 0;
     char file[600] = {0}, path[1300];
     double la = -1.0, lb = -1.0, st = -1.0, cue[WAVE_NODES];
@@ -289,6 +294,14 @@ static Track *track_for(int id, int *wait) {
         t->cue[k] = c < t->frames ? c : -1;
     }
     t->used = ++use_count;
+    return t;
+}
+
+/* The song's track, ready to play; or NULL: with *wait set, its file is
+ * being read (ask again when no read is going), otherwise it has none. */
+static Track *track_for(int id, int *wait) {
+    Track *t = track_of(id, wait);
+    if (!t && !*wait && (id == 0xA7 || id == 0xB1)) t = track_of(id == 0xA7 ? 0xB1 : 0xA7, wait);   /* Dungeon Arrange 2's other half */
     return t;
 }
 
@@ -467,7 +480,11 @@ void music_render(float *left, float *right) {
     Track *t = cur;
     double len = (double)(t->loop_end - t->loop_start);
     if (t->loop_end > 0 && pos >= (double)t->loop_end) pos -= len;
-    if ((int)pos + 1 >= t->frames) { cur = NULL; return; }     /* the end, no loop */
+    if ((int)pos + 1 >= t->frames) {                           /* the end, no loop: again if the game's own goes on */
+        if (wave_on || !song || song == SONG_WINNERS || ramp_to == 0.0f || t->frames < 2 * t->rate) { cur = NULL; return; }
+        pos = (double)t->start;
+        ramp = 0.0f;
+    }
     float l, r;
     frame_at(t, pos, &l, &r);
     /* the loop's seam: a rendered loop's two sides seldom meet sample for

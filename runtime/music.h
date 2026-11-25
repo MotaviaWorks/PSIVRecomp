@@ -9,7 +9,8 @@
  *       8F = Meet Them Head-On (my remix).wav
  *       8F loop 12.5             loop back to 12.5 s at the end (or
  *       8F loop 12.5 98.0        from 98.0 s); a WAV's own loop (its
- *                                "smpl" chunk) is used if there is one
+ *                                "smpl" chunk) is used if there is one; with
+ *                                neither, it starts again from its beginning
  *       8F gain -3               dB
  *       8F start 0.025           where it begins (default: its first sound;
  *                                an MP3 decoded to WAV keeps the encoder's
