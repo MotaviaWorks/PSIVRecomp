@@ -44,6 +44,10 @@ static float cap_units;                 /* height of 'H' in font units */
 static stbtt_fontinfo font2;            /* a translation's own font: the characters the first has not */
 static unsigned char *font2_data;
 static float cap2_units;
+static stbtt_fontinfo menu_font;
+static unsigned char *menu_font_data;
+static float menu_cap_units;
+static int menu_font_active;
 
 static uint32_t win_char[128];          /* general/tables/wincharset.asm, plus the status labels */
 static uint32_t dlg_char[128];          /* script/charset.asm */
@@ -98,12 +102,35 @@ int hdtext_init(const char *path) {
 
 /* the font a character is drawn with, and how tall a capital of it is */
 static const stbtt_fontinfo *font_of(uint32_t cp, float *cap) {
+    if (menu_font_active && stbtt_FindGlyphIndex(&menu_font, (int)cp)) {
+        *cap = menu_cap_units;
+        return &menu_font;
+    }
     if (font2_data && !stbtt_FindGlyphIndex(&font, (int)cp) && stbtt_FindGlyphIndex(&font2, (int)cp)) { *cap = cap2_units; return &font2; }
     *cap = cap_units;
     return &font;
 }
 
 static void glyphs_forget(void);
+int hdtext_menu_font(void *data, size_t size) {
+    stbtt_fontinfo f;
+    int offset = data && size >= 12 ? stbtt_GetFontOffsetForIndex(data, 0) : -1;
+    int x0, y0, x1, y1;
+    if (offset < 0 || !stbtt_InitFont(&f, data, offset) ||
+        !stbtt_GetCodepointBox(&f, 'H', &x0, &y0, &x1, &y1) || y1 <= y0) {
+        free(data);
+        return 0;
+    }
+    glyphs_forget();
+    free(menu_font_data);
+    menu_font_data = data;
+    menu_font = f;
+    menu_cap_units = (float)(y1 - y0);
+    return 1;
+}
+
+void hdtext_use_menu_font(int on) { menu_font_active = on && menu_font_data; }
+
 int hdtext_second_font(void *data, size_t size) {
     stbtt_fontinfo f;
     int offset = data && size >= 12 ? stbtt_GetFontOffsetForIndex(data, 0) : -1, ok = offset >= 0 && stbtt_InitFont(&f, data, offset);
@@ -306,7 +333,7 @@ static void glyphs_forget(void) {
 }
 
 static const Glyph *glyph(uint32_t cp, float scale) {
-    int key = (int)lrintf(scale * 1000000.0f);
+    int key = (int)lrintf(scale * 1000000.0f) * 2 + menu_font_active;
     unsigned slot = (cp * 2654435761u ^ (unsigned)key) % GLYPHS;
     for (int i = 0; i < GLYPHS; i++, slot = (slot + 1) % GLYPHS) {
         Glyph *g = &glyphs[slot];

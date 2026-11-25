@@ -27,6 +27,9 @@ int  hdtext_init(const char *font_path);    /* 1 if the font loaded */
 int  hdtext_init_mem(void *data, size_t size);
 /* a second font (malloc'd: the text keeps it), for the characters the first has not; NULL: none */
 int  hdtext_second_font(void *data, size_t size);
+/* Optional system menu typeface. Takes ownership of malloc'd data, even on failure. */
+int  hdtext_menu_font(void *data, size_t size);
+void hdtext_use_menu_font(int on);           /* scope to drawing the system menu */
 void hdtext_set_enabled(int on);
 int  hdtext_enabled(void);
 

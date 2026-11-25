@@ -408,8 +408,10 @@ static Setting settings[] = {
     {"saves.page", "1", "the page of saves in use, 1 to 4, three slots each: Left / Right in the game's Save window, and past the ends of its Continue and Erase windows, turn the page (Enhanced; Classic keeps to page 1)"},
     {"video.detail", "auto", "the port's own picture (battles, modern text and menus) is drawn at up to 4 times the game's size: auto = at 3 or 2 times on a machine that cannot draw it in a frame's time, so the game never slows down for it; full = always at the display's size"},
     {"video.fullscreen", "0", "1 = start fullscreen (F11 toggles)"},
-    {"video.integer_scaling", INTEGER_SCALING_DEFAULT, "1 = whole-number scaling only (sharpest); 0 = fill the screen"},
-    {"video.widescreen", "1", "16:9 widescreen (other screens keep their shape): 0 off, 1 natural (more map in exploration), 2 side panels with the party in exploration; battles are wide either way"},
+    {"video.integer_scaling", INTEGER_SCALING_DEFAULT, "1 = whole-number scaling (except in the 16:10 view); 0 = fill the screen"},
+    {"video.widescreen", "1", "widescreen (other screens keep their shape): 0 off, 1 natural (more map in exploration), 2 side panels with the party in exploration; battles are wide either way"},
+    {"video.wide_ratio", "16:9", "widescreen shape: 16:9 or 16:10 (Steam Deck)"},
+    {"video.menu_style", "modern", "style of the system menu and Settings: modern / retro"},
     {"video.aspect", "square", "square = square pixels; 4:3 = the console's TV shape (pixels a bit narrower)"},
     {"video.filter", "nearest", "nearest = sharp pixels; linear = smoothed; scale2x = the Scale2x / Scale3x filter: stair-steps rounded off, nothing blurred"},
     {"video.vsync", "off", "on = each picture waits for the display's refresh, so it never tears (on a display that refreshes 60 times a second or more); off = the game keeps its own time"},
@@ -1331,6 +1333,14 @@ static void game_picture(const uint32_t *pixels, int w, int h, int stride, int d
 /* compose = 0 when re-showing the same frame (paused): the depth camera
  * doesn't advance and the last image is shown again */
 static int panels_on;                  /* widescreen with side panels in exploration */
+static int wide_deck(void) { return !strcmp(setting("video.wide_ratio"), "16:10"); }
+
+/* Fit the symmetric whole-pixel raster to the exact Deck aspect ratio. */
+static float picture_width(int w, int h, int mode_w) {
+    if (w > 320 && wide_deck()) return (float)h * (8.0f / 5.0f);
+    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / ((float)mode_w / (float)h);
+    return (float)w * par;
+}
 
 /* where the last picture went in the window (render coordinates), for clicks */
 static SDL_FRect pic_dst;
@@ -1700,12 +1710,11 @@ static void present(const uint32_t *pixels, int w, int h, int compose) {
     /* side panels: exploration keeps its 320 view, the margins show the party */
     int pm = !fpview_active() && panels_on && frame_wide_margin > 0 && w == 320 && panels_field() ? frame_wide_margin : 0;
     int fw = w + 2 * pm;                                 /* the picture's width in game pixels */
-    /* pixel aspect: square, or the 4:3 TV shape (the mode's 320x224 pixels
-     * are ~0.93 wide), whatever the picture's width */
-    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / ((float)vdp_width() / (float)h);
-    float sw = (float)fw * par, sh = (float)h;
+    /* A 224-line picture needs fractional scaling to fill the Deck's 800 lines.
+     * Keep the integer scaling setting for other ratios and original-width screens. */
+    float sw = picture_width(fw, h, vdp_width()), sh = (float)h;
     float s = fminf((float)ow / sw, (float)oh / sh);
-    if (setting_int("video.integer_scaling") && s >= 1.0f) s = floorf(s);
+    if (!(fw > 320 && wide_deck()) && setting_int("video.integer_scaling") && s >= 1.0f) s = floorf(s);
     SDL_FRect dst = {((float)ow - sw * s) / 2, ((float)oh - sh * s) / 2, sw * s, sh * s};
     pic_dst = dst;
     pic_fw = fw;
@@ -1885,11 +1894,13 @@ static void cycle_battle_fog(void) {
  * font for now. */
 static int classic_mode(void) { return !strcmp(setting("enhance.mode"), "classic"); }
 
-/* widescreen margin for the current settings: 16:9 is 400 pixels wide with
- * square pixels, 424 with the 4:3 TV pixel shape */
+/* Widescreen margins per side, rounded to whole pixels. Keep the original
+ * 400/424 rasters for 16:9. At 16:10 use 358/384 for square/TV pixels. */
 static int wide_margin(void) {
     if (classic_mode() || !setting_int("video.widescreen")) return 0;
-    return strcmp(setting("video.aspect"), "4:3") ? 40 : 52;
+    int tv = !strcmp(setting("video.aspect"), "4:3");
+    if (wide_deck()) return tv ? 32 : 19;
+    return tv ? 52 : 40;
 }
 
 /* keep the window's height and give it the frame's shape */
@@ -1897,8 +1908,7 @@ static void fit_window(void) {
     if (!window || SDL_GetWindowFlags(window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED)) return;
     int ww, wh;
     SDL_GetWindowSize(window, &ww, &wh);
-    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / (320.0f / 224.0f);
-    float fw = (float)(320 + 2 * wide_margin()) * par;
+    float fw = picture_width(320 + 2 * wide_margin(), 224, 320);
     SDL_SetWindowSize(window, (int)lrintf((float)wh * fw / 224.0f), wh);
 }
 
@@ -2105,8 +2115,10 @@ static const MenuItem DISPLAY_ITEMS[] = {
     {"Fullscreen", "video.fullscreen", {"0", "1"}, {"Off", "On"}, 0, 0, 0, 0,
      "Fill the screen. F11 switches it too.", apply_video},
     {"Widescreen", "video.widescreen", {"0", "1", "2"}, {"Off", "Natural", "Side panels"}, 0, 0, 0, 1,
-     "16:9. Natural: more of the world on either side. Side panels: the party's cards in the margins while "
+     "Natural: more of the world on either side. Side panels: the party's cards in the margins while "
      "exploring. Battles are wide either way.", apply_enhancements},
+    {"Wide ratio", "video.wide_ratio", {"16:9", "16:10"}, {"16:9", "16:10"}, 0, 0, 0, 1,
+     "Choose 16:10 to fill the Steam Deck display when Widescreen is on.", apply_enhancements},
     {"Pixel shape", "video.aspect", {"square", "4:3"}, {"Square", "4:3 TV"}, 0, 0, 0, 0,
      "4:3 TV: the slightly narrow pixels the console showed on a television.", apply_enhancements},
     {"Smoothing", "video.filter", {"nearest", "linear", "scale2x"}, {"Off", "Soft", "Scale2x"}, 0, 0, 0, 0,
@@ -2120,6 +2132,8 @@ static const MenuItem DISPLAY_ITEMS[] = {
     {"Trees", "enhance.trees", {"on", "off"}, {"On", "Off"}, 0, 0, 0, 1,
      "Trees sway in the breeze, more at their tops, with light flickering through the leaves.",
      apply_enhancements},
+    {"Menu style", "video.menu_style", {"modern", "retro"}, {"Modern", "Retro"}, 0, 0, 0, 0,
+     "Retro uses square frames, translucent panels and red controls in Settings and the system menu.", NULL},
     /* (Integer scaling taken out of the menu, 2026-11-19, PsiLok: "seems to be doing nothing" -- the window is
      * already sized in whole steps; video.integer_scaling stays in psiv.ini, as it was) */
 };
@@ -3739,6 +3753,11 @@ static void menu_input(int up, int down, int left, int right, int ok, int back) 
 #define C_SOFT      0x9FB4E8
 #define C_DIM       0x6F7FA8
 #define C_HINT      0x8C9CC8
+#define C_RETRO_TEXT 0xFFF1D8
+#define C_RETRO_EDGE 0x9B99A6
+#define C_RETRO_RED  0xEE9182
+#define C_RETRO_FILL 0x852F3B
+#define C_RETRO_FOCUS 0x47222B
 
 typedef struct { float x0, y0, x1, y1; int kind, index; } MenuHit;   /* render pixels */
 enum { HIT_ROW, HIT_STEP_BACK, HIT_PAGE, HIT_BACK, HIT_MODE, HIT_JTAB, HIT_JHINT, HIT_JUP, HIT_JDOWN, HIT_SLIDER,
@@ -3759,6 +3778,7 @@ static int menu_tex_w, menu_tex_h;
 static uint64_t menu_drawn;                      /* what the texture shows (menu_signature) */
 
 static int m_ttf;                                /* drawing into menu_buf with the TrueType font */
+static int m_retro;
 static UiCanvas m_cv;
 static float m_S, m_ox, m_oy;                    /* render pixels per unit; the panel's top left */
 
@@ -3768,6 +3788,7 @@ static float m_debug_scale(float cap) {          /* SDL's font: capitals 7 of it
 }
 static void m_box(float x0, float y0, float x1, float y1, float r, uint32_t top, uint32_t bottom, int alpha) {
     if (m_ttf) {
+        if (m_retro) r = 0;
         ui_round_rect_v(&m_cv, x0 * m_S, y0 * m_S, x1 * m_S, y1 * m_S, r * m_S, top, bottom, alpha);
         return;
     }
@@ -3777,6 +3798,7 @@ static void m_box(float x0, float y0, float x1, float y1, float r, uint32_t top,
 }
 static void m_frame(float x0, float y0, float x1, float y1, float r, uint32_t c, int alpha) {
     if (m_ttf) {
+        if (m_retro) r = 0;
         ui_round_frame(&m_cv, x0 * m_S, y0 * m_S, x1 * m_S, y1 * m_S, r * m_S, fmaxf(1.0f, 0.35f * m_S), c, alpha);
         return;
     }
@@ -3784,9 +3806,19 @@ static void m_frame(float x0, float y0, float x1, float y1, float r, uint32_t c,
     SDL_FRect f = {m_ox + x0 * m_S, m_oy + y0 * m_S, (x1 - x0) * m_S, (y1 - y0) * m_S};
     SDL_RenderRect(renderer, &f);
 }
+static void m_retro_box(float x0, float y0, float x1, float y1, int on, int focus, int disabled) {
+    uint32_t fill = on && !disabled ? C_RETRO_FILL : focus && !disabled ? C_RETRO_FOCUS : 0x10162D;
+    int alpha = focus || on ? 235 : 90;
+    m_box(x0, y0, x1, y1, 0, fill, fill, alpha);
+    m_frame(x0, y0, x1, y1, 0, !disabled && (on || focus) ? C_RETRO_RED : C_RETRO_EDGE, disabled ? 100 : 203);
+}
 static float m_width(const char *s, float cap) {
     if (m_ttf) return ui_text_width(s, cap * m_S) / m_S;
     return 8.0f * m_debug_scale(cap) * (float)strlen(s) / m_S;
+}
+static float m_fit_cap(const char *s, float cap, float room) {
+    float width = m_width(s, cap);
+    return width > room && room > 0 ? cap * room / width : cap;
 }
 /* at (x, baseline); align 0 left, 1 right of x, 2 centred on it */
 static void m_text(float x, float base, float cap, const char *s, uint32_t c, int align) {
@@ -3993,8 +4025,11 @@ static unsigned rows_off;                        /* rows drawn dim (bit i): the 
 static void draw_rows(float W, const char *const *labels, int n, float y0) {
     for (int i = 0; i < n; i++) {
         float a = y0 + 16.0f * (float)i, b = a + 14.0f;
-        if (i == menu_sel) m_box(8.0f, a, W - 8.0f, b, 7.0f, C_GOLD, C_GOLD_LOW, 255);
-        m_text(15.0f, a + 9.8f, 5.0f, labels[i], i == menu_sel ? C_INK : (rows_off >> i & 1) ? C_DIM : C_TEXT, 0);
+        int selected = i == menu_sel, disabled = (int)(rows_off >> i & 1);
+        if (m_retro) m_retro_box(8.0f, a, W - 8.0f, b, 0, selected, disabled);
+        else if (selected) m_box(8.0f, a, W - 8.0f, b, 7.0f, C_GOLD, C_GOLD_LOW, 255);
+        uint32_t ink = m_retro ? (disabled ? C_DIM : C_RETRO_TEXT) : selected ? C_INK : disabled ? C_DIM : C_TEXT;
+        m_text(15.0f, a + 9.8f, 5.0f, labels[i], ink, 0);
         m_hit(8.0f, a, W - 8.0f, b, HIT_ROW, i);
     }
 }
@@ -4002,8 +4037,11 @@ static void draw_rows(float W, const char *const *labels, int n, float y0) {
 /* Back, top right, for the mouse and for touch */
 static void draw_back_button(float W, float pad) {
     float bx1 = W - pad, bx0 = bx1 - m_width("Back", 4.2f) - 17.0f, by0 = 7.0f, by1 = 20.0f;
-    m_box(bx0, by0, bx1, by1, 6.5f, 0x26346A, 0x18214A, 240);
-    m_frame(bx0, by0, bx1, by1, 6.5f, C_RULE, 120);
+    if (m_retro) m_retro_box(bx0, by0, bx1, by1, 0, 0, 0);
+    else {
+        m_box(bx0, by0, bx1, by1, 6.5f, 0x26346A, 0x18214A, 240);
+        m_frame(bx0, by0, bx1, by1, 6.5f, C_RULE, 120);
+    }
     m_arrow(bx0 + 7.5f, (by0 + by1) / 2, 4.0f, 3, C_SOFT);
     m_text(bx0 + 12.0f, by0 + 9.1f, 4.2f, "Back", C_VALUE, 0);
     m_hit(bx0, by0, bx1, by1, HIT_BACK, 0);
@@ -4023,6 +4061,11 @@ static void draw_slider(const MenuItem *it, float x0, float x1, float mid, int s
     uint32_t track = off ? 0x3E4766 : sel ? 0xC9933A : 0x2C3A78;
     uint32_t fill_top = off ? C_DIM : sel ? C_INK_SOFT : 0xC4D3FF, fill_low = off ? C_DIM : sel ? C_INK : C_SOFT;
     uint32_t knob = off ? C_DIM : sel ? C_INK : C_TEXT;
+    if (m_retro) {
+        track = 0x4B4960;
+        fill_top = fill_low = off ? C_DIM : C_RETRO_FILL;
+        knob = off ? C_DIM : C_RETRO_RED;
+    }
     m_box(x0, mid - h, x1, mid + h, h, track, track, 255);
     if (x > x0 + 0.5f) m_box(x0, mid - h, x, mid + h, h, fill_top, fill_low, 255);
     if (it->lo < 100 && it->hi > 100) {          /* the overall volume: a mark at 100%, the game's own */
@@ -4100,6 +4143,8 @@ static const PreviewSpec PREVIEWS[] = {
     {"zio0", "zio", "--depth 1:1 --fog 1 --fx 1 --weather 0 --no-backdrops", 1},
     {"fieldw", "field", "--water 1 --wide 40", 0},
     {"fieldp", "field", "--water 1 --wide 40 --panels", 1},
+    {"field10", "field", "--water 1 --wide 19", 0},
+    {"fieldp10", "field", "--water 1 --wide 19 --panels", 1},
 };
 #define N_PREVIEWS (int)(sizeof PREVIEWS / sizeof PREVIEWS[0])
 #define PREVIEWS_VERSION "2"                         /* in the files' names: a new one makes them again */
@@ -4128,6 +4173,7 @@ static const PreviewOf PREVIEW_OF[] = {
     {"enhance.battle_strike", {"battle", "nostrike"}, 1, 0, 0},
     {"enhance.battle_backdrops", {"zio", "zio0"}, 1, 0, 0},
     {"video.widescreen", {"field", "fieldw", "fieldp"}, 0, 1, 0, 0, 0, 0, PK_FIT},
+    {"video.wide_ratio", {"fieldw", "field10"}, 0, 1, 0, 0, 0, 0, PK_FIT},
     {"video.vsync", {"field", "field"}, 0, 1, 0, 0, 0, 0, PK_TEAR},
     {"video.fullscreen", {"field", "field"}, 0, 1, 0, 0, 0, 0, PK_SCREEN},
 };
@@ -4299,14 +4345,13 @@ static struct {
 
 /* the game's picture as it is now (exploring: Widescreen and Pixel shape as set), in square pixels */
 static void preview_game_size(float *gw, float *gh) {
-    float par = strcmp(setting("video.aspect"), "4:3") ? 1.0f : (4.0f / 3.0f) / (320.0f / 224.0f);
-    *gw = (float)(320 + 2 * wide_margin()) * par;
+    *gw = picture_width(320 + 2 * wide_margin(), 224, 320);
     *gh = 224.0f;
 }
 /* ... and the clip that shows it */
-static const char *preview_field_now(void) {
-    int ws = classic_mode() ? 0 : setting_int("video.widescreen");
-    return ws == 2 ? "fieldp" : ws ? "fieldw" : "field";
+static const char *preview_field(int ws, int deck) {
+    if (ws == 2) return deck ? "fieldp10" : "fieldp";
+    return ws ? (deck ? "field10" : "fieldw") : "field";
 }
 /* the biggest rectangle shaped w:h = aspect in (x, y, w, h), centred: out[4] */
 static void fit_rect(float x, float y, float w, float h, float aspect, float *out) {
@@ -4349,8 +4394,14 @@ static void draw_previews(const MenuPage *pg, float x0, float x1, float y0, floa
         if (!SDL_strcasecmp(setting(it->key), it->values[k])) cur = k;
     int right = cur == po->off ? po->on : cur;       /* beside Off: what's chosen (or, Off chosen, the usual) */
     int kind = po->kind, drawn = kind >= PK_TEAR;    /* (drawn: the field as the game shows it now) */
-    int a = preview_index(drawn ? preview_field_now() : po->clip[po->off]);
+    int ws = classic_mode() ? 0 : setting_int("video.widescreen");
+    int a = preview_index(drawn ? preview_field(ws, wide_deck()) : po->clip[po->off]);
     int b = drawn ? a : preview_index(po->clip[right]);
+    if (!strcmp(it->key, "video.widescreen")) b = preview_index(preview_field(right, wide_deck()));
+    if (!strcmp(it->key, "video.wide_ratio") && ws == 2) {
+        a = preview_index(preview_field(ws, 0));
+        b = preview_index(preview_field(ws, 1));
+    }
     const Clip *ca = preview_clip(a), *cb = preview_clip(b);
     float gw, gh;
     preview_game_size(&gw, &gh);
@@ -4366,7 +4417,8 @@ static void draw_previews(const MenuPage *pg, float x0, float x1, float y0, floa
         int mine = v == cur, set = v != po->off;     /* (set: the setting on, in this one) */
         float p[4] = {bx, top, w, h};                /* where its clip goes */
         if (kind != PK_SCREEN) {
-            m_box(bx - 0.6f, top - 0.6f, bx + w + 0.6f, top + h + 0.6f, 1.2f, 0x2A3870, 0x2A3870, 255);
+            uint32_t edge = m_retro ? (mine ? C_RETRO_RED : C_RETRO_EDGE) : 0x2A3870;
+            m_box(bx - 0.6f, top - 0.6f, bx + w + 0.6f, top + h + 0.6f, 1.2f, edge, edge, 255);
             m_box(bx, top, bx + w, top + h, 0.8f, 0x080B1C, 0x080B1C, 255);
         }
         const Clip *cc = k ? cb : ca;
@@ -4403,7 +4455,8 @@ static void draw_previews(const MenuPage *pg, float x0, float x1, float y0, floa
         prev_show.pw[k] = p[2];
         prev_show.ph[k] = p[3];
         prev_show.tear[k] = kind == PK_TEAR && !set;
-        m_text(bx + w / 2, top + h + 6.5f, 3.9f, it->names[v], mine ? C_GOLD : C_SOFT, 2);
+        m_text(bx + w / 2, top + h + 6.5f, 3.9f, it->names[v],
+               mine ? (m_retro ? C_RETRO_TEXT : C_GOLD) : C_SOFT, 2);
     }
     if (ca && cb) {
         prev_show.on = 1;
@@ -4541,11 +4594,11 @@ static void previews_render(void) {
 static void draw_settings(float W, float H, const char *hint) {
     const float pad = 10.0f;
     const MenuPage *pg = page_now();
-    m_text(pad + 2.0f, 17.0f, 6.4f, "Settings", C_GOLD, 0);
+    m_text(pad + 2.0f, 17.0f, 6.4f, "Settings", m_retro ? C_RETRO_TEXT : C_GOLD, 0);
     draw_back_button(W, pad);
     /* the pages: their names smaller if they wouldn't fit across (SDL's 8x8 font) */
     float x = pad, t0 = 26.0f, t1 = 40.0f, cap = 4.6f, room = 14.0f;
-    for (;;) {
+    while (!m_retro) {
         float all = 3.0f * (N_PAGES - 1);
         for (int i = 0; i < N_PAGES; i++) all += m_width(PAGES[i].name, cap) + room;
         if (all <= W - 2 * pad || cap <= 3.0f) {
@@ -4556,15 +4609,19 @@ static void draw_settings(float W, float H, const char *hint) {
         room = 10.0f;
     }
     for (int i = 0; i < N_PAGES; i++) {
-        float w = m_width(PAGES[i].name, cap) + room;
+        float w = m_retro ? (W - 2 * pad - 3.0f * (N_PAGES - 1)) / N_PAGES : m_width(PAGES[i].name, cap) + room;
         int on = i == menu_page, focus = on && menu_sel < 0;
-        if (focus) m_box(x, t0, x + w, t1, 7.0f, C_GOLD, C_GOLD_LOW, 255);
+        if (m_retro) m_retro_box(x, t0, x + w, t1, on, focus, 0);
+        else if (focus) m_box(x, t0, x + w, t1, 7.0f, C_GOLD, C_GOLD_LOW, 255);
         else if (on) m_box(x, t0, x + w, t1, 7.0f, 0x3A4C8E, 0x2A3870, 255);
-        m_text(x + w / 2, t0 + 9.8f, cap, PAGES[i].name, focus ? C_INK : on ? C_TEXT : C_SOFT, 2);
+        float tab_cap = m_retro ? m_fit_cap(PAGES[i].name, cap, w - 5.0f) : cap;
+        uint32_t tab_ink = m_retro ? (on ? C_RETRO_TEXT : C_VALUE) : focus ? C_INK : on ? C_TEXT : C_SOFT;
+        m_text(x + w / 2, t0 + 9.8f, tab_cap, PAGES[i].name, tab_ink, 2);
         m_hit(x, t0, x + w, t1, HIT_PAGE, i);
         x += w + 3.0f;
     }
-    m_box(pad, 44.5f, W - pad, 45.0f, 0, C_RULE, C_RULE, 80);
+    uint32_t rule_ink = m_retro ? C_RETRO_EDGE : C_RULE;
+    m_box(pad, 44.5f, W - pad, 45.0f, 0, rule_ink, rule_ink, m_retro ? 130 : 80);
     if (pg->draw) {                                  /* a page without settings draws its own */
         pg->draw(W, H);
         m_text(pad + 2.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
@@ -4581,6 +4638,7 @@ static void draw_settings(float W, float H, const char *hint) {
     /* a page with previews: its list on the left, the preview on the right */
     int previews = page_has_previews(pg);
     float xr = previews ? fminf(150.0f, W * 0.465f) : W - pad, xm = (pad + xr) / 2;
+    if (m_retro && previews) m_box(xr + 2.7f, 47.0f, xr + 3.1f, rule - 2.0f, 0, rule_ink, rule_ink, 130);
     if (previews) draw_previews(pg, xr + 6.0f, W - pad, 47.0f, rule - 2.0f);
     else prev_show.on = 0;
     if (pg->n > rows) {
@@ -4601,18 +4659,38 @@ static void draw_settings(float W, float H, const char *hint) {
         int sel = i == menu_sel, off = item_disabled(it);
         char v[64];
         item_value(it, v, sizeof v);
-        if (sel) m_box(pad, a, xr, b, (b - a) / 2, off ? 0x56607E : C_GOLD, off ? 0x3E4766 : C_GOLD_LOW, 255);
+        if (sel) {
+            if (m_retro) m_retro_box(pad, a, xr, b, 0, 1, off);
+            else m_box(pad, a, xr, b, (b - a) / 2, off ? 0x56607E : C_GOLD, off ? 0x3E4766 : C_GOLD_LOW, 255);
+        }
         uint32_t lc = off ? (sel ? 0xC8D0E8 : C_DIM) : sel ? C_INK : C_TEXT;
         uint32_t vc = off ? (sel ? 0xC8D0E8 : C_DIM) : sel ? C_INK : C_VALUE;
-        m_text(pad + 8.0f, base, 4.6f, it->label, lc, 0);
         float vr = xr - 13.0f, vw = m_width(v, 4.6f);
+        uint32_t arrows = m_retro ? C_RETRO_TEXT : C_INK_SOFT;
+        if (m_retro) lc = vc = off ? C_DIM : C_RETRO_TEXT;
+        if (m_retro && !it->step) {
+            float right = xr - 3.5f, left = right - fminf(67.0f, (xr - pad) * 0.42f), center = (left + right) / 2;
+            int toggle = !strcmp(v, "On") || !strcmp(v, "Off");
+            int on = toggle ? !strcmp(v, "On") : sel;
+            m_retro_box(left, a + 1.4f, right, b - 1.4f, on, 0, off);
+            m_text(pad + 5.0f, base, m_fit_cap(it->label, 4.6f, left - pad - 9.0f), it->label, lc, 0);
+            m_text(center, base, m_fit_cap(v, 4.6f, right - left - 12.0f), v, vc, 2);
+            if (sel && !off && !toggle) {
+                if (!it->action) m_arrow(left + 4.0f, mid, 3.2f, 3, arrows);
+                m_arrow(right - 4.0f, mid, 3.2f, 2, arrows);
+            }
+            if (!it->action && !toggle) m_hit(left, a, center, b, HIT_STEP_BACK, i);
+            m_hit(pad, a, xr, b, HIT_ROW, i);
+            continue;
+        }
+        m_text(pad + 8.0f, base, 4.6f, it->label, lc, 0);
         m_text(vr, base, 4.6f, v, vc, 1);
         if (it->step) {                              /* a number: its slider, the arrows round both */
             float sx1 = vr - m_width("200%", 4.6f) - 12.0f, sx0 = sx1 - SLIDER_W;
             draw_slider(it, sx0, sx1, mid, sel, off);
             if (sel && !off) {
-                m_arrow(sx0 - 8.0f, mid, 4.0f, 3, C_INK_SOFT);
-                m_arrow(vr + 6.5f, mid, 4.0f, 2, C_INK_SOFT);
+                m_arrow(sx0 - 8.0f, mid, 4.0f, 3, arrows);
+                m_arrow(vr + 6.5f, mid, 4.0f, 2, arrows);
             }
             m_hit(sx0 - SLIDER_GRIP, a, sx1 + SLIDER_GRIP, b, HIT_SLIDER, i);
         } else {
@@ -4626,7 +4704,7 @@ static void draw_settings(float W, float H, const char *hint) {
         m_hit(pad, a, xr, b, HIT_ROW, i);
     }
     /* what the highlighted one does */
-    m_box(pad, rule, W - pad, rule + 0.5f, 0, C_RULE, C_RULE, 80);
+    m_box(pad, rule, W - pad, rule + 0.5f, 0, rule_ink, rule_ink, m_retro ? 130 : 80);
     const char *about = menu_sel < 0 ? pg->about
                       : arena_cheat_item(&pg->items[menu_sel]) ? "Off in the Boss Arena: every fight is fought fair."
                       : item_disabled(&pg->items[menu_sel]) ? CLASSIC_NOTE : pg->items[menu_sel].help;
@@ -6187,8 +6265,14 @@ static void menu_layout(float W, float H) {
         draw_launcher(W, H, hint);
         return;
     }
-    m_box(0, 0, W, H, 7.0f, C_PANEL_TOP, C_PANEL_LOW, 244);
-    m_frame(0, 0, W, H, 7.0f, C_RULE, 150);
+    if (m_retro) {
+        m_box(0, 0, W, H, 0, 0x10162D, 0x10162D, 220);
+        m_frame(0, 0, W, H, 0, C_RETRO_EDGE, 255);
+        m_frame(1.1f, 1.1f, W - 1.1f, H - 1.1f, 0, 0x50495F, 185);
+    } else {
+        m_box(0, 0, W, H, 7.0f, C_PANEL_TOP, C_PANEL_LOW, 244);
+        m_frame(0, 0, W, H, 7.0f, C_RULE, 150);
+    }
     if (menu_screen == MENU_ARENA_PREP) {
         draw_arena_prep(W, H, hint);
     } else if (menu_screen == MENU_ARENA_TPL) {
@@ -6216,7 +6300,7 @@ static void menu_layout(float W, float H) {
     } else if (menu_screen == MENU_REWIND) {
         draw_rewind(W, H, hint);
     } else if (menu_screen == MENU_MAIN) {
-        m_text(12.0f, 17.0f, 6.4f, menu_live() ? "Menu" : "Paused", C_GOLD, 0);   /* (the game goes on under it, or not) */
+        m_text(12.0f, 17.0f, 6.4f, menu_live() ? "Menu" : "Paused", m_retro ? C_RETRO_TEXT : C_GOLD, 0);
         rows_off = arena_mode ? 1u << M_REWIND : 0;
         draw_rows(W, main_labels(), N_MAIN, 26.0f);
         rows_off = 0;
@@ -6225,7 +6309,7 @@ static void menu_layout(float W, float H) {
     } else {
         static const char *const ANSWERS[2] = {"Yes, quit", "No, keep playing"};
         static const char *const TO_MENU[2] = {"Yes, to the menu", "No, keep playing"};
-        m_text(12.0f, 17.0f, 6.4f, quit_to_menu ? "Return to the menu?" : "Quit the game?", C_GOLD, 0);
+        m_text(12.0f, 17.0f, 6.4f, quit_to_menu ? "Return to the menu?" : "Quit the game?", m_retro ? C_RETRO_TEXT : C_GOLD, 0);
         draw_rows(W, quit_to_menu ? TO_MENU : ANSWERS, 2, 26.0f);
         m_wrap(12.0f, 67.5f, W - 24.0f, 7.5f, 2, 3.8f, "Anything since you last saved in the game is lost.", C_VALUE, 0);
         m_text(12.0f, H - 6.5f, 3.4f, hint, C_HINT, 0);
@@ -6276,9 +6360,11 @@ static void menu_draw(void) {
     }
     float fade = menu_opened ? fminf(1.0f, (float)(SDL_GetTicks() - menu_opened) / 140.0f) : 1.0f;
     int launcher_screen = menu_screen == MENU_LAUNCHER;
+    m_retro = (menu_screen == MENU_SETTINGS || menu_screen == MENU_MAIN || menu_screen == MENU_QUIT)
+              && !SDL_strcasecmp(setting("video.menu_style"), "retro");
     if (!launcher_screen) {                          /* dim the game (or the launcher) behind */
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)(165.0f * fade));
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)((m_retro ? 80.0f : 165.0f) * fade));
         SDL_FRect all = {0, 0, (float)ow, (float)oh};
         SDL_RenderFillRect(renderer, &all);
     }
@@ -6352,7 +6438,9 @@ static void menu_draw(void) {
         m_cv.y1 = th;
         n_menu_hits = 0;
         ui_set_straight_alpha(1);
+        hdtext_use_menu_font(m_retro);
         menu_layout(W, H);
+        hdtext_use_menu_font(0);
         ui_set_straight_alpha(0);
         SDL_UpdateTexture(menu_tex, NULL, menu_buf, tw * 4);
         menu_drawn = sig;
@@ -8069,6 +8157,21 @@ static void load_font(void) {
     SDL_Log("modern text: no font found; text stays original");
 }
 
+static void load_menu_font(void) {
+    char path[1100];
+    size_t n;
+    path_in_home(path, sizeof path, "retro-menu.otf");
+    void *data = SDL_LoadFile(path, &n);
+    if (!data) return;
+    void *copy = malloc(n);
+    if (copy) memcpy(copy, data, n);
+    SDL_free(data);
+    if (copy) {
+        if (hdtext_menu_font(copy, n)) SDL_Log("retro menu text: %s", path);
+        else SDL_Log("retro menu text: could not read %s; using the usual menu font", path);
+    }
+}
+
 /* ------------------------------------------------------------------ the launcher */
 /* What the app opens on: Start game, the mode (Enhanced or Classic),
  * Settings, Quit -- over a slowly drifting field of stars, under the port's
@@ -8763,6 +8866,7 @@ int main(int argc, char **argv) {
     }
     load_voices();
     load_font();
+    load_menu_font();
     {   /* PSIV_WEATHER=rain (storm, snow...): this weather in every battle, for testing (as headless --weather) */
         const char *wx = getenv("PSIV_WEATHER");
         if (wx && *wx && weather_kind_by_name(wx) >= 0) weather_force(weather_kind_by_name(wx));
@@ -8805,7 +8909,10 @@ int main(int argc, char **argv) {
 #if MOBILE
     wflags |= SDL_WINDOW_FULLSCREEN;                      /* the whole screen, system bars hidden */
 #endif
-    if (!SDL_CreateWindowAndRenderer("Phantasy Star IV", (320 + 2 * wide_margin()) * scale, 224 * scale,
+    int start_w = 320 + 2 * wide_margin();
+    if (start_w > 320 && wide_deck()) start_w = (int)lrintf(picture_width(start_w, 224, 320) * (float)scale);
+    else start_w *= scale;
+    if (!SDL_CreateWindowAndRenderer("Phantasy Star IV", start_w, 224 * scale,
                                      wflags, &window, &renderer)) {
         message(SDL_MESSAGEBOX_ERROR, SDL_GetError(), NULL);
         return 1;

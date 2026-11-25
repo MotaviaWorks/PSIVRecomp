@@ -221,6 +221,12 @@ them (`runtime/mixbus.h`); `psiv_headless --levels M:E:V` renders with them
 Settings in the Esc menu (saved to `psiv.ini`). **Mode: Classic** is the
 original game, unchanged; **Enhanced** turns on the additions.
 
+**Settings > Display > Menu style** offers **Modern** (default) and **Retro**.
+Retro gives Settings and the system menu translucent square frames and red
+controls. To use your own retro typeface, place an OpenType font named
+`retro-menu.otf` beside `psiv.ini` and restart. The regular UI font covers
+characters missing from the optional font.
+
 **Previews.** Smoothing, Water and Trees (Display) and Depth, Fog, Camera,
 Weather and Effects (Battles) show what they do: a short clip with the
 setting off beside one as chosen. The game makes them once, from the
@@ -569,9 +575,11 @@ The additions:
   forwarding and on a display slower than the game; `psiv.log` says
   `v-sync: on` when it takes.
 
-- **16:9 widescreen** (on / off; 400 pixels wide, 424 with the 4:3 TV
-  shape): the field and battles show more to the left and right. The game
-  only keeps what a 320-pixel screen needs in video memory, so the field's
+- **Widescreen**: choose Natural or Side panels in **Settings > Display**,
+  then set **Wide ratio** to 16:9 (default) or 16:10 for Steam Deck.
+  Natural shows more to the left and right in the field, and both modes
+  widen battles. The 16:10 view uses fractional scaling to fill a 1280×800
+  display. The game only keeps what a 320-pixel screen needs in video memory, so the field's
   margins are drawn from the map it keeps in RAM instead (`runtime/widemap.c`:
   checked against the screen every frame, the planes' own content when they
   disagree, the edge chunks repeated past a map's edge); objects are no
