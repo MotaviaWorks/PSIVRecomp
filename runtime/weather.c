@@ -19,7 +19,6 @@
 #define EVENT_BATTLE_INDEX   0xECFCu   /* a set battle (bosses); negative = none */
 #define EVENT_FLAGS          0xF100u
 #define FLAG_DARKFORCE2      0x9E      /* Dezolis looks different after it */
-#define VEHICLE_INDEX        0xF43Cu
 #define ROM_EVENT_BG         0x6C8Cu   /* EventBattleBGIndexes */
 #define ROM_MAP_BG           0x6CA8u   /* Battle_BackgroundIndexes */
 
@@ -238,8 +237,7 @@ int weather_active(void) {
     if (!picked) {
         picked = 1;
         bg_index = battle_bg();
-        kind = forced >= 0 ? forced : (m68k_ram[VEHICLE_INDEX] << 8 | m68k_ram[VEHICLE_INDEX + 1]) ? WX_NONE
-                                                                                                  : pick(bg_index);
+        kind = forced >= 0 ? forced : pick(bg_index);          /* (a vehicle's battle has it too, past the dashboard: issue 14) */
         t_wx = fade = 0.0f;
         start_weather(424, 224);
         static int log_on = -1;

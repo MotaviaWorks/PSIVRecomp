@@ -248,7 +248,7 @@ The additions:
   floating in the Air Castle and at the Edge. Drawn at three depths under the
   battle camera: behind the enemies, between them and the party, and in front
   of everyone (`runtime/weather.c`; the sounds are synthesized like the
-  port's sound effects). Off in vehicle battles.
+  port's sound effects). In a vehicle's battle it falls beyond the dashboard.
 - **Battle effects** (off / subtle / full): the game's own attack and
   technique sprites light the scene in their colours, sparks and a flash
   where hits land, embers rising from fire, a lens flare at bright moments.
@@ -487,7 +487,8 @@ The additions:
   Them Head-On (`PSIV_MUSIC_LOG=1` prints each song's ID and name as it
   starts: 8F battles, 95 bosses, AA Zio, A0 Dark Force, 96 vehicle battles,
   AC the title, 8C the Motavia field). Or name them in `music/music.ini`,
-  which also sets the loop (the WAV's own loop markers count too), where a
+  which also sets the loop (the WAV's own loop markers count too; with neither,
+  a file that ends while the game's song goes on starts again), where a
   file starts (by default at its first sound) and its level:
 
   ```

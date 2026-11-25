@@ -4,6 +4,7 @@
 #include "fieldmenu.h"
 #include "battledesc.h"
 #include "bus.h"
+#include "cheats.h"
 #include "hdtext.h"
 #include "m68k.h"
 #include "savepages.h"
@@ -517,8 +518,10 @@ static void buy_watch(uint8_t fresh, uint8_t *pad) {
     if (buy.armed) {
         int n = pack_count(), price = item_price_of(buy.item);
         uint32_t money = ui_ram32(MONEY);
+        /* (with the meseta cheat on, what it cost is back before it is seen here: GitHub issue 13) */
+        int paid = money + (uint32_t)price == buy.money0 || (cheats_get(CHEAT_MONEY) && money == buy.money0);
         if (n == buy.count0 + 1 && (int)r8(INVENTORY_AT + (unsigned)buy.count0) == buy.item
-            && money + (uint32_t)price == buy.money0) {      /* bought, by the game: the others after it */
+            && paid) {                                       /* bought, by the game: the others after it */
             int more = buy.qty - 1;
             if (more > 40 - n) more = 40 - n;
             if (price > 0 && (uint32_t)more > money / (uint32_t)price) more = (int)(money / (uint32_t)price);
